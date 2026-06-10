@@ -22,6 +22,6 @@
 // it to the alias spec below. Catch2 v3 expands the alias at filter-parse time, so
 // the change is local to this file.
 CATCH_REGISTER_TAG_ALIAS("[@og]",
-    "[DAttack],[CharacterViz],[SimulatableBrawler],[SimulationComposite],[SimulationIntegrationExecutor],[SimulationNetSync],[SimulationReconciliation]")
+    "[DAttack],[CharacterViz],[SimulatableBrawler],[SimulationComposite],[SimulationIntegrationExecutor],[SimulationNetSync],[SimulationReconciliation],[InputSequence],[BrawlerProjectile]")
 
 #endif // WITH_LOW_LEVEL_TESTS
