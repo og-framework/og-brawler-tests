@@ -71,7 +71,13 @@ struct MockPredictionOwner
     MockInputSyncBuffer* getClientToServerInputSyncedBuffer()
     { return &outgoingInputBuffer; }
 
-    void sendLocalInputToAuthority(const MockInputSyncBuffer& /*buf*/) {}
+    // Stage 1 (Task 9): redundancy-bundle send path. The real owner builds an
+    // FInputRedundancyBundle from the queue and fires an unreliable RPC; the mock
+    // is a no-op (the bundle wire type is UE-side and not under test here).
+    void sendLocalInputToAuthority(
+        const PendingInputQueue<simulatableBrawler::PlayerInput>& /*queue*/,
+        uint32 /*currentTick*/,
+        uint32 /*redundancyDepth*/) {}
 };
 
 static_assert(PredictionSyncedBufferOwnerConcept<MockPredictionOwner,
@@ -89,13 +95,14 @@ struct MockAuthorityOwner
 
     MockStateSyncBuffer stateBuf;
     MockInputSyncBuffer inputBuf;
-    std::function<void(const MockInputSyncBuffer&)> onRemoteMoveReceived;
+    // Stage 1 (Task 9): per-slot (capture_tick, input) inbound callback.
+    std::function<void(uint32, const simulatableBrawler::PlayerInput&)> onRemoteMoveReceived;
 
     MockStateSyncBuffer& getSyncedCorrectionStateBuffer() { return stateBuf; }
     MockInputSyncBuffer& getSyncedCorrectionInputBuffer() { return inputBuf; }
 
     void setOnRemoteMoveReceivedCallback(
-        std::function<void(const MockInputSyncBuffer&)> fn)
+        std::function<void(uint32, const simulatableBrawler::PlayerInput&)> fn)
     { onRemoteMoveReceived = std::move(fn); }
 
     void clearOnRemoteMoveReceivedCallback()
@@ -226,8 +233,8 @@ TEST_CASE("DAttack.SimulationNetSync.SendLocalInputNoProviderIsNoOp", "[DAttack]
     netSync.registerPredictionOwner<SimulatableBrawler>(1u, predictionOwner, nullptr);
     netSync.registerAuthorityOwner<SimulatableBrawler>(1u, authorityOwner);
 
-    // Must not throw.
-    netSync.sendLocalInputToAuthorityAll();
+    // Must not throw. (Stage 1, Task 9: now takes currentTick + redundancyDepth.)
+    netSync.sendLocalInputToAuthorityAll(0u, 5u);
 
     REQUIRE(true);
 
