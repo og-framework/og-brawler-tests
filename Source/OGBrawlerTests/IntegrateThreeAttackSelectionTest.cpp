@@ -368,4 +368,73 @@ TEST_CASE("DAttack.Integrate3.MachineHadoukenUsesCharacterBindings", "[DAttack][
     REQUIRE(projState.slots[0].spawnPos.z == Catch::Approx(expectedSpawn.z));
 }
 
+// ---------------------------------------------------------------------------
+// [hit-resolution T2] Inbound-hit signal drives HitFlinch
+// ---------------------------------------------------------------------------
+
+TEST_CASE("DAttack.Integrate3.InboundHitTransitionsToHitFlinch", "[DAttack][HitFlinch]")
+{
+    using namespace integrate3tests;
+
+    // T2 acceptance: with the real inbound-hit plain param threaded through the composite,
+    // flipping wasHitThisTick=true before a tick must transition the machine into HitFlinch,
+    // veto the attack input on that tick, and cancel any active/queued sequences (the T1
+    // cancellation behaviour). In production the manager routing pass (T3) owns the flag; here
+    // the test plays that role by writing the DerivedState slice directly on the composite —
+    // exactly the field SimulatableBrawler::integrate now forwards to integrate3 by-ref.
+
+    simulatableBrawler::StaticData staticData;
+    SimulatableBrawler character(staticData);
+    character.setCharacterBindings({ BodyId{1} }); // fake bindings; mock resolves to origin
+    MockPhysicsAdapter physAdapter;
+    MockSpatialQueryAdapter queryAdapter;
+
+    const glm::vec3 aim = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+    const float dt = 1.f / 60.f;
+
+    // Drive one composite tick. inboundHit is written onto the composite DerivedState slice
+    // BEFORE integrate (playing T3's routing-pass role); attackLeft is held to prove the veto.
+    auto runTick = [&](unsigned int tick, bool inboundHit, bool attackLeft)
+    {
+        character.editAllState().editDerivedState().m_inboundHitDerivedState.wasHitThisTick = inboundHit;
+        simulatableBrawler::PlayerInput input(
+            dAttackRadialSimulation::PlayerInput(aim, attackLeft, false),
+            dAttackMachineSimulation::PlayerInput{aim, attackLeft, false, glm::vec2(0.f, 0.f), aim},
+            dAttackGuardSimulation::PlayerInput(aim),
+            brawlerProjectileSimulation::PlayerInput{aim});
+        SimulationTimeStep step(tick, false, false, false, dt);
+        character.integrate(step, input, physAdapter, queryAdapter, staticData);
+        return character.getAllState().getState().get<dAttackMachineSimulation::State>();
+    };
+
+    // Tick 0 — inbound hit true WHILE attackLeft held. The veto must win: HitFlinch (not
+    // Attacking), and the attack sequence must be cancelled (not started).
+    auto state = runTick(0u, /*inboundHit*/ true, /*attackLeft*/ true);
+    REQUIRE(state.m_currentState == DAttackState::HitFlinch);
+    REQUIRE(state.m_activeAttackSequence == InvalidAttackSequenceId);
+    REQUIRE(state.m_queuedAttackSequence == InvalidAttackSequenceId);
+
+    // Ticks 1..15 (< kHitFlinchDuration 0.3 s) — flag cleared, attackLeft still held. The machine
+    // must dwell in HitFlinch and ignore the attack input the whole time (input gating).
+    for (unsigned int tick = 1; tick <= 15; ++tick)
+    {
+        state = runTick(tick, /*inboundHit*/ false, /*attackLeft*/ true);
+        INFO("hitflinch dwell tick " << tick << " (t=" << tick * dt << "s)");
+        REQUIRE(state.m_currentState == DAttackState::HitFlinch);
+        REQUIRE(state.m_activeAttackSequence == InvalidAttackSequenceId);
+    }
+
+    // Past kHitFlinchDuration the machine exits HitFlinch. With attackLeft released it lands in
+    // Idle. (~18 ticks ≈ 0.3 s at 60 Hz; run a few past to catch the exit.)
+    bool leftFlinch = false;
+    for (unsigned int tick = 16; tick <= 40 && !leftFlinch; ++tick)
+    {
+        state = runTick(tick, /*inboundHit*/ false, /*attackLeft*/ false);
+        if (state.m_currentState != DAttackState::HitFlinch)
+            leftFlinch = true;
+    }
+    REQUIRE(leftFlinch);
+    REQUIRE(state.m_currentState == DAttackState::Idle);
+}
+
 #endif // WITH_LOW_LEVEL_TESTS

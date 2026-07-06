@@ -17,7 +17,7 @@
 // Closed-form projectile (Task 13).
 //
 // The projectile slot stores ONLY launch parameters
-// { spawnTick, spawnPos, spawnDir, endTick, endReason, hitObjectIndex }; the
+// { spawnTick, spawnPos, spawnDir, endTick, endReason, hitRootBodyId }; the
 // per-tick world position is DERIVED from
 //   pos(t) = spawnPos + spawnDir * projectileSpeed * dt * (currentTick - spawnTick)
 // and snapped onto the physics body each tick. "Alive" is the predicate
@@ -171,7 +171,7 @@ TEST_CASE("BrawlerProjectile.SpawnIntoEmptyPool", "[BrawlerProjectile]")
     REQUIRE(state.slots[0].spawnTick == spawnTick);
     REQUIRE(state.slots[0].endTick == 0u);
     REQUIRE(state.slots[0].endReason == 0u);
-    REQUIRE(state.slots[0].hitObjectIndex == -1);
+    REQUIRE(state.slots[0].hitRootBodyId == BodyId{});
     REQUIRE(state.slots[0].isAlive(spawnTick));
 
     // Body transform must reflect spawnPos (elapsed == 0 ⇒ derivedPos == spawnPos).
@@ -354,7 +354,7 @@ TEST_CASE("BrawlerProjectile.LifetimeExpiryKillsSlot", "[BrawlerProjectile]")
 
 // ---------------------------------------------------------------------------
 // Test: overlap query reports a hit on a non-parent body — slot ends with
-// endReason == 2 (hit), hitObjectIndex recorded, body parked, derived.hits
+// endReason == 2 (hit), hitRootBodyId recorded, body parked, derived.hits
 // populated.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
@@ -381,7 +381,7 @@ TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
     // the mock now populates objectCategories so the guard/body classifier routes it
     // to derived.hits, not derived.blocks).
     SpatialQueryHit hit{};
-    hit.objectIndex    = 42;
+    hit.rootBodyId     = BodyId{ 42 };
     hit.objectPosition = glm::vec3(5.f, 5.f, 0.f);
     hit.bodyId         = BodyId{ 99 };
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -392,7 +392,7 @@ TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
 
     REQUIRE(state.slots[0].endReason == 2u);
     REQUIRE(state.slots[0].endTick == currentTick);
-    REQUIRE(state.slots[0].hitObjectIndex == 42);
+    REQUIRE(state.slots[0].hitRootBodyId == BodyId{ 42 });
     REQUIRE_FALSE(state.slots[0].isAlive(currentTick));
 
     const glm::vec3 parkPos = glm::vec3(physics.bodies[0].transform[3]);
@@ -401,7 +401,7 @@ TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
 
     // Body hit routes to damage hits, not blocks.
     REQUIRE(derived.hits.size() == 1u);
-    REQUIRE(derived.hits[0].objectIndex == 42);
+    REQUIRE(derived.hits[0].rootBodyId == BodyId{ 42 });
     REQUIRE(derived.hits[0].tickStamp == currentTick);
     REQUIRE(derived.blocks.empty());
 }
@@ -431,7 +431,7 @@ TEST_CASE("BrawlerProjectile.HitOnParentBodyIgnored", "[BrawlerProjectile]")
     MockSpatialQueryAdapter query;
 
     SpatialQueryHit parentHit{};
-    parentHit.objectIndex    = 7;
+    parentHit.rootBodyId     = BodyId{ 7 };
     parentHit.objectPosition = glm::vec3(0.f);
     parentHit.bodyId         = BodyId{ kParentBodyIdValue };
     query.nextReport.hits.push_back(parentHit);
@@ -484,7 +484,7 @@ TEST_CASE("BrawlerProjectile.BlockOnGuardFront", "[BrawlerProjectile]")
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
-    hit.objectIndex      = 7;
+    hit.rootBodyId       = BodyId{ 7 };
     hit.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
     hit.bodyId           = BodyId{ guardBodyId };
     hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
@@ -500,7 +500,7 @@ TEST_CASE("BrawlerProjectile.BlockOnGuardFront", "[BrawlerProjectile]")
 
     // Routed to blocks, NOT hits.
     REQUIRE(derived.blocks.size() == 1u);
-    REQUIRE(derived.blocks[0].objectIndex == 7);
+    REQUIRE(derived.blocks[0].rootBodyId == BodyId{ 7 });
     REQUIRE(derived.hits.empty());
 }
 
@@ -539,7 +539,7 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardBack", "[BrawlerProjectile]")
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
-    hit.objectIndex      = 9;
+    hit.rootBodyId       = BodyId{ 9 };
     hit.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
     hit.bodyId           = BodyId{ guardBodyId };
     hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
@@ -554,7 +554,7 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardBack", "[BrawlerProjectile]")
 
     // Outside the cone → damage hit, not a block.
     REQUIRE(derived.hits.size() == 1u);
-    REQUIRE(derived.hits[0].objectIndex == 9);
+    REQUIRE(derived.hits[0].rootBodyId == BodyId{ 9 });
     REQUIRE(derived.blocks.empty());
 }
 
@@ -596,7 +596,7 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardSide", "[BrawlerProjectile]")
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
-    hit.objectIndex      = 11;
+    hit.rootBodyId       = BodyId{ 11 };
     hit.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
     hit.bodyId           = BodyId{ guardBodyId };
     hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
@@ -611,7 +611,7 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardSide", "[BrawlerProjectile]")
 
     // Inside the outer cone but outside the middle section → damage hit, not a block.
     REQUIRE(derived.hits.size() == 1u);
-    REQUIRE(derived.hits[0].objectIndex == 11);
+    REQUIRE(derived.hits[0].rootBodyId == BodyId{ 11 });
     REQUIRE(derived.blocks.empty());
 }
 
@@ -654,7 +654,7 @@ TEST_CASE("BrawlerProjectile.BlockIndicatorAtInnerCircle", "[BrawlerProjectile]"
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
-    hit.objectIndex      = 7;
+    hit.rootBodyId       = BodyId{ 7 };
     hit.objectPosition   = glm::vec3(0.f, 0.f, 0.f);   // body centre — the WRONG place for the marker
     hit.bodyId           = BodyId{ guardBodyId };
     hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
@@ -667,7 +667,7 @@ TEST_CASE("BrawlerProjectile.BlockIndicatorAtInnerCircle", "[BrawlerProjectile]"
     // Entry point on the inner circle facing the shooter: x = -100, NOT the body centre 0.
     REQUIRE(derived.blocks[0].position.x == Catch::Approx(-100.f));
     REQUIRE(derived.blocks[0].position.x != Catch::Approx(0.f));
-    REQUIRE(derived.blocks[0].objectIndex == 7);
+    REQUIRE(derived.blocks[0].rootBodyId == BodyId{ 7 });
     REQUIRE(derived.hits.empty());
 }
 
@@ -700,7 +700,7 @@ TEST_CASE("BrawlerProjectile.HitIndicatorPersistsForPersistTicks", "[BrawlerProj
     MockSpatialQueryAdapter query;
 
     SpatialQueryHit hit{};
-    hit.objectIndex      = 42;
+    hit.rootBodyId       = BodyId{ 42 };
     hit.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
     hit.bodyId           = BodyId{ 99 };
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -757,7 +757,7 @@ TEST_CASE("BrawlerProjectile.BlockIndicatorPersistsForPersistTicks", "[BrawlerPr
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
-    hit.objectIndex      = 7;
+    hit.rootBodyId       = BodyId{ 7 };
     hit.objectPosition   = glm::vec3(0.f, 0.f, 0.f);
     hit.bodyId           = BodyId{ guardBodyId };
     hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
@@ -804,7 +804,7 @@ TEST_CASE("BrawlerProjectile.MultipleIndicatorsAccumulate", "[BrawlerProjectile]
     MockSpatialQueryAdapter query;
 
     SpatialQueryHit hitA{};
-    hitA.objectIndex      = 1;
+    hitA.rootBodyId       = BodyId{ 1 };
     hitA.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
     hitA.bodyId           = BodyId{ 90 };
     hitA.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -823,7 +823,7 @@ TEST_CASE("BrawlerProjectile.MultipleIndicatorsAccumulate", "[BrawlerProjectile]
     state.slots[1].endTick   = 0u;
 
     SpatialQueryHit hitB{};
-    hitB.objectIndex      = 2;
+    hitB.rootBodyId       = BodyId{ 2 };
     hitB.objectPosition   = glm::vec3(0.f, 15.f, 0.f);
     hitB.bodyId           = BodyId{ 91 };
     hitB.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -838,8 +838,8 @@ TEST_CASE("BrawlerProjectile.MultipleIndicatorsAccumulate", "[BrawlerProjectile]
     bool sawTarget1 = false, sawTarget2 = false;
     for (const auto& h : derived.hits)
     {
-        if (h.objectIndex == 1) sawTarget1 = true;
-        if (h.objectIndex == 2) sawTarget2 = true;
+        if (h.rootBodyId == BodyId{ 1 }) sawTarget1 = true;
+        if (h.rootBodyId == BodyId{ 2 }) sawTarget2 = true;
     }
     REQUIRE(sawTarget1);
     REQUIRE(sawTarget2);
@@ -856,7 +856,7 @@ TEST_CASE("BrawlerProjectile.WireFootprint", "[BrawlerProjectile]")
     using namespace brawlerProjectileSimulation;
 
     // Per-slot: 4 (spawnTick) + 12 (spawnPos) + 12 (spawnDir)
-    //         + 4 (endTick) + 1 (endReason) + 4 (hitObjectIndex) = 37.
+    //         + 4 (endTick) + 1 (endReason) + 4 (hitRootBodyId, BodyId=uint32) = 37.
     constexpr std::uint32_t slotSize  = syncSize<ProjectileSlot>();
     constexpr std::uint32_t stateSize = syncSize<State>();
 
