@@ -59,24 +59,14 @@ using FTestExecutor = SimulationIntegrationExecutor<
 static_assert(SimulationIntegrationExecutorConcept<FTestExecutor>,
     "SimulationIntegrationExecutor must satisfy SimulationIntegrationExecutorConcept");
 
-// ---------------------------------------------------------------------------
-// Task 4: accessor return-type checks.
-//   editStorage()   -> SimulationObjectStorage<SimulatableTs...>&
-//   getStaticData() -> const StaticDataT&   (const& is load-bearing: the
-//   executor's StaticData holds internal references bound to its own members,
-//   so a by-value return would dangle — see SimulationIntegrationExecutor.h.)
-// ---------------------------------------------------------------------------
-static_assert(
-    std::is_same_v<
-        decltype(std::declval<FTestExecutor&>().editStorage()),
-        SimulationObjectStorage<SimulatableBrawler>&>,
-    "editStorage() must return SimulationObjectStorage<SimulatableTs...>&");
-
-static_assert(
-    std::is_same_v<
-        decltype(std::declval<const FTestExecutor&>().getStaticData()),
-        const simulatableBrawler::StaticData&>,
-    "getStaticData() must return const StaticDataT&");
+// NOTE (T12): the T4 editStorage() / getStaticData() bridge accessors were
+// deleted — storage + static data are now externally owned (constructed by the
+// caller and passed to the executor ctor by reference), so the executor no
+// longer exposes them. The T4 return-type static_asserts and the
+// AccessorsExposeInternals runtime test that exercised those methods were
+// removed with them. The executor ctor now takes (storage, staticData,
+// physAdapter, queryAdapter) — staticData is held by const& and must outlive
+// the executor.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -98,7 +88,9 @@ TEST_CASE("DAttack.SimulationIntegrationExecutor.IntegrateAll", "[DAttack][Simul
 
     storage.add<SimulatableBrawler>(42u, makeCharacter());
 
-    FTestExecutor executor(physAdapter, queryAdapter, storage);
+    // staticData is held by const& in the executor — must outlive it.
+    simulatableBrawler::StaticData staticData;
+    FTestExecutor executor(storage, staticData, physAdapter, queryAdapter);
 
     // Build ResolvedInputs with a zero input for id=42.
     FTestExecutor::ResolvedInputsType inputs;
@@ -122,7 +114,9 @@ TEST_CASE("DAttack.SimulationIntegrationExecutor.FirstResimStepAll", "[DAttack][
 
     storage.add<SimulatableBrawler>(1u, makeCharacter());
 
-    FTestExecutor executor(physAdapter, queryAdapter, storage);
+    // staticData is held by const& in the executor — must outlive it.
+    simulatableBrawler::StaticData staticData;
+    FTestExecutor executor(storage, staticData, physAdapter, queryAdapter);
     executor.firstResimStepAll(0);
 
     REQUIRE(true);
@@ -139,7 +133,9 @@ TEST_CASE("DAttack.SimulationIntegrationExecutor.MissingInputSkipped", "[DAttack
 
     storage.add<SimulatableBrawler>(99u, makeCharacter());
 
-    FTestExecutor executor(physAdapter, queryAdapter, storage);
+    // staticData is held by const& in the executor — must outlive it.
+    simulatableBrawler::StaticData staticData;
+    FTestExecutor executor(storage, staticData, physAdapter, queryAdapter);
 
     // Empty inputs — no entry for id=99; integrateAll must skip silently.
     FTestExecutor::ResolvedInputsType emptyInputs;
@@ -147,31 +143,6 @@ TEST_CASE("DAttack.SimulationIntegrationExecutor.MissingInputSkipped", "[DAttack
     executor.integrateAll(step, emptyInputs);
 
     REQUIRE(true);
-}
-
-// ---------------------------------------------------------------------------
-// Test: editStorage() / getStaticData() expose the executor's internals by
-// reference (task 4). editStorage() must alias the storage the executor was
-// constructed with; getStaticData() must return a stable reference into the
-// executor (not a fresh copy each call).
-// ---------------------------------------------------------------------------
-TEST_CASE("DAttack.SimulationIntegrationExecutor.AccessorsExposeInternals", "[DAttack][SimulationIntegrationExecutor]")
-{
-    FMockPhysicsBodyAdapterExec physAdapter;
-    FMockSpatialQueryAdapterExec queryAdapter;
-    SimulationObjectStorage<SimulatableBrawler> storage;
-
-    storage.add<SimulatableBrawler>(7u, makeCharacter());
-
-    FTestExecutor executor(physAdapter, queryAdapter, storage);
-
-    // editStorage() aliases the exact storage object passed to the ctor.
-    REQUIRE(&executor.editStorage() == &storage);
-
-    // getStaticData() returns the same internal reference on each call.
-    const auto& sd1 = executor.getStaticData();
-    const auto& sd2 = executor.getStaticData();
-    REQUIRE(&sd1 == &sd2);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS
