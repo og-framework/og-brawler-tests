@@ -493,8 +493,12 @@ TEST_CASE("BrawlerProjectile.BlockOnGuardFront", "[BrawlerProjectile]")
     DerivedState derived;
     callIntegrate(ic, state, derived, physics, query, sd, currentTick);
 
-    // Slot is killed regardless of block/damage.
-    REQUIRE(state.slots[0].endReason == 2u);
+    // Slot is killed with the T14 blockedByGuard reason (endReason==4), NOT the
+    // plain-hit reason (endReason==2). The distinction is load-bearing: T3 routing
+    // filters on endReason==2 to fire HitFlinch, so a block must present as ==4 to
+    // avoid routing HitFlinch onto a target whose guard absorbed the projectile —
+    // see BrawlerProjectileSimulation.h:506-515 for the full T11+T14 rationale.
+    REQUIRE(state.slots[0].endReason == 4u);
     REQUIRE(state.slots[0].endTick == currentTick);
     REQUIRE_FALSE(state.slots[0].isAlive(currentTick));
 

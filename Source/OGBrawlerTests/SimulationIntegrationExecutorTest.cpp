@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 #if WITH_LOW_LEVEL_TESTS
 
+#include <type_traits>
+#include <utility>
+
 #include "catch_amalgamated.hpp"
 #include "OGSimulation/SimulationIntegrationExecutor.h"
 #include "OGBrawler/SimulatableBrawler.h"
@@ -55,6 +58,25 @@ using FTestExecutor = SimulationIntegrationExecutor<
 
 static_assert(SimulationIntegrationExecutorConcept<FTestExecutor>,
     "SimulationIntegrationExecutor must satisfy SimulationIntegrationExecutorConcept");
+
+// ---------------------------------------------------------------------------
+// Task 4: accessor return-type checks.
+//   editStorage()   -> SimulationObjectStorage<SimulatableTs...>&
+//   getStaticData() -> const StaticDataT&   (const& is load-bearing: the
+//   executor's StaticData holds internal references bound to its own members,
+//   so a by-value return would dangle — see SimulationIntegrationExecutor.h.)
+// ---------------------------------------------------------------------------
+static_assert(
+    std::is_same_v<
+        decltype(std::declval<FTestExecutor&>().editStorage()),
+        SimulationObjectStorage<SimulatableBrawler>&>,
+    "editStorage() must return SimulationObjectStorage<SimulatableTs...>&");
+
+static_assert(
+    std::is_same_v<
+        decltype(std::declval<const FTestExecutor&>().getStaticData()),
+        const simulatableBrawler::StaticData&>,
+    "getStaticData() must return const StaticDataT&");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -125,6 +147,31 @@ TEST_CASE("DAttack.SimulationIntegrationExecutor.MissingInputSkipped", "[DAttack
     executor.integrateAll(step, emptyInputs);
 
     REQUIRE(true);
+}
+
+// ---------------------------------------------------------------------------
+// Test: editStorage() / getStaticData() expose the executor's internals by
+// reference (task 4). editStorage() must alias the storage the executor was
+// constructed with; getStaticData() must return a stable reference into the
+// executor (not a fresh copy each call).
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.SimulationIntegrationExecutor.AccessorsExposeInternals", "[DAttack][SimulationIntegrationExecutor]")
+{
+    FMockPhysicsBodyAdapterExec physAdapter;
+    FMockSpatialQueryAdapterExec queryAdapter;
+    SimulationObjectStorage<SimulatableBrawler> storage;
+
+    storage.add<SimulatableBrawler>(7u, makeCharacter());
+
+    FTestExecutor executor(physAdapter, queryAdapter, storage);
+
+    // editStorage() aliases the exact storage object passed to the ctor.
+    REQUIRE(&executor.editStorage() == &storage);
+
+    // getStaticData() returns the same internal reference on each call.
+    const auto& sd1 = executor.getStaticData();
+    const auto& sd2 = executor.getStaticData();
+    REQUIRE(&sd1 == &sd2);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS
