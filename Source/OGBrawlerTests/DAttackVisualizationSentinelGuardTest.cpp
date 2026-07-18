@@ -38,7 +38,8 @@ struct DrawCounts
     int point = 0;
     int sphere = 0;
     int circleArc = 0;
-    int mesh = 0;   // a "segment draw" — drawSegmentSolid() emits exactly one mesh
+    int mesh = 0;      // a "segment draw" — drawSegmentSolid() emits exactly one mesh
+    int triangle = 0;  // dAttackVisualizationUtils::drawWeapon emits triangle draws
 };
 
 struct MockRenderer
@@ -49,7 +50,8 @@ struct MockRenderer
     void drawPoint(const glm::vec3&) { ++counts->point; }
     void drawSphere(const glm::vec3&, float, unsigned int, float) { ++counts->sphere; }
     void drawCircleArc(const glm::vec3&, const glm::vec3&, float, float, unsigned int, float) { ++counts->circleArc; }
-    void drawMesh(const std::vector<glm::vec3>&, const std::vector<unsigned int>&, unsigned int) { ++counts->mesh; }
+    void drawMesh(const std::vector<glm::vec3>&, const std::vector<unsigned int>&, unsigned int, unsigned int /*alpha*/ = 150) { ++counts->mesh; }
+    void drawTriangle(const glm::vec3&, const glm::vec3&, const glm::vec3&, unsigned int) { ++counts->triangle; }
 };
 
 struct MockLogger
