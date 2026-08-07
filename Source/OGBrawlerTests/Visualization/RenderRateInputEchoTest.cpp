@@ -287,10 +287,16 @@ TEST_CASE("Visualization.RenderRateInputEcho.RemoteProxyWithColdCacheSkipsVisual
 }
 
 // ---------------------------------------------------------------------------
-// LISTEN-SERVER HOST: local character whose correction cache is EMPTY (the
-// authority keeps none, so getLatestInput returns nullopt there). Before T13 this
-// combination skipped the viz on every frame; now it echoes. This case IS the
-// listen-server improvement, pinned so a regression is loud.
+// LISTEN-SERVER HOST: local character with NO cached input source at all. Before
+// T13 this combination skipped the viz on every frame; now it echoes. This case
+// IS the listen-server improvement, pinned so a regression is loud.
+//
+// (Historically the absent source was the correction cache's input column, which
+// the authority never populated because it allocates no caches — `getLatestInput`
+// answered nullopt there. [og-netcode-v2-input-relay T16] That column and that
+// accessor are retired outright, so the nullopt this case models is now the
+// ORDINARY answer on every role rather than an authority-specific one. The case
+// itself passes `std::nullopt` directly and never named either symbol.)
 // ---------------------------------------------------------------------------
 TEST_CASE("Visualization.RenderRateInputEcho.ListenServerHostEchoesWithNoCorrectionCache",
           "[CharacterViz][RenderRateInputEcho]")
