@@ -2,6 +2,7 @@
 #if WITH_LOW_LEVEL_TESTS
 
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -20,6 +21,10 @@
 // SimulationNetSync.h declares SimulatableOwnerTraits primary; must come before
 // the specialization below.
 #include "OGSimulation/SimulationNetSync.h"
+// [T39] The state-rotation width lives in TimeConfig; the StateRotation cases at
+// the end of this file assert against the shipped compiled default rather than
+// re-typing it.
+#include "OGSimulation/PCTimeManagement/TimeConfig.h"
 
 // [T15] The input provider's second parameter — the character's own raw capture
 // history, handed in by collectInputAll. Aliased so the many provider lambdas in
@@ -27,6 +32,19 @@
 // matcher's use of it live in MotionMatcherSourceTest.cpp, which drives the real
 // engine-free core directly.
 using BrawlerDelayLine = ClientInputDelayLine<simulatableBrawler::PlayerInput>;
+
+// [T39] `sendCorrectionAll` gained the state-rotation width K, deliberately
+// without a default (see the note at its definition). Every case in this file
+// that predates T39 is about WHAT the send publishes, not about cadence, so it
+// passes the every-frame value: K >= N degenerates to "write every writer", which
+// is byte-for-byte the pre-T39 behaviour those cases were written against.
+//
+// The rotation itself is pinned in two places, on purpose: as a unit — coverage,
+// wrap, the K >= N degeneracy and the clamp — in
+// og-simulation-tests/Network/CorrectionRotationTest.cpp, and as an INTEGRATION
+// fact (that sendCorrectionAll actually honours it, over real authority writers)
+// by the StateRotation cases at the end of this file.
+constexpr int32 kEveryFrameRotationK = correctionRotation::kMaxK;
 
 // ---------------------------------------------------------------------------
 // Minimal mock synced buffer types for owner concept satisfaction
@@ -959,7 +977,7 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionStateCarriesAppliedCaptureTick",
 
     // Before any authority tick there is no applied input at all — the send must
     // publish the sentinel rather than an invented reference.
-    netSync.sendCorrectionAll(SimulationTimeStep(10u, false, StepKind::Normal));
+    netSync.sendCorrectionAll(SimulationTimeStep(10u, false, StepKind::Normal), kEveryFrameRotationK);
     REQUIRE(authorityOwner.stateBuf.lastTick == 10u);
     REQUIRE(authorityOwner.stateBuf.lastAppliedCaptureTick == kNoInputCaptureTick);
 
@@ -968,7 +986,7 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionStateCarriesAppliedCaptureTick",
     authorityOwner.onRemoteMoveReceived(51u, taggedCapture(51.f));
     authorityTick(netSync, 30u, 11u);
 
-    netSync.sendCorrectionAll(SimulationTimeStep(11u, false, StepKind::Normal));
+    netSync.sendCorrectionAll(SimulationTimeStep(11u, false, StepKind::Normal), kEveryFrameRotationK);
     REQUIRE(authorityOwner.stateBuf.lastTick == 11u);
     REQUIRE(authorityOwner.stateBuf.lastAppliedCaptureTick == 51u);
     REQUIRE_FALSE(authorityOwner.stateBuf.lastAppliedCaptureTick == 11u);
@@ -978,7 +996,7 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionStateCarriesAppliedCaptureTick",
     // reference would send the client looking up a relayed input the authority
     // never applied.
     authorityTick(netSync, 30u, 12u);
-    netSync.sendCorrectionAll(SimulationTimeStep(12u, false, StepKind::Normal));
+    netSync.sendCorrectionAll(SimulationTimeStep(12u, false, StepKind::Normal), kEveryFrameRotationK);
     REQUIRE(authorityOwner.stateBuf.lastAppliedCaptureTick == kNoInputCaptureTick);
     REQUIRE_FALSE(authorityOwner.stateBuf.lastAppliedCaptureTick == 51u);
 
@@ -986,7 +1004,7 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionStateCarriesAppliedCaptureTick",
     // a latch.
     authorityOwner.onRemoteMoveReceived(52u, taggedCapture(52.f));
     authorityTick(netSync, 30u, 13u);
-    netSync.sendCorrectionAll(SimulationTimeStep(13u, false, StepKind::Normal));
+    netSync.sendCorrectionAll(SimulationTimeStep(13u, false, StepKind::Normal), kEveryFrameRotationK);
     REQUIRE(authorityOwner.stateBuf.lastAppliedCaptureTick == 52u);
 
     // [T8] The EXPAND/CONTRACT FENCE assertion (B3) stood here: `inputBuf.lastTick
@@ -1029,7 +1047,7 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionStateRefIsPerCharacter",
 
     SimulationTimeStep step(20u, false, StepKind::Normal);
     netSync.collectInputAll(step);
-    netSync.sendCorrectionAll(step);
+    netSync.sendCorrectionAll(step, kEveryFrameRotationK);
 
     REQUIRE(authorityOwnerA.stateBuf.lastAppliedCaptureTick == 80u);
     REQUIRE(authorityOwnerB.stateBuf.lastAppliedCaptureTick == kNoInputCaptureTick);
@@ -1620,7 +1638,7 @@ TEST_CASE("DAttack.SimulationNetSync.RemoteBranchPassesADequeuedInputThroughUnto
     // correction-INPUT channel (`inputBuf.lastInput == sent`). What the send path
     // still owes this case is that the join key survives to the wire, so assert
     // THAT instead — it is the surviving publication of "which input I applied".
-    netSync.sendCorrectionAll(SimulationTimeStep(1u, false, StepKind::Normal));
+    netSync.sendCorrectionAll(SimulationTimeStep(1u, false, StepKind::Normal), kEveryFrameRotationK);
     REQUIRE(authorityOwner.stateBuf.lastAppliedCaptureTick == 44u);
     REQUIRE_FALSE(authorityOwner.stateBuf.lastAppliedCaptureTick == kNoInputCaptureTick);
 
@@ -2379,7 +2397,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimSentinelMatchesWhatTheAuthorityIntegra
     REQUIRE_FALSE(sameInput(serverIntegrated, simulatableBrawler::PlayerInput{}));
 
     // 2) THE SENTINEL REF REPLICATES, through the real send path.
-    serverNetSync.sendCorrectionAll(SimulationTimeStep(kTick, false, StepKind::Normal));
+    serverNetSync.sendCorrectionAll(SimulationTimeStep(kTick, false, StepKind::Normal), kEveryFrameRotationK);
     REQUIRE(authorityOwner.stateBuf.lastTick == kTick);
     REQUIRE(authorityOwner.stateBuf.lastAppliedCaptureTick == kNoInputCaptureTick);
 
@@ -2982,6 +3000,83 @@ TEST_CASE("DAttack.SimulationNetSync.RelayProbeMeasuresArrivalCadenceInCaptureTi
 }
 
 // ===========================================================================
+// ⭐ [og-netcode-v2-input-relay T34 loss-counter fix] THE LOSS COUNTER'S WIRING.
+//
+// WHY HERE and not in og-simulation-tests. The arithmetic is unit-tested there
+// ([Network][RelayProbe], MPL-2.0) on hand-fed numbers. What that suite structurally
+// CANNOT show is the thing that was actually broken: whether the SHIPPED callback
+// hands the probe a real delivered-count or a constant. `lostCaptureTicksX1000`
+// read ~120 per mille on `runs/t34_run1_2char_2026-08-09_1938` — a run whose flush
+// was working perfectly — because the probe was charging `gap - 1` while one arrival
+// carried a whole burst. A unit test of the formula passes either way; only the real
+// ring -> real codec -> real ingest -> real probe chain can fail on the wiring.
+//
+// This is the same argument the T20 miss-class wiring block below makes, and it is
+// the second time on this initiative that an instrument's CALL SITE, not its
+// arithmetic, was the defect.
+// ===========================================================================
+
+TEST_CASE("DAttack.SimulationNetSync.RelayArrivalLossCounterChargesTheBurstNotTheWatermark",
+          "[DAttack][SimulationNetSync][RelayProbeWiring]")
+{
+    ResimRig rig;
+    MockPredictionOwner remote;
+    addRemoteCharacter(rig, 92u, remote);
+
+    const RelayArrivalProbe& arrival = rig.netSync.getRelayArrivalProbe();
+
+    // Seed the watermark at capture 300 with a single-entry ring — the shape the
+    // retired replace-latest write path produced on every replication.
+    relayWrite(remote.relayedInputRing, 300u, 3u, 300.f);
+    remote.replicateRelayRing();
+    REQUIRE(arrival.sampleCount() == 0u);       // the first arrival seeds, not samples
+
+    // ⭐ A FLUSH ROUND. Captures 301, 302 and 303 are published in ONE replication,
+    // which is exactly what `ASimulationInputRelay::PreReplication` does. The
+    // watermark advances by 3 and NOTHING WAS LOST.
+    for (uint32 capture = 301u; capture <= 303u; ++capture)
+        relayWrite(remote.relayedInputRing, capture, 3u, static_cast<float>(capture), /*depth=*/3);
+    remote.replicateRelayRing();
+
+    REQUIRE(arrival.sampleCount() == 1u);
+
+    RelayArrivalWindowSummary peek;
+    arrival.peekSummary(peek);
+
+    // ⛔ THE ASSERTION THE OLD INSTRUMENT FAILED. It reported `gap - 1` = 2 lost
+    // here, i.e. 666 per mille, on a round that delivered every capture tick the
+    // sender produced.
+    REQUIRE(peek.expectedCaptureTicks == 3u);
+    REQUIRE(peek.deliveredCaptureTicks == 3u);
+    REQUIRE(peek.lostCaptureTicks == 0u);
+    REQUIRE(peek.lostCaptureTicksX1000 == 0u);
+
+    // ⭐ AND A ROUND THAT REALLY DID LOSE ONE, through the same chain. Capture 304
+    // never arrives; the round carries 305 and 306, and the ring ALSO still carries
+    // 303 (a flush republishes what has not yet been evicted). 303 is already
+    // resident in the store, so it is re-delivery and not new coverage — which is
+    // why the count comes from `newCaptureTicksIngested` and not `entriesIngested`.
+    relayWrite(remote.relayedInputRing, 305u, 3u, 305.f, /*depth=*/3);
+    relayWrite(remote.relayedInputRing, 306u, 3u, 306.f, /*depth=*/3);
+    remote.replicateRelayRing();
+
+    REQUIRE(arrival.sampleCount() == 2u);
+    arrival.peekSummary(peek);
+
+    REQUIRE(peek.expectedCaptureTicks == 6u);       // 3 + 3
+    REQUIRE(peek.deliveredCaptureTicks == 5u);      // 301,302,303 + 305,306 — NOT 303 twice
+    REQUIRE(peek.lostCaptureTicks == 1u);           // capture 304, and only that
+    REQUIRE(peek.lostCaptureTicksX1000 == 166u);
+
+    // The self-check the `[RelayProbe.Arrival]` line carries: every expected tick is
+    // either delivered or lost.
+    REQUIRE(peek.lostCaptureTicks + peek.deliveredCaptureTicks
+            == peek.expectedCaptureTicks);
+
+    rig.netSync.unregisterSimulatable<SimulatableBrawler>(92u, &remote);
+}
+
+// ===========================================================================
 // [og-netcode-v2-input-relay T20] THE MISS CLASSES — WIRING, not arithmetic.
 //
 // Same argument as the block above, applied to T20's addition. The classification
@@ -3217,6 +3312,232 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionVerdictProbeIgnoresDiscardedCorre
     REQUIRE(probe.correctionsFor(PredictedCharacterClass::RemoteProxy) == 1u);
 
     rig.netSync.unregisterSimulatable<SimulatableBrawler>(99u, &remote);
+}
+
+// ---------------------------------------------------------------------------
+// [og-netcode-v2-input-relay / T39] STATE ROTATION — THE INTEGRATION HALF.
+//
+// The selection arithmetic (coverage, wrap, the K >= N degeneracy, the clamp) is
+// swept exhaustively as a unit in
+// og-simulation-tests/Network/CorrectionRotationTest.cpp, where no mock character
+// is needed. What THAT suite structurally cannot show is that sendCorrectionAll
+// actually calls it — a green kernel behind an unwired caller ships every-frame
+// state and passes everything. These cases close that gap by counting real
+// writes into real authority owners' correction buffers.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Owns the pieces a multi-character authority send needs, so a case can say
+    // "three characters, K=1, four ticks" in a few lines. Owners are held by
+    // pointer-stable storage because netSync keeps references to them.
+    struct RotationRig
+    {
+        SimulationObjectStorage<SimulatableBrawler>  storage;
+        SimulationReconciliation<SimulatableBrawler> reconciliation{ storage };
+        SimulationNetSync<SimulatableBrawler>        netSync{ storage, reconciliation };
+
+        std::vector<std::unique_ptr<MockPredictionOwner>> predictionOwners;
+        std::vector<std::unique_ptr<MockAuthorityOwner>>  authorityOwners;
+        std::vector<unsigned int>                        ids;
+
+        void addCharacters(unsigned int count)
+        {
+            for (unsigned int i = 0; i < count; ++i)
+            {
+                const unsigned int id = 100u + i;
+                storage.add<SimulatableBrawler>(id, makeNetSyncTestCharacter());
+                reconciliation.createCacheFor<SimulatableBrawler>(id);
+
+                predictionOwners.push_back(std::make_unique<MockPredictionOwner>());
+                authorityOwners.push_back(std::make_unique<MockAuthorityOwner>());
+
+                netSync.registerPredictionOwner<SimulatableBrawler>(
+                    id, *predictionOwners.back(), nullptr);
+                netSync.registerAuthorityOwner<SimulatableBrawler>(
+                    id, *authorityOwners.back());
+
+                ids.push_back(id);
+            }
+        }
+
+        void send(uint32 tick, int32 k)
+        {
+            netSync.sendCorrectionAll(SimulationTimeStep(tick, false, StepKind::Normal), k);
+        }
+
+        // Total writes observed across every authority owner.
+        int totalWrites() const
+        {
+            int total = 0;
+            for (const auto& owner : authorityOwners)
+                total += owner->stateBuf.writeCount;
+            return total;
+        }
+
+        // The smallest per-character write count — the starvation detector. A
+        // rotation that covers "most" characters is not a cadence, it is a leak.
+        int minWrites() const
+        {
+            int smallest = -1;
+            for (const auto& owner : authorityOwners)
+            {
+                const int w = owner->stateBuf.writeCount;
+                if (smallest < 0 || w < smallest)
+                    smallest = w;
+            }
+            return smallest;
+        }
+    };
+}
+
+TEST_CASE("DAttack.SimulationNetSync.StateRotationWritesExactlyKPerTick",
+          "[DAttack][SimulationNetSync][StateRotation]")
+{
+    // THE HEADLINE FACT, measured through the real send path: with N characters
+    // registered and K passed in, exactly K correction buffers are written per
+    // call. This is what turns the state channel's per-tick byte cost into the
+    // constant `K * stateBytes` the round-vs-packet LLT budgets against — a send
+    // that sometimes wrote N would blow that budget silently.
+    RotationRig rig;
+    rig.addCharacters(4u);
+
+    rig.send(/*tick=*/1u, /*k=*/1);
+    REQUIRE(rig.totalWrites() == 1);
+
+    rig.send(2u, 1);
+    REQUIRE(rig.totalWrites() == 2);
+
+    // ...and it is K, not "one", so a hardcoded single-writer implementation is
+    // caught rather than passing the case above.
+    RotationRig two;
+    two.addCharacters(4u);
+    two.send(1u, 2);
+    REQUIRE(two.totalWrites() == 2);
+    two.send(2u, 2);
+    REQUIRE(two.totalWrites() == 4);
+}
+
+TEST_CASE("DAttack.SimulationNetSync.StateRotationStarvesNobody",
+          "[DAttack][SimulationNetSync][StateRotation]")
+{
+    // ⭐ THE PROPERTY THE CADENCE CLAIM RESTS ON. "20 Hz per character at six
+    // characters" is only honest if no character can be skipped indefinitely, so
+    // this asserts the bound directly on the real send path: after ceil(N/K)
+    // sends every single owner has been written at least once, and after a full
+    // second every owner has been written the SAME number of times.
+    RotationRig rig;
+    rig.addCharacters(6u);
+
+    constexpr int32 kK = 2;               // the shipped default
+    constexpr uint32 kCoverageBound = 3u; // ceil(6/2)
+
+    for (uint32 tick = 1u; tick <= kCoverageBound; ++tick)
+        rig.send(tick, kK);
+
+    REQUIRE(rig.minWrites() >= 1);
+    REQUIRE(rig.totalWrites() == static_cast<int>(kCoverageBound) * kK);
+
+    // One second at 60 Hz: 60 * K / N = 20 writes per character, exactly and
+    // uniformly. Uniformity matters as much as the rate — a rotation that gave
+    // one character 30 and another 10 would average correctly and feel wrong.
+    RotationRig second;
+    second.addCharacters(6u);
+    for (uint32 tick = 1u; tick <= 60u; ++tick)
+        second.send(tick, kK);
+
+    for (const auto& owner : second.authorityOwners)
+    {
+        REQUIRE(owner->stateBuf.writeCount == 20);
+    }
+}
+
+TEST_CASE("DAttack.SimulationNetSync.StateRotationAtTwoCharactersIsEveryFrame",
+          "[DAttack][SimulationNetSync][StateRotation]")
+{
+    // THE BASELINE-PRESERVING PROPERTY: at two characters K=2 is K >= N, so every
+    // character is written every tick — bit-for-bit the pre-T39 cadence, which is
+    // what kept the archived two-character measurement baselines comparable across
+    // the input-first-replication split. It was T39's reason for a compiled default
+    // of 2, and it is a real property of the send path, so it keeps its own case.
+    //
+    // ⚠ [T34] IT IS NO LONGER THE SHIPPED CONFIGURATION. The compiled default is 1
+    // for the pre-diet window (at K=2 with un-dieted states the second state batch
+    // enters Iris's huge-object window at four characters — T38 §16.2); item 40
+    // restores 2. So this case now drives K=2 EXPLICITLY and asserts the shipped
+    // cadence separately, rather than assuming the two are the same number. The
+    // archived-baseline comparison is correspondingly halved at two characters —
+    // designed, and stated here because a run that expected 60 Hz would read 30 Hz
+    // as a regression.
+    RotationRig rig;
+    rig.addCharacters(2u);
+
+    constexpr int32 kEveryFrameAtTwo = 2;
+    for (uint32 tick = 1u; tick <= 10u; ++tick)
+        rig.send(tick, kEveryFrameAtTwo);
+
+    for (const auto& owner : rig.authorityOwners)
+    {
+        REQUIRE(owner->stateBuf.writeCount == 10);
+        REQUIRE(owner->stateBuf.lastTick == 10u);
+    }
+
+    // THE SHIPPED CADENCE at two characters, driven through the same rig: K=1
+    // alternates, so each character is written on half the ticks. This is the row
+    // that has to move when item 40 restores K=2.
+    const int32 shippedK = TimeConfig{}.correctionRotationK;
+    REQUIRE(shippedK == 1);
+
+    RotationRig shipped;
+    shipped.addCharacters(2u);
+    for (uint32 tick = 1u; tick <= 10u; ++tick)
+        shipped.send(tick, shippedK);
+
+    for (const auto& owner : shipped.authorityOwners)
+    {
+        REQUIRE(owner->stateBuf.writeCount == 5);
+    }
+    REQUIRE(shipped.totalWrites() == 10);
+}
+
+TEST_CASE("DAttack.SimulationNetSync.StateRotationClampsAtTheSendPath",
+          "[DAttack][SimulationNetSync][StateRotation]")
+{
+    // The shared clamp is called inside the selection predicate as well as at the
+    // setter, so a K that reached the send path unclamped — through a future
+    // caller that skipped SimulationManager::setCorrectionRotationK — still
+    // degrades to "write one" rather than to "write none". A silently empty
+    // correction channel is a permanent desync with no log line.
+    RotationRig rig;
+    rig.addCharacters(3u);
+
+    rig.send(/*tick=*/1u, /*k=*/0);
+    REQUIRE(rig.totalWrites() == 1);
+
+    rig.send(2u, -7);
+    REQUIRE(rig.totalWrites() == 2);
+}
+
+TEST_CASE("DAttack.SimulationNetSync.StateRotationIsANoOpWithNoAuthorityWriters",
+          "[DAttack][SimulationNetSync][StateRotation]")
+{
+    // sendCorrectionAll runs unconditionally every tick, including on a pure
+    // client where the authority-writer map is empty for every type, and on the
+    // server before the first character registers. The rotation must not divide
+    // by zero on that path — the predicate answers false and the cursor still
+    // advances, because the cursor is type-independent.
+    RotationRig rig;   // no characters added
+
+    rig.send(1u, 2);
+    rig.send(2u, 2);
+    REQUIRE(rig.totalWrites() == 0);
+
+    // Registering after the empty sends must not leave the newcomer stranded on
+    // the wrong side of an advanced cursor — coverage is a property of positions,
+    // so a late registration is picked up within one round.
+    rig.addCharacters(2u);
+    rig.send(3u, 2);
+    REQUIRE(rig.minWrites() >= 1);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS
