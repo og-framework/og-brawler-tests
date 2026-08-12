@@ -3314,6 +3314,172 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionVerdictProbeIgnoresDiscardedCorre
     rig.netSync.unregisterSimulatable<SimulatableBrawler>(99u, &remote);
 }
 
+// ===========================================================================
+// [og-netcode-v2-input-relay / item 42] THE FRONTIER-LANDING SPLIT (I2) — THE
+// INTEGRATION HALF.
+//
+// The three-way classification, the class split, the per-mille arithmetic and the
+// window drive are swept as a unit in
+// og-simulation-tests/Reconciliation/ResimGateProbeTest.cpp (MPL-2.0), where no
+// cache, owner or simulatable is needed and every input is supplied by hand.
+//
+// WHAT THAT SUITE STRUCTURALLY CANNOT SHOW — three things, each of which fails
+// silently and each of which would leave item 42 reporting confident zeros:
+//
+//   1. THAT THE SHIPPED CORRECTION CALLBACK FEEDS THE LANDING PROBE AT ALL. A
+//      probe wired to nothing passes every unit test it has and reports all-zero
+//      counters forever. And zero is not obviously wrong here: `landedAtFrontier`
+//      is SUPPOSED to be small (59 triggers against 4,552 corrections), so an
+//      unwired probe reads exactly like the mechanism working.
+//   2. THAT THE FRONTIER COMES FROM THE LIVE CACHE, not from a value captured at
+//      bind time or carried stale. The whole discriminator is `tick ==
+//      predictionTick` at insert time; a frontier read that lags by one tick moves
+//      every AtFrontier event into Behind and turns the finding's central claim
+//      into its opposite while every counter still adds up.
+//   3. THAT A DISCARD REACHES THE LANDING PROBE. Its sibling
+//      CorrectionVerdictProbe deliberately returns early on `!verdict.landed`, and
+//      the landing probe deliberately sits on the other side of that return. If
+//      the two ever get reordered, the `discarded` bucket empties, and
+//      `atFrontierPerMille` RISES — the healthy-looking direction — on precisely
+//      the clients where item 41's aboveNewest anomaly is worst.
+// ===========================================================================
+
+TEST_CASE("DAttack.SimulationNetSync.LandingProbeSplitsByFrontierAndByClass",
+          "[DAttack][SimulationNetSync][ResimLandingWiring]")
+{
+    ResimRig rig;
+    MockPredictionOwner local;
+    MockPredictionOwner remote;
+    addLocalCharacter(rig, 195u, local);     // provider PRESENT
+    addRemoteCharacter(rig, 196u, remote);   // provider ABSENT
+
+    const CorrectionLandingProbe& probe = rig.netSync.getCorrectionLandingProbe();
+    const CorrectionVerdictProbe& verdicts = rig.netSync.getCorrectionVerdictProbe();
+
+    // Registration alone feeds nothing — this probe counts CORRECTIONS.
+    REQUIRE(probe.sampleCount() == 0u);
+
+    for (unsigned int tick = 1u; tick <= 5u; ++tick)
+        predictTick(rig, tick);
+    // Frontier is now 5 for both characters.
+
+    // ASYMMETRIC IN BOTH DIMENSIONS — different totals per class and a different
+    // bucket mix inside each, so that a SWAPPED class test, a POOLED counter and a
+    // MERGED bucket each land on a distinguishable set of numbers. A one-of-each
+    // drive would read identically under a swap and would certify the exact defect
+    // this case exists to catch (the T24 lesson, applied at authoring time).
+    landCorrection(local,  2u, 1u);      // behind
+    landCorrection(local,  3u, 2u);      // behind
+    landCorrection(local,  4u, 3u);      // behind
+    landCorrection(local,  5u, 4u);      // AT THE FRONTIER — the gate opener
+    landCorrection(remote, 3u, 2u);      // behind
+    landCorrection(remote, 9000u, 8999u);  // no slot -> discarded
+    landCorrection(remote, 9001u, 9000u);  // no slot -> discarded
+
+    REQUIRE(probe.countFor(PredictedCharacterClass::LocallyPredicted,
+                           CorrectionLandingSite::Behind)     == 3u);
+    REQUIRE(probe.countFor(PredictedCharacterClass::LocallyPredicted,
+                           CorrectionLandingSite::AtFrontier) == 1u);
+    REQUIRE(probe.countFor(PredictedCharacterClass::LocallyPredicted,
+                           CorrectionLandingSite::Discarded)  == 0u);
+    REQUIRE(probe.countFor(PredictedCharacterClass::RemoteProxy,
+                           CorrectionLandingSite::Behind)     == 1u);
+    REQUIRE(probe.countFor(PredictedCharacterClass::RemoteProxy,
+                           CorrectionLandingSite::AtFrontier) == 0u);
+    REQUIRE(probe.countFor(PredictedCharacterClass::RemoteProxy,
+                           CorrectionLandingSite::Discarded)  == 2u);
+
+    // ⭐ THE TWO PROBES ON THIS ONE CALLBACK HAVE DIFFERENT SAMPLE SETS, AND THAT
+    // DIFFERENCE IS THE POINT. Seven corrections arrived; five of them landed. The
+    // verdict probe counts only the five (a discard produced no comparison, so
+    // counting it would put a denominator under a verdict that never happened); the
+    // landing probe counts all seven (a discard IS an observation of where the
+    // correction stream sits relative to the cache window — it is item 41's
+    // aboveNewest population). If a future edit moves the landing probe above the
+    // `!verdict.landed` return, these two numbers become equal and this assertion
+    // is what notices.
+    REQUIRE(probe.sampleCount()    == 7u);
+    REQUIRE(verdicts.sampleCount() == 5u);
+
+    rig.netSync.unregisterSimulatable<SimulatableBrawler>(195u, &local);
+    rig.netSync.unregisterSimulatable<SimulatableBrawler>(196u, &remote);
+}
+
+TEST_CASE("DAttack.SimulationNetSync.LandingProbeReadsTheFrontierLiveNotCaptured",
+          "[DAttack][SimulationNetSync][ResimLandingWiring]")
+{
+    ResimRig rig;
+    MockPredictionOwner local;
+    addLocalCharacter(rig, 197u, local);
+
+    const CorrectionLandingProbe& probe = rig.netSync.getCorrectionLandingProbe();
+
+    for (unsigned int tick = 1u; tick <= 3u; ++tick)
+        predictTick(rig, tick);
+
+    // Tick 3 IS the frontier right now.
+    landCorrection(local, 3u, 2u);
+    REQUIRE(probe.countFor(PredictedCharacterClass::LocallyPredicted,
+                           CorrectionLandingSite::AtFrontier) == 1u);
+
+    // The frontier advances — this is `pushPredictionTick`, the same call that
+    // copies the inherited resim bit forward and is therefore the exact mechanism
+    // the split measures.
+    predictTick(rig, 4u);
+
+    // THE SAME TICK 3, LANDING AGAIN, IS NOW BEHIND. This is the assertion that a
+    // captured-at-bind or cached frontier cannot satisfy: it would re-file this as
+    // AtFrontier (stale value 3) and the next one as Behind, i.e. exactly inverted.
+    landCorrection(local, 3u, 2u);
+    landCorrection(local, 4u, 3u);
+
+    REQUIRE(probe.countFor(PredictedCharacterClass::LocallyPredicted,
+                           CorrectionLandingSite::Behind)     == 1u);
+    REQUIRE(probe.countFor(PredictedCharacterClass::LocallyPredicted,
+                           CorrectionLandingSite::AtFrontier) == 2u);
+    REQUIRE(probe.countFor(PredictedCharacterClass::LocallyPredicted,
+                           CorrectionLandingSite::Discarded)  == 0u);
+
+    rig.netSync.unregisterSimulatable<SimulatableBrawler>(197u, &local);
+}
+
+TEST_CASE("DAttack.SimulationNetSync.LandingProbeIsPurelyObservational",
+          "[DAttack][SimulationNetSync][ResimLandingWiring]")
+{
+    // BEHAVIOUR-NEUTRALITY, ASSERTED RATHER THAN CLAIMED. Item 42 changes no
+    // behaviour, and the one thing on this path that COULD have changed it is the
+    // hoisted provider-presence lookup and the extra `findInputCache` read now
+    // sitting between `injectCorrectionState` and the verdict probe. So: land a
+    // correction that DISAGREES and check the cache still adopted authority state,
+    // exactly as the T24 case one block up does — the simulation must act on the
+    // correction identically with the landing probe in the path.
+    ResimRig rig;
+    MockPredictionOwner remote;
+    addRemoteCharacter(rig, 198u, remote);
+
+    predictTick(rig, 1u);
+    divergeState(rig, 198u, 25.f);
+    predictTick(rig, 2u);
+
+    landCorrection(remote, 2u, 1u);
+
+    // It was classified...
+    REQUIRE(rig.netSync.getCorrectionLandingProbe().countFor(
+                PredictedCharacterClass::RemoteProxy,
+                CorrectionLandingSite::AtFrontier) == 1u);
+    // ...the verdict still travelled...
+    REQUIRE(rig.netSync.getCorrectionVerdictProbe().disagreementsFor(
+                PredictedCharacterClass::RemoteProxy) == 1u);
+    // ...and the cache still overwrote the slot, so a restore hands back the
+    // AUTHORITY's attackTimer (0) and not the 25 this client predicted.
+    rig.reconciliation.prepareResimAll(2u);
+    REQUIRE(rig.storage.get<SimulatableBrawler>(198u)
+                .getAllState().getState()
+                .get<dAttackGuardSimulation::State>().attackTimer == 0.f);
+
+    rig.netSync.unregisterSimulatable<SimulatableBrawler>(198u, &remote);
+}
+
 // ---------------------------------------------------------------------------
 // [og-netcode-v2-input-relay / T39] STATE ROTATION — THE INTEGRATION HALF.
 //
