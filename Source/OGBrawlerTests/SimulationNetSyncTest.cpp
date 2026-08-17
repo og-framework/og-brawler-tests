@@ -31,7 +31,7 @@
 // this file stay readable. No case below reads it; the cases that exercise the
 // matcher's use of it live in MotionMatcherSourceTest.cpp, which drives the real
 // engine-free core directly.
-using BrawlerDelayLine = ClientInputDelayLine<simulatableBrawler::PlayerInput>;
+using BrawlerLocalInputCache = LocalInputCache<simulatableBrawler::PlayerInput>;
 
 // [T39] `sendCorrectionAll` gained the state-rotation width K, deliberately
 // without a default (see the note at its definition). Every case in this file
@@ -132,7 +132,7 @@ struct MockInputSyncBuffer
 // A std::vector-backed byte buffer exposing the codec's BUFFER CONCEPT, i.e. the
 // same four methods FRelayedInputRing exposes over its TArray<uint8>. Tests
 // therefore drive the REAL RelayedInputRingCodec and the REAL
-// populateRelayedInputStore against it; only the UE replication half (NetSerialize
+// populateRemoteInputCache against it; only the UE replication half (NetSerialize
 // + OnRep) is stood in for, and OnRep is stood in for by calling the bound
 // callback directly, which is literally all OnRep_RelayedInputRing does.
 // ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ TEST_CASE("DAttack.SimulationNetSync.RegisterUnregisterClient", "[DAttack][Simul
     MockPredictionOwner predictionOwner;
 
     simulatableBrawler::PlayerInput zeroInput = simulatableBrawler::getZeroPlayerInput();
-    auto inputProvider = [zeroInput](const SimulationTimeStep&, const BrawlerDelayLine&) { return zeroInput; };
+    auto inputProvider = [zeroInput](const SimulationTimeStep&, const BrawlerLocalInputCache&) { return zeroInput; };
 
     netSync.registerPredictionOwner<SimulatableBrawler>(42u, predictionOwner, std::move(inputProvider));
 
@@ -412,7 +412,7 @@ TEST_CASE("DAttack.SimulationNetSync.CacheSlotAdvances", "[DAttack][SimulationNe
     int collectCallCount = 0;
     simulatableBrawler::PlayerInput zeroInput = simulatableBrawler::getZeroPlayerInput();
     auto inputProvider = [zeroInput, &collectCallCount](const SimulationTimeStep&,
-                                                        const BrawlerDelayLine&) {
+                                                        const BrawlerLocalInputCache&) {
         ++collectCallCount;
         return zeroInput;
     };
@@ -435,7 +435,7 @@ TEST_CASE("DAttack.SimulationNetSync.CacheSlotAdvances", "[DAttack][SimulationNe
 // (og-netcode-v2-arch-latency; D5.2 client half.)
 //
 // WHY HERE and not in og-simulation-tests. The container and the offset rule are
-// unit-tested there (Network/ClientInputDelayLineTest.cpp, MPL-2.0). What that
+// unit-tested there (Network/LocalInputCacheTest.cpp, MPL-2.0). What that
 // suite cannot reach is the PRODUCTION BRANCH: collectInputAll is variadic over a
 // simulatable pack and needs SimulatableOwnerTraits bound to concrete owners,
 // which only a suite linking a real simulatable can supply. These cases drive the
@@ -508,7 +508,7 @@ TEST_CASE("DAttack.SimulationNetSync.ClientDelayShiftsIntegratedInput",
 
     netSync.setNeutralInput<SimulatableBrawler>(simulatableBrawler::getZeroPlayerInput());
     netSync.registerPredictionOwner<SimulatableBrawler>(7u, predictionOwner,
-        [](const SimulationTimeStep& step, const BrawlerDelayLine&) {
+        [](const SimulationTimeStep& step, const BrawlerLocalInputCache&) {
             return taggedCapture(static_cast<float>(step.getTick()));
         });
 
@@ -562,7 +562,7 @@ TEST_CASE("DAttack.SimulationNetSync.OutboundQueueCarriesUndelayedCapture",
 
     netSync.setNeutralInput<SimulatableBrawler>(simulatableBrawler::getZeroPlayerInput());
     netSync.registerPredictionOwner<SimulatableBrawler>(8u, predictionOwner,
-        [](const SimulationTimeStep& step, const BrawlerDelayLine&) {
+        [](const SimulationTimeStep& step, const BrawlerLocalInputCache&) {
             return taggedCapture(static_cast<float>(step.getTick()));
         });
 
@@ -608,7 +608,7 @@ TEST_CASE("DAttack.SimulationNetSync.ZeroClientDelayIsUnchangedBehaviour",
     // setNeutralInput call — this is the shape every pre-T9 caller has, and it
     // must behave exactly as it did before.
     netSync.registerPredictionOwner<SimulatableBrawler>(9u, predictionOwner,
-        [](const SimulationTimeStep& step, const BrawlerDelayLine&) {
+        [](const SimulationTimeStep& step, const BrawlerLocalInputCache&) {
             return taggedCapture(static_cast<float>(step.getTick()));
         });
 
@@ -660,7 +660,7 @@ TEST_CASE("DAttack.SimulationNetSync.ClientDelayChangeShiftsTheOffset",
 
     netSync.setNeutralInput<SimulatableBrawler>(simulatableBrawler::getZeroPlayerInput());
     netSync.registerPredictionOwner<SimulatableBrawler>(11u, predictionOwner,
-        [](const SimulationTimeStep& step, const BrawlerDelayLine&) {
+        [](const SimulationTimeStep& step, const BrawlerLocalInputCache&) {
             return taggedCapture(static_cast<float>(step.getTick()));
         });
 
@@ -694,7 +694,7 @@ TEST_CASE("DAttack.SimulationNetSync.ClientDelayChangeShiftsTheOffset",
     REQUIRE(integratedTagAt(13u) == Catch::Approx(13.f));
 }
 
-TEST_CASE("DAttack.SimulationNetSync.ResyncWipeClearsTheClientDelayLine",
+TEST_CASE("DAttack.SimulationNetSync.ResyncWipeClearsTheLocalInputCache",
           "[DAttack][SimulationNetSync][ClientInputDelay]")
 {
     SimulationObjectStorage<SimulatableBrawler> storage;
@@ -708,7 +708,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResyncWipeClearsTheClientDelayLine",
 
     netSync.setNeutralInput<SimulatableBrawler>(simulatableBrawler::getZeroPlayerInput());
     netSync.registerPredictionOwner<SimulatableBrawler>(12u, predictionOwner,
-        [](const SimulationTimeStep& step, const BrawlerDelayLine&) {
+        [](const SimulationTimeStep& step, const BrawlerLocalInputCache&) {
             return taggedCapture(static_cast<float>(step.getTick()));
         });
 
@@ -1074,7 +1074,7 @@ TEST_CASE("DAttack.SimulationNetSync.InjectCorrectionStateStashesRefPerTick",
 
     simulatableBrawler::PlayerInput zeroInput = simulatableBrawler::getZeroPlayerInput();
     netSync.registerPredictionOwner<SimulatableBrawler>(
-        33u, predictionOwner, [zeroInput](const SimulationTimeStep&, const BrawlerDelayLine&) { return zeroInput; });
+        33u, predictionOwner, [zeroInput](const SimulationTimeStep&, const BrawlerLocalInputCache&) { return zeroInput; });
     REQUIRE(predictionOwner.onCorrectionStateReceived != nullptr);
 
     // Predict three ticks so the cache has slots for them.
@@ -1115,7 +1115,7 @@ TEST_CASE("DAttack.SimulationNetSync.InjectCorrectionStateStashesRefPerTick",
 // [T5] THE CLIENT RELAYED-INPUT STORE, through the REAL SimulationNetSync wiring.
 //
 // WHY HERE and not in og-simulation-tests. The container, the derivation and the
-// wire fence are unit-tested there (Network/RelayedInputStoreTest.cpp, MPL-2.0).
+// wire fence are unit-tested there (Network/RemoteInputCacheTest.cpp, MPL-2.0).
 // What that suite cannot reach is the WIRING: which ids get a store, when the
 // callback is bound, what the bind-time populate recovers, whether the resync wipe
 // leaves the stores alone, and whether the injected neutral that reaches them is
@@ -1139,7 +1139,7 @@ namespace
     }
 }
 
-TEST_CASE("DAttack.SimulationNetSync.RelayStoreOnlyForRemoteCharacters",
+TEST_CASE("DAttack.SimulationNetSync.RemoteInputCacheOnlyForRemoteCharacters",
           "[DAttack][SimulationNetSync][InputRelay]")
 {
     // PROVIDER-PRESENCE is the local-vs-remote test, and this case is the reason:
@@ -1160,15 +1160,15 @@ TEST_CASE("DAttack.SimulationNetSync.RelayStoreOnlyForRemoteCharacters",
     MockPredictionOwner localA, localB, remote;
 
     const simulatableBrawler::PlayerInput zeroInput = simulatableBrawler::getZeroPlayerInput();
-    auto provider = [zeroInput](const SimulationTimeStep&, const BrawlerDelayLine&) { return zeroInput; };
+    auto provider = [zeroInput](const SimulationTimeStep&, const BrawlerLocalInputCache&) { return zeroInput; };
 
     netSync.registerPredictionOwner<SimulatableBrawler>(50u, localA, provider);
     netSync.registerPredictionOwner<SimulatableBrawler>(51u, localB, provider);
     netSync.registerPredictionOwner<SimulatableBrawler>(52u, remote, nullptr);
 
-    REQUIRE(netSync.findRelayedInputStore<SimulatableBrawler>(50u) == nullptr);
-    REQUIRE(netSync.findRelayedInputStore<SimulatableBrawler>(51u) == nullptr);
-    REQUIRE(netSync.findRelayedInputStore<SimulatableBrawler>(52u) != nullptr);
+    REQUIRE(netSync.findRemoteInputCache<SimulatableBrawler>(50u) == nullptr);
+    REQUIRE(netSync.findRemoteInputCache<SimulatableBrawler>(51u) == nullptr);
+    REQUIRE(netSync.findRemoteInputCache<SimulatableBrawler>(52u) != nullptr);
 
     // ...and the relay callback follows the same split: a locally-controlled
     // character's inputs are never relayed back to the client that produced them.
@@ -1178,11 +1178,11 @@ TEST_CASE("DAttack.SimulationNetSync.RelayStoreOnlyForRemoteCharacters",
 
     // An unknown id answers nullptr rather than throwing — the accessor is
     // nullable by design, because the eventual callers see ids of both classes.
-    REQUIRE(netSync.findRelayedInputStore<SimulatableBrawler>(9999u) == nullptr);
+    REQUIRE(netSync.findRemoteInputCache<SimulatableBrawler>(9999u) == nullptr);
 
     netSync.unregisterSimulatable<SimulatableBrawler>(52u, &remote);
     REQUIRE(remote.onRelayedInputReceived == nullptr);
-    REQUIRE(netSync.findRelayedInputStore<SimulatableBrawler>(52u) == nullptr);
+    REQUIRE(netSync.findRemoteInputCache<SimulatableBrawler>(52u) == nullptr);
 
     netSync.unregisterSimulatable<SimulatableBrawler>(50u, &localA);
     netSync.unregisterSimulatable<SimulatableBrawler>(51u, &localB);
@@ -1203,7 +1203,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingArrivalReachesTheStore",
     netSync.setNeutralInput<SimulatableBrawler>(simulatableBrawler::getZeroPlayerInput());
     netSync.registerPredictionOwner<SimulatableBrawler>(53u, remote, nullptr);
 
-    auto* store = netSync.findRelayedInputStore<SimulatableBrawler>(53u);
+    auto* store = netSync.findRemoteInputCache<SimulatableBrawler>(53u);
     REQUIRE(store != nullptr);
     REQUIRE_FALSE(store->findLatest().valid);
 
@@ -1231,7 +1231,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingArrivalReachesTheStore",
     netSync.unregisterSimulatable<SimulatableBrawler>(53u, &remote);
 }
 
-TEST_CASE("DAttack.SimulationNetSync.RelayStorePopulatesAtBindWithoutALatch",
+TEST_CASE("DAttack.SimulationNetSync.RemoteInputCachePopulatesAtBindWithoutALatch",
           "[DAttack][SimulationNetSync][InputRelay]")
 {
     // THE BIND-ORDER HOLE: the ring replicated (and its OnRep fired into a null
@@ -1261,7 +1261,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayStorePopulatesAtBindWithoutALatch",
     netSync.registerPredictionOwner<SimulatableBrawler>(54u, remote, nullptr);
 
     // Recovered at bind, with no further replication.
-    auto* store = netSync.findRelayedInputStore<SimulatableBrawler>(54u);
+    auto* store = netSync.findRemoteInputCache<SimulatableBrawler>(54u);
     REQUIRE(store != nullptr);
     REQUIRE(store->findLatest().valid);
     REQUIRE(store->findLatest().captureTick == 80u);
@@ -1270,7 +1270,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayStorePopulatesAtBindWithoutALatch",
     netSync.unregisterSimulatable<SimulatableBrawler>(54u, &remote);
 }
 
-TEST_CASE("DAttack.SimulationNetSync.RelayStoreFallsBackToTheGameZeroNotAValueInitialisedInput",
+TEST_CASE("DAttack.SimulationNetSync.RemoteInputCacheFallsBackToTheGameZeroNotAValueInitialisedInput",
           "[DAttack][SimulationNetSync][InputRelay]")
 {
     SimulationObjectStorage<SimulatableBrawler> storage;
@@ -1287,7 +1287,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayStoreFallsBackToTheGameZeroNotAValueIn
     netSync.setNeutralInput<SimulatableBrawler>(simulatableBrawler::getZeroPlayerInput());
     netSync.registerPredictionOwner<SimulatableBrawler>(55u, remote, nullptr);
 
-    auto* store = netSync.findRelayedInputStore<SimulatableBrawler>(55u);
+    auto* store = netSync.findRemoteInputCache<SimulatableBrawler>(55u);
     REQUIRE(store != nullptr);
     REQUIRE_FALSE(store->findLatest().valid);
 
@@ -1305,16 +1305,16 @@ TEST_CASE("DAttack.SimulationNetSync.RelayStoreFallsBackToTheGameZeroNotAValueIn
     MockPredictionOwner lateRemote;
     lateInjected.registerPredictionOwner<SimulatableBrawler>(55u, lateRemote, nullptr);
     REQUIRE_FALSE(isGameZeroInput(
-        lateInjected.findRelayedInputStore<SimulatableBrawler>(55u)->fallback()));
+        lateInjected.findRemoteInputCache<SimulatableBrawler>(55u)->fallback()));
 
     lateInjected.setNeutralInput<SimulatableBrawler>(simulatableBrawler::getZeroPlayerInput());
     REQUIRE(isGameZeroInput(
-        lateInjected.findRelayedInputStore<SimulatableBrawler>(55u)->fallback()));
+        lateInjected.findRemoteInputCache<SimulatableBrawler>(55u)->fallback()));
 
     lateInjected.unregisterSimulatable<SimulatableBrawler>(55u, &lateRemote);
 }
 
-TEST_CASE("DAttack.SimulationNetSync.RelayStoreSURVIVESAHardResyncWipe",
+TEST_CASE("DAttack.SimulationNetSync.RemoteInputCacheSURVIVESAHardResyncWipe",
           "[DAttack][SimulationNetSync][InputRelay]")
 {
     // THE ruling this whole type exists for. wipeAllForResync sweeps the LOCAL
@@ -1339,7 +1339,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayStoreSURVIVESAHardResyncWipe",
 
     netSync.setNeutralInput<SimulatableBrawler>(simulatableBrawler::getZeroPlayerInput());
     netSync.registerPredictionOwner<SimulatableBrawler>(56u, local,
-        [](const SimulationTimeStep& step, const BrawlerDelayLine&) {
+        [](const SimulationTimeStep& step, const BrawlerLocalInputCache&) {
             return taggedCapture(static_cast<float>(step.getTick()));
         });
     netSync.registerPredictionOwner<SimulatableBrawler>(57u, remote, nullptr);
@@ -1354,7 +1354,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayStoreSURVIVESAHardResyncWipe",
     relayWrite(remote.relayedInputRing, 90u, 3u, 90.f);
     remote.replicateRelayRing();
 
-    auto* store = netSync.findRelayedInputStore<SimulatableBrawler>(57u);
+    auto* store = netSync.findRemoteInputCache<SimulatableBrawler>(57u);
     REQUIRE(store != nullptr);
     REQUIRE(store->has(90u));
 
@@ -1404,7 +1404,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingVersionMismatchIsDroppedWholesale"
         static_cast<std::uint8_t>(relayedInputRing::kWireFormatVersion + 1u);
     remote.replicateRelayRing();
 
-    auto* store = netSync.findRelayedInputStore<SimulatableBrawler>(58u);
+    auto* store = netSync.findRemoteInputCache<SimulatableBrawler>(58u);
     REQUIRE(store != nullptr);
     REQUIRE_FALSE(store->has(95u));
     REQUIRE_FALSE(store->findLatest().valid);
@@ -1422,7 +1422,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingVersionMismatchIsDroppedWholesale"
 // THE DEFECT THESE PIN. `RemoteMoveQueue::dequeueMove()` returns a
 // value-initialised `Move{}` on an empty queue, so the authority used to
 // integrate — and replicate as "the input I applied" — a `PlayerInput{}`, whose
-// (0,0,0) forward vectors are the exact value ClientInputDelayLine.h documents as
+// (0,0,0) forward vectors are the exact value LocalInputCache.h documents as
 // the one that "would be carried into normalisation and break". The game's real
 // zero ((0,0,1) forwards, `getZeroPlayerInput`) was already injected on BOTH
 // roles and simply unused on this path.
@@ -1728,7 +1728,7 @@ TEST_CASE("DAttack.SimulationNetSync.AuthorityNeutralInputInjectionIsObservable"
 // This is the ordering that used to be an unwritten cross-file contract: the
 // provider must not observe the tick it is being asked to produce. Before T15
 // nothing at either site said so — it held only because collectInputAll's
-// provider call happened to precede its delayLine.push. Now the line arrives as
+// provider call happened to precede its localInputCache.push. Now the line arrives as
 // a parameter and the two statements are adjacent in one function, so this case
 // pins the property the code makes visible.
 //
@@ -1761,7 +1761,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProviderSeesHistoryStrictlyBeforeTheCurrent
     std::vector<float>  previousTickTag;
 
     netSync.registerPredictionOwner<SimulatableBrawler>(70u, predictionOwner,
-        [&](const SimulationTimeStep& step, const BrawlerDelayLine& line) {
+        [&](const SimulationTimeStep& step, const BrawlerLocalInputCache& line) {
             const auto tick = static_cast<int32>(step.getTick());
             observedTicks.push_back(step.getTick());
             sawCurrentTick.push_back(line.has(tick));
@@ -1833,16 +1833,16 @@ TEST_CASE("DAttack.SimulationNetSync.ProviderSeesHistoryStrictlyBeforeTheCurrent
 //
 //                    | LOCAL (provider present)   | REMOTE (proxy)
 //   -----------------+----------------------------+---------------------------
-//   Ref (corrected)  | delayLine.at(ref)          | store.find(ref) -> input
+//   Ref (corrected)  | localInputCache.at(ref)    | store.find(ref) -> input
 //   Sentinel         | injected game zero         | injected game zero
 //   ...store miss    | line miss -> its neutral   | store.fallback() (SELF-HEAL)
-//   NoRef (frontier) | delayLine.at(t - d)        | the scheduled read
+//   NoRef (frontier) | localInputCache.at(t - d)  | the scheduled read
 //   NoSlot           | no entry at all
 //
 // EVERY CASE BELOW DRIVES THE REAL PATH end to end: the real collectInputAll to
 // create the cache slots, the real OnRep-bound correction callback and
 // injectCorrectionState to land the refs, the real RelayedInputRingCodec +
-// populateRelayedInputStore to fill the stores, and the real
+// populateRemoteInputCache to fill the stores, and the real
 // collectResimInputAll to resolve. Nothing here mirrors production logic except
 // the ONE deliberate transcription in the equivalence case, which is labelled as
 // such because comparing against it is the entire point.
@@ -1873,7 +1873,7 @@ namespace
         rig.storage.add<SimulatableBrawler>(id, makeNetSyncTestCharacter());
         rig.reconciliation.createCacheFor<SimulatableBrawler>(id);
         rig.netSync.registerPredictionOwner<SimulatableBrawler>(id, owner,
-            [](const SimulationTimeStep& step, const BrawlerDelayLine&) {
+            [](const SimulationTimeStep& step, const BrawlerLocalInputCache&) {
                 return taggedCapture(static_cast<float>(step.getTick()));
             });
     }
@@ -1926,10 +1926,10 @@ namespace
     }
 }
 
-// --- CELL: corrected tick x LOCAL -> ownDelayLine.at(ref) -------------------
+// --- CELL: corrected tick x LOCAL -> ownLocalInputCache.at(ref) -------------
 // AC (a): the ref hit returns the input keyed by that CAPTURE IDENTITY, not by
 // the resim tick and not by the current delay offset.
-TEST_CASE("DAttack.SimulationNetSync.ResimCorrectedLocalReadsTheDelayLineAtTheRef",
+TEST_CASE("DAttack.SimulationNetSync.ResimCorrectedLocalReadsTheLocalInputCacheAtTheRef",
           "[DAttack][SimulationNetSync][ResimResolution]")
 {
     ResimRig rig;
@@ -1962,7 +1962,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimCorrectedLocalReadsTheDelayLineAtTheRe
     rig.netSync.unregisterSimulatable<SimulatableBrawler>(10u, &owner);
 }
 
-// --- CELL: corrected tick x REMOTE -> relayStore.find(ref), dA IGNORED -------
+// --- CELL: corrected tick x REMOTE -> remoteInputCache.find(ref), dA IGNORED -
 // AC (a) for the remote column, and half of AC (d): the entry's SCHEDULE STAMP
 // is deliberately absurd, so an implementation that consulted it would reject a
 // ref the authority already ruled on.
@@ -2126,7 +2126,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimRemoteRefMissFallsBackToLastKnownWitho
     // -older input is deliberately never relayed; §5.3a calls that a relay HOLE).
     landCorrection(remote, 8u, 7u);
 
-    auto* store = rig.netSync.findRelayedInputStore<SimulatableBrawler>(33u);
+    auto* store = rig.netSync.findRemoteInputCache<SimulatableBrawler>(33u);
     REQUIRE(store != nullptr);
     REQUIRE_FALSE(store->has(7u));
 
@@ -2157,7 +2157,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimRemoteRefMissFallsBackToLastKnownWitho
     rig.netSync.unregisterSimulatable<SimulatableBrawler>(33u, &remote);
 }
 
-// --- CELL: frontier x LOCAL -> delayLine.at(t - currentEffectiveDelay) ------
+// --- CELL: frontier x LOCAL -> localInputCache.at(t - currentEffectiveDelay)
 // Plus the NoSlot row, and a DEMONSTRATION of the accepted D2 offset-mixture edge
 // (documented at the resolution site, deliberately not solved).
 TEST_CASE("DAttack.SimulationNetSync.ResimFrontierLocalReDerivesFromTheCurrentDelay",
@@ -2277,7 +2277,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimRemoteStillResolvesAfterAHardResyncWip
 
     // The relay store is untouched by the wipe: its keys are the SENDER's capture
     // ticks, which our clock jumping does not invalidate.
-    auto* store = rig.netSync.findRelayedInputStore<SimulatableBrawler>(41u);
+    auto* store = rig.netSync.findRemoteInputCache<SimulatableBrawler>(41u);
     REQUIRE(store != nullptr);
     REQUIRE(store->has(5u));
 
@@ -2329,7 +2329,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimRemoteStillResolvesAfterAHardResyncWip
 // WHAT STILL GUARDS RESOLUTION CORRECTNESS — the other TEN cases of this
 // [ResimResolution] tag, all present, all unchanged, none of which ever touched
 // the retired channel:
-//   corrected rows      ResimCorrectedLocalReadsTheDelayLineAtTheRef
+//   corrected rows      ResimCorrectedLocalReadsTheLocalInputCacheAtTheRef
 //                       ResimCorrectedRemoteReadsTheStoreAtTheRefIgnoringTheStamp
 //   precedence          ResimRefBeatsTheScheduleStampOnALateRelease
 //   sentinel rows       ResimSentinelResolvesGameZeroOnBothRows
@@ -2474,7 +2474,7 @@ namespace
     // `fallback()`: `fallback()` is a component OF the ladder under test, so
     // comparing the ladder to it would be comparing the implementation to itself.
     simulatableBrawler::PlayerInput lastKnownOnly(
-        const RelayedInputStore<simulatableBrawler::PlayerInput>& store)
+        const RemoteInputCache<simulatableBrawler::PlayerInput>& store)
     {
         const auto latest = store.findLatest();
         return latest.valid ? latest.input : store.getNeutralInput();
@@ -2522,7 +2522,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProxyEmptyStoreIntegratesTheGameZeroNotAVal
     // lookup of a value-initialised slot.
     relayWrite(remote.relayedInputRing, kNoInputCaptureTick, 0u, 123.f);
     remote.replicateRelayRing();
-    auto* store = rig.netSync.findRelayedInputStore<SimulatableBrawler>(60u);
+    auto* store = rig.netSync.findRemoteInputCache<SimulatableBrawler>(60u);
     REQUIRE(store != nullptr);
     REQUIRE_FALSE(store->findLatest().valid);
 
@@ -2572,7 +2572,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProxyScheduledRegimeConsumesTheServersSched
     // implementation answers the SAME value at all six ticks, because the store
     // stopped changing before the loop began. Only a schedule-consuming read
     // advances with the tick.
-    auto* store = rig.netSync.findRelayedInputStore<SimulatableBrawler>(62u);
+    auto* store = rig.netSync.findRemoteInputCache<SimulatableBrawler>(62u);
     REQUIRE(store != nullptr);
     REQUIRE(captureTagOf(lastKnownOnly(*store)) == Catch::Approx(25.f));
     REQUIRE(resolvedTags.front() != resolvedTags.back());
@@ -2648,7 +2648,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProxyAtFloorZeroDegeneratesToLastKnownWhenT
     MockPredictionOwner remote;
     addRemoteCharacter(rig, 64u, remote);
 
-    auto* store = rig.netSync.findRelayedInputStore<SimulatableBrawler>(64u);
+    auto* store = rig.netSync.findRemoteInputCache<SimulatableBrawler>(64u);
     REQUIRE(store != nullptr);
 
     // FLOOR 0 => every entry is stamped dA = 0, and the captures that reach us lag
@@ -2732,7 +2732,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProxyAtFloorZeroLegitimatelyDiffersOnASched
         remote.replicateRelayRing();
     }
 
-    auto* store = rig.netSync.findRelayedInputStore<SimulatableBrawler>(65u);
+    auto* store = rig.netSync.findRemoteInputCache<SimulatableBrawler>(65u);
     REQUIRE(store != nullptr);
 
     const auto resolved = proxyInputFor(rig.netSync, 41u, 65u);
@@ -2793,7 +2793,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProxyPredictionAndResimResolveTheSameTickId
 // the netsync accessor that replaces the source, and the pure rule that consumes
 // it. This case drives both, composed exactly as production composes them.
 // ===========================================================================
-TEST_CASE("DAttack.SimulationNetSync.ProxyVisualizationInputComesFromTheRelayStoreLastKnown",
+TEST_CASE("DAttack.SimulationNetSync.ProxyVisualizationInputComesFromTheRemoteInputCacheLastKnown",
           "[DAttack][SimulationNetSync][ProxyScheduledRead]")
 {
     requireGameZeroIsNotAValueInitialisedInput();
@@ -2897,7 +2897,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayProbeCountsPredictionAndResimReadsSepa
     MockPredictionOwner remote;
     addRemoteCharacter(rig, 90u, remote);
 
-    const RelayReadProbe& probe = rig.netSync.getRelayReadProbe();
+    const RelayReadProbe& probe = rig.netSync.getDiagnostics().relayReadProbe();
 
     // COLD STORE — rung 0 on every tick of the join window. It is COUNTED (the
     // window is worth seeing) but it opens NO stale run: rung 0 is "no data has
@@ -2963,7 +2963,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayProbeMeasuresArrivalCadenceInCaptureTi
     MockPredictionOwner remote;
     addRemoteCharacter(rig, 91u, remote);
 
-    const RelayArrivalProbe& arrival = rig.netSync.getRelayArrivalProbe();
+    const RelayArrivalProbe& arrival = rig.netSync.getDiagnostics().relayArrivalProbe();
 
     // THE BIND-TIME POPULATE IS NOT AN ARRIVAL. registerPredictionOwner has already
     // run it (against an as-yet-unwritten ring), and it is deliberately not fed to
@@ -3023,7 +3023,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayArrivalLossCounterChargesTheBurstNotTh
     MockPredictionOwner remote;
     addRemoteCharacter(rig, 92u, remote);
 
-    const RelayArrivalProbe& arrival = rig.netSync.getRelayArrivalProbe();
+    const RelayArrivalProbe& arrival = rig.netSync.getDiagnostics().relayArrivalProbe();
 
     // Seed the watermark at capture 300 with a single-entry ring — the shape the
     // retired replace-latest write path produced on every replication.
@@ -3098,7 +3098,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayProbeClassifiesMissesAtTheShippedCallS
     MockPredictionOwner remote;
     addRemoteCharacter(rig, 92u, remote);
 
-    const RelayReadProbe& probe = rig.netSync.getRelayReadProbe();
+    const RelayReadProbe& probe = rig.netSync.getDiagnostics().relayReadProbe();
 
     // THE CLOBBER, at the shipped depth of 1. Capture 1 replicates; then captures 2
     // and 3 are both written before the next replication, so the ring carries only 3
@@ -3202,7 +3202,7 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionVerdictProbeClassifiesByProviderP
     addLocalCharacter(rig, 95u, local);      // provider PRESENT
     addRemoteCharacter(rig, 96u, remote);    // provider ABSENT
 
-    const CorrectionVerdictProbe& probe = rig.netSync.getCorrectionVerdictProbe();
+    const CorrectionVerdictProbe& probe = rig.netSync.getDiagnostics().correctionVerdictProbe();
 
     // Registration alone feeds nothing — the probe counts CORRECTIONS, and none
     // has arrived. (The bind-time relay populate is not a correction either.)
@@ -3247,7 +3247,7 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionVerdictProbeCarriesTheRealDiverge
     addLocalCharacter(rig, 97u, local);
     addRemoteCharacter(rig, 98u, remote);
 
-    const CorrectionVerdictProbe& probe = rig.netSync.getCorrectionVerdictProbe();
+    const CorrectionVerdictProbe& probe = rig.netSync.getDiagnostics().correctionVerdictProbe();
 
     predictTick(rig, 1u);
 
@@ -3290,7 +3290,7 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionVerdictProbeIgnoresDiscardedCorre
     MockPredictionOwner remote;
     addRemoteCharacter(rig, 99u, remote);
 
-    const CorrectionVerdictProbe& probe = rig.netSync.getCorrectionVerdictProbe();
+    const CorrectionVerdictProbe& probe = rig.netSync.getDiagnostics().correctionVerdictProbe();
 
     for (unsigned int tick = 1u; tick <= 3u; ++tick)
         predictTick(rig, tick);
@@ -3353,8 +3353,8 @@ TEST_CASE("DAttack.SimulationNetSync.LandingProbeSplitsByFrontierAndByClass",
     addLocalCharacter(rig, 195u, local);     // provider PRESENT
     addRemoteCharacter(rig, 196u, remote);   // provider ABSENT
 
-    const CorrectionLandingProbe& probe = rig.netSync.getCorrectionLandingProbe();
-    const CorrectionVerdictProbe& verdicts = rig.netSync.getCorrectionVerdictProbe();
+    const CorrectionLandingProbe& probe = rig.netSync.getDiagnostics().correctionLandingProbe();
+    const CorrectionVerdictProbe& verdicts = rig.netSync.getDiagnostics().correctionVerdictProbe();
 
     // Registration alone feeds nothing — this probe counts CORRECTIONS.
     REQUIRE(probe.sampleCount() == 0u);
@@ -3412,7 +3412,7 @@ TEST_CASE("DAttack.SimulationNetSync.LandingProbeReadsTheFrontierLiveNotCaptured
     MockPredictionOwner local;
     addLocalCharacter(rig, 197u, local);
 
-    const CorrectionLandingProbe& probe = rig.netSync.getCorrectionLandingProbe();
+    const CorrectionLandingProbe& probe = rig.netSync.getDiagnostics().correctionLandingProbe();
 
     for (unsigned int tick = 1u; tick <= 3u; ++tick)
         predictTick(rig, tick);
@@ -3464,11 +3464,11 @@ TEST_CASE("DAttack.SimulationNetSync.LandingProbeIsPurelyObservational",
     landCorrection(remote, 2u, 1u);
 
     // It was classified...
-    REQUIRE(rig.netSync.getCorrectionLandingProbe().countFor(
+    REQUIRE(rig.netSync.getDiagnostics().correctionLandingProbe().countFor(
                 PredictedCharacterClass::RemoteProxy,
                 CorrectionLandingSite::AtFrontier) == 1u);
     // ...the verdict still travelled...
-    REQUIRE(rig.netSync.getCorrectionVerdictProbe().disagreementsFor(
+    REQUIRE(rig.netSync.getDiagnostics().correctionVerdictProbe().disagreementsFor(
                 PredictedCharacterClass::RemoteProxy) == 1u);
     // ...and the cache still overwrote the slot, so a restore hands back the
     // AUTHORITY's attackTimer (0) and not the 25 this client predicted.

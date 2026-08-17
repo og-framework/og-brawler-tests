@@ -3,6 +3,7 @@
 
 #include "catch_amalgamated.hpp"
 #include "OGSimulation/SimulationReconciliation.h"
+#include "OGSimulation/ResimGateProbe.h"
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGSimulation/PhysicsBodyAdapter.h"
 #include "OGSimulation/SpatialQueryAdapter.h"
@@ -236,7 +237,7 @@ TEST_CASE("DAttack.SimulationReconciliation.ConsumeResimAnchorsAllClosesTheGateO
     // inflate this case's protection counts. Nothing else about the case changes —
     // the gate assertions below are untouched and still pass.
     reconciliation.prepareResimAll(60u);
-    reconciliation.postResimulationAll(SimulationTimeStep(61u, true));
+    reconciliation.postResimulationAll(SimulationTimeStep(61u, true));   // [item 55] return now a ResimSweepDiagnostics; unused here as before
 
     REQUIRE(reconciliation.checkDivergenceAll(0u) == 60u);   // still open before the edge
 
@@ -252,6 +253,120 @@ TEST_CASE("DAttack.SimulationReconciliation.ConsumeResimAnchorsAllClosesTheGateO
         reconciliation.pushPredictionTick<SimulatableBrawler>(8u, tick);
         reconciliation.postPredictionAll(SimulationTimeStep(tick, false));
         REQUIRE(reconciliation.checkDivergenceAll(0u) == 0u);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// [og-netcode-v2-input-relay item 57 / RN-6] `consumeResimAnchorsAll`'s return is
+// now fed to `ResimGateProbe::noteSurvivingAnchors` at the sole production call
+// site (`SimulationManager.h`'s `[Resim.Finish]` block, beside `noteFinish`), and
+// surfaced as a field on the `[ResimProbe.Gate]` line. This case proves the
+// counter actually MOVES rather than asserting one reading in isolation ("a
+// counter that cannot be shown to move is the initiative's signature defect" —
+// item 57): the CONSUMED case (nothing survives — the same zero the two
+// pre-existing assertions above pin, at the sweep level) and the SURVIVING case
+// (a correction lands AFTER `prepareResimAll` captured the anchor but BEFORE
+// `consumeResimAnchorsAll` runs — the mid-replay landing the header describes),
+// fed into ONE probe so the field is shown reading 0 and then differing.
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.SimulationReconciliation.SurvivingAnchorsFeedTheGateProbe",
+          "[DAttack][SimulationReconciliation]")
+{
+    ResimGateProbe probe;
+    ResimGateWindowSummary window;
+
+    // --- THE CONSUMED CASE: nothing survives. Mirrors
+    // ConsumeResimAnchorsAllClosesTheGateOncePerResim's scenario above, on its own
+    // character id so the two cases cannot interact through shared cache state. ---
+    {
+        SimulationObjectStorage<SimulatableBrawler> storage;
+        storage.add<SimulatableBrawler>(20u, makeReconciliationTestCharacter());
+
+        SimulationReconciliation<SimulatableBrawler> reconciliation(storage);
+        reconciliation.createCacheFor<SimulatableBrawler>(20u);
+
+        for (uint32 tick = 50u; tick <= 60u; ++tick)
+        {
+            reconciliation.pushPredictionTick<SimulatableBrawler>(20u, tick);
+            reconciliation.postPredictionAll(SimulationTimeStep(tick, false));
+        }
+
+        MockCorrectionBuffer buffer{ 60u };
+        reconciliation.injectCorrectionState<SimulatableBrawler>(20u, buffer);
+
+        reconciliation.pushPredictionTick<SimulatableBrawler>(20u, 61u);
+        reconciliation.postPredictionAll(SimulationTimeStep(61u, false));
+
+        REQUIRE(reconciliation.checkDivergenceAll(0u) == 60u);
+
+        reconciliation.prepareResimAll(60u);
+        reconciliation.postResimulationAll(SimulationTimeStep(61u, true));
+
+        const unsigned int survivingAnchors = reconciliation.consumeResimAnchorsAll();
+        REQUIRE(survivingAnchors == 0u);   // nothing survived — same as the case above
+
+        probe.noteSurvivingAnchors(survivingAnchors);
+        probe.fillSummary(window);
+        REQUIRE(window.survivingAnchors == 0u);
+    }
+
+    // --- THE SURVIVING CASE: a correction lands mid-replay. Under the shipped
+    // `FrontierExact` default (no `setResimTriggerPolicy` call — matches
+    // production's compiled default), the second correction must land exactly on
+    // the (now-advanced) frontier to set a NEW anchor, exactly like the first one
+    // did — `resimGate::shouldSetPendingAnchor`'s `FrontierExact` branch is just
+    // `landedAtFrontier`. ---
+    {
+        SimulationObjectStorage<SimulatableBrawler> storage;
+        storage.add<SimulatableBrawler>(21u, makeReconciliationTestCharacter());
+
+        SimulationReconciliation<SimulatableBrawler> reconciliation(storage);
+        reconciliation.createCacheFor<SimulatableBrawler>(21u);
+
+        for (uint32 tick = 50u; tick <= 60u; ++tick)
+        {
+            reconciliation.pushPredictionTick<SimulatableBrawler>(21u, tick);
+            reconciliation.postPredictionAll(SimulationTimeStep(tick, false));
+        }
+
+        MockCorrectionBuffer buffer{ 60u };
+        reconciliation.injectCorrectionState<SimulatableBrawler>(21u, buffer);
+
+        reconciliation.pushPredictionTick<SimulatableBrawler>(21u, 61u);
+        reconciliation.postPredictionAll(SimulationTimeStep(61u, false));
+
+        REQUIRE(reconciliation.checkDivergenceAll(0u) == 60u);
+
+        // Prepare captures the anchor this resim believes it is closing: 60.
+        reconciliation.prepareResimAll(60u);
+
+        // MID-REPLAY LANDING: a second correction lands exactly on the frontier
+        // (61) — landedAtFrontier is true under `FrontierExact` — while the
+        // (simulated) replay is still in flight, i.e. strictly between the
+        // prepare above and the consume below. `raisePendingResimAnchorTo`'s
+        // CAS-max moves the pending anchor from 60 to 61.
+        MockCorrectionBuffer midReplayBuffer{ 61u };
+        reconciliation.injectCorrectionState<SimulatableBrawler>(21u, midReplayBuffer);
+
+        reconciliation.postResimulationAll(SimulationTimeStep(61u, true));
+
+        // The game thread keeps predicting while the replay above was (notionally)
+        // still in flight, so the frontier moves on to 62 — otherwise the raised
+        // anchor (61) would equal the frontier (61) and `needsResimulation()` would
+        // read false (anchor == frontier is "nothing to rewind to", not "gate
+        // open"), masking the very survival this case exists to show.
+        reconciliation.pushPredictionTick<SimulatableBrawler>(21u, 62u);
+        reconciliation.postPredictionAll(SimulationTimeStep(62u, false));
+
+        // The captured expected value (60) no longer matches the live pending
+        // anchor (61): the CAS fails and the anchor SURVIVES.
+        const unsigned int survivingAnchors = reconciliation.consumeResimAnchorsAll();
+        REQUIRE(survivingAnchors == 1u);
+        REQUIRE(reconciliation.checkDivergenceAll(0u) == 61u);   // gate still open, a DIFFERENT anchor
+
+        probe.noteSurvivingAnchors(survivingAnchors);
+        probe.fillSummary(window);
+        REQUIRE(window.survivingAnchors == 1u);   // 0 (consumed case) + 1 (this case) — THE COUNTER MOVED
     }
 }
 
@@ -313,17 +428,18 @@ TEST_CASE("DAttack.SimulationReconciliation.AReplaySweepProtectsCorrectedSlotsAn
     reconciliation.prepareResimAll(60u);
 
     // The replay: 61..70 (the anchor slot is the restore SOURCE, never replayed).
+    // [item 55] Each tick's sweep now returns one ResimSweepDiagnostics rather
+    // than a return value plus two out-pointers; accumulate its three fields.
     unsigned int discards = 0u;
     unsigned int fresh    = 0u;
     unsigned int stale    = 0u;
     for (uint32 tick = 61u; tick <= 70u; ++tick)
     {
-        unsigned int tickFresh = 0u;
-        unsigned int tickStale = 0u;
-        discards += reconciliation.postResimulationAll(
-            SimulationTimeStep(tick, true), &tickFresh, &tickStale);
-        fresh += tickFresh;
-        stale += tickStale;
+        const auto tickDiagnostics =
+            reconciliation.postResimulationAll(SimulationTimeStep(tick, true));
+        discards += tickDiagnostics.discards;
+        fresh    += tickDiagnostics.freshProtections;
+        stale    += tickDiagnostics.staleProtections;
     }
 
     // ⭐ B's slot AT its own captured anchor (65) is FRESH by the tick clause — it

@@ -37,7 +37,7 @@
 //   * N-1 rings, not N: the owning client is not sent its own character's ring
 //     (T39 moves it onto ASimulationInputRelay behind COND_SkipOwner; the owning
 //     client provably never reads it — SimulationNetSync::registerPredictionOwner
-//     creates a RelayedInputStore only for provider-ABSENT ids).
+//     creates a RemoteInputCache only for provider-ABSENT ids).
 //   * ONE state, not K: the correction state is the SELF-HEALING payload — each
 //     snapshot is a complete anchor, so a skipped one costs repair latency, not
 //     repair ability. The rotation's K is therefore OPPORTUNISTIC above this
@@ -55,12 +55,15 @@
 // against the REAL `simulatableBrawler` types, so a wire change anywhere
 // upstream moves this arithmetic without anyone remembering to update a number.
 //
-// WHAT IT DOES NOT AND CANNOT CATCH: an INI override of the ring depth
-// (`[OGNetcode] RelayRedundancyDepthTicks`). A pure-C++ target has no ini. The
-// runtime arm of that guard is the `[RelayProbe.Budget]` PIE gate
-// (`outPackets == frames`, `bytesPerPacket <= capacity - margin`), which fails
-// in its first steady window — this test covers the COMPILED default, which is
-// the value a code change can move silently.
+// WHAT IT DOES NOT AND CANNOT CATCH: [og-netcode-v2-input-relay item 63 / RN-13,
+// 2026-08-16] there is no longer an ini-configurable ring depth to worry about
+// here — that knob is retired (its old identifier is on record in RN-13,
+// ReviewNotes.md), and the flush stage's capacity is the compile-time constant
+// `relayedInputRing::kMaxDepth` (see §4's fence below). The runtime arm of the
+// packet-budget guard is the `[RelayProbe.Budget]` PIE gate (`outPackets ==
+// frames`, `bytesPerPacket <= capacity - margin`), which fails in its first
+// steady window — this test covers the COMPILED sizes, which are the values a
+// wire-layout code change can move silently.
 // ---------------------------------------------------------------------------
 
 namespace
@@ -233,17 +236,15 @@ namespace
         static_cast<std::uint32_t>(og::brawler::session::maxPlayersPerServerTier2);
 
     // The steady-state residency of ONE ring: one arrival, published at the next
-    // poll. [T34] This used to read `TimeConfig{}.relayRedundancyDepthTicks`, and it
-    // deliberately does not any more: under flush-on-poll that knob is INERT (the
-    // stage's capacity is `relayedInputRing::kMaxDepth`, taken as a constant), so
-    // modelling the round from it would make this fence fire on a change that has no
-    // wire effect at all, and would quietly stop firing on the one that does.
+    // poll. [T34] This used to read the session-configurable ring-retention
+    // depth (item 63 / RN-13, 2026-08-16: that field is now retired outright —
+    // its old identifier is on record in RN-13, ReviewNotes.md), and
+    // deliberately does not any more: under flush-on-poll that knob was already
+    // INERT before its removal (the stage's capacity is
+    // `relayedInputRing::kMaxDepth`, taken as a constant), so modelling the
+    // round from it would make this fence fire on a change that has no wire
+    // effect at all, and would quietly stop firing on the one that does.
     constexpr std::uint32_t kSteadyEntriesPerRing = 1u;
-
-    // The knob's own value is still pinned, as a statement about what the shipped
-    // ini and compiled default are — see the [RelayDepth] case below.
-    constexpr std::uint32_t kCompiledRelayDepth =
-        static_cast<std::uint32_t>(TimeConfig{}.relayRedundancyDepthTicks);
 
     // The rotation width a session runs at. Pre-diet this is 1 (T38 §16.2); item 40
     // restores 2.
@@ -529,21 +530,22 @@ TEST_CASE("PacketBudget: a connection running TWO local players is bounded by th
     }
 }
 
-TEST_CASE("PacketBudget: the relay depth knob is inert under flush-on-poll",
+TEST_CASE("PacketBudget: the flush stage capacity is kMaxDepth - a compile-time constant",
           "[PacketBudget][InputFirstReplication]")
 {
-    // [T34] The knob keeps its compiled default and its ini key, and neither means
-    // anything on the live relay path any more: the stage's capacity is kMaxDepth,
-    // taken as a constant by `relayedInputRing::stageArrival`. This case exists so
-    // that the fact is pinned somewhere a build runs, rather than only in comments —
-    // and so that a future change which re-couples the two has to delete an
-    // assertion that says why it should not.
-    REQUIRE(kCompiledRelayDepth == 1u);
+    // [og-netcode-v2-input-relay item 63 / RN-13, 2026-08-16] This case used to
+    // price a session-configurable ring-retention knob's compiled value against
+    // kMaxDepth to show the knob was inert under flush-on-poll (T34). That knob
+    // is now RETIRED outright (its old identifier is on record in RN-13,
+    // ReviewNotes.md) rather than merely inert, so there is no compiled value
+    // left to price. What survives — and is machine-fenced against ever
+    // reopening T43 finding 1 — is that the stage's capacity is `kMaxDepth`,
+    // taken as a constant by `relayedInputRing::stageArrival`, and that
+    // `stageArrival` accepts no depth argument at all; see
+    // `Network/RelayRedundancyDepthTest.cpp` for the compile-time half of that
+    // fence. This case keeps the runtime, packet-budget-shaped half: one ring at
+    // the stage cap must still be a legal payload on its own.
     REQUIRE(relayedInputRing::kMaxDepth == 8u);
-    REQUIRE(static_cast<std::uint32_t>(relayedInputRing::kMaxDepth) > kCompiledRelayDepth);
-
-    // The bound the flush path is actually sized against — one ring at the stage
-    // cap must still be a legal payload on its own.
     REQUIRE(relayedInputRing::isAcceptableWireLength(
         ringWireBytes(static_cast<std::uint32_t>(relayedInputRing::kMaxDepth))));
     REQUIRE(ringWireBytes(kJoinBurstEntries) < kUsableSingleBunchBytes);
