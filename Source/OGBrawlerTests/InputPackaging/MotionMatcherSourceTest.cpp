@@ -495,7 +495,7 @@ TEST_CASE("MotionMatcherSource.Adapter.AbsentTickIsNullNotNeutral",
 //
 // THE MARGIN IS INDEPENDENT OF THE INPUT DELAY. The line is keyed by CAPTURE
 // tick, so relayDelayFloorTicks (and the tier delay) change WHICH tick
-// collectInputAll reads for the applied value, never which ticks are resident.
+// prepareSimulationStep reads for the applied value, never which ticks are resident.
 // This bound therefore holds unchanged at floor 0, at the scenario-4 floor of 8,
 // and at the hard cap.
 // ---------------------------------------------------------------------------
