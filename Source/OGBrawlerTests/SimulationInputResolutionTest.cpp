@@ -27,7 +27,7 @@
 #include "OGSimulation/PCTimeManagement/TimeConfig.h"
 
 // [T15] The input provider's second parameter — the character's own raw capture
-// history, handed in by prepareSimulationStep. Aliased so the many provider lambdas in
+// history, handed in by collectInputAll. Aliased so the many provider lambdas in
 // this file stay readable. No case below reads it; the cases that exercise the
 // matcher's use of it live in MotionMatcherSourceTest.cpp, which drives the real
 // engine-free core directly.
@@ -311,7 +311,9 @@ static SimulatableBrawler makeNetSyncTestCharacter()
 }
 
 // ---------------------------------------------------------------------------
-// Test: prepareSimulationStep advances the reconciliation cache ring-buffer slot.
+// Test: collectInputAll + reconciliation.allocateFrontierSlotsAll (item 94;
+// was prepareSimulationStep alone through item 93) advances the
+// reconciliation cache ring-buffer slot.
 // ---------------------------------------------------------------------------
 TEST_CASE("DAttack.SimulationNetSync.CacheSlotAdvances", "[DAttack][SimulationNetSync]")
 {
@@ -338,7 +340,8 @@ TEST_CASE("DAttack.SimulationNetSync.CacheSlotAdvances", "[DAttack][SimulationNe
     for (unsigned int tick = 1; tick <= 3; ++tick)
     {
         SimulationTimeStep step(tick, false, StepKind::Normal);
-        auto inputs = inputResolution.prepareSimulationStep(step);
+        auto inputs = inputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
         reconciliation.postPredictionAll(step);
     }
 
@@ -348,12 +351,12 @@ TEST_CASE("DAttack.SimulationNetSync.CacheSlotAdvances", "[DAttack][SimulationNe
 
 // ===========================================================================
 // [T9 parts 3+4] CLIENT LAYER-1 INPUT DELAY — end-to-end through the REAL
-// SimulationInputResolution::prepareSimulationStep provider branch.
+// SimulationInputResolution::collectInputAll provider branch.
 // (og-netcode-v2-arch-latency; D5.2 client half.)
 //
 // WHY HERE and not in og-simulation-tests. The container and the offset rule are
 // unit-tested there (Network/LocalInputCacheTest.cpp, MPL-2.0). What that
-// suite cannot reach is the PRODUCTION BRANCH: prepareSimulationStep is variadic over a
+// suite cannot reach is the PRODUCTION BRANCH: collectInputAll is variadic over a
 // simulatable pack and needs SimulatableOwnerTraits bound to concrete owners,
 // which only a suite linking a real simulatable can supply. These cases drive the
 // shipped code path, not a re-derivation of it.
@@ -377,7 +380,7 @@ namespace
 {
     // Tag each tick's capture so the resolved input identifies which tick it was
     // captured at. aimDirection is a public field on the radial sub-input and is
-    // carried through the composite untouched by prepareSimulationStep.
+    // carried through the composite untouched by collectInputAll.
     simulatableBrawler::PlayerInput taggedCapture(float tickTag)
     {
         simulatableBrawler::PlayerInput input = simulatableBrawler::getZeroPlayerInput();
@@ -437,7 +440,8 @@ TEST_CASE("DAttack.SimulationNetSync.ClientDelayShiftsIntegratedInput",
     for (unsigned int tick = 1u; tick <= 6u; ++tick)
     {
         SimulationTimeStep step(tick, false, StepKind::Normal);
-        auto inputs = inputResolution.prepareSimulationStep(step);
+        auto inputs = inputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
         reconciliation.postPredictionAll(step);
 
         const auto& map = std::get<
@@ -491,7 +495,8 @@ TEST_CASE("DAttack.SimulationNetSync.ZeroClientDelayIsUnchangedBehaviour",
     for (unsigned int tick = 1u; tick <= 4u; ++tick)
     {
         SimulationTimeStep step(tick, false, StepKind::Normal);
-        auto inputs = inputResolution.prepareSimulationStep(step);
+        auto inputs = inputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
         reconciliation.postPredictionAll(step);
 
         const auto& map = std::get<
@@ -512,7 +517,8 @@ TEST_CASE("DAttack.SimulationNetSync.ZeroClientDelayIsUnchangedBehaviour",
     // early-out would look like a pure optimisation that could be "simplified"
     // away with a green suite.
     SimulationTimeStep stallStep(99u, false, StepKind::Stall);
-    auto stalled = inputResolution.prepareSimulationStep(stallStep);
+    auto stalled = inputResolution.collectInputAll(stallStep);
+    reconciliation.allocateFrontierSlotsAll(stallStep); // [item 94] no-op on Stall
     const auto& stalledMap = std::get<
         std::unordered_map<unsigned int, simulatableBrawler::PlayerInput>>(stalled);
 
@@ -541,7 +547,8 @@ TEST_CASE("DAttack.SimulationNetSync.ClientDelayChangeShiftsTheOffset",
 
     auto integratedTagAt = [&](unsigned int tick) {
         SimulationTimeStep step(tick, false, StepKind::Normal);
-        auto inputs = inputResolution.prepareSimulationStep(step);
+        auto inputs = inputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
         reconciliation.postPredictionAll(step);
         const auto& map = std::get<
             std::unordered_map<unsigned int, simulatableBrawler::PlayerInput>>(inputs);
@@ -594,7 +601,8 @@ TEST_CASE("DAttack.SimulationNetSync.ResyncWipeClearsTheLocalInputCache",
     for (unsigned int tick = 1u; tick <= 6u; ++tick)
     {
         SimulationTimeStep step(tick, false, StepKind::Normal);
-        auto inputs = inputResolution.prepareSimulationStep(step);
+        auto inputs = inputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair — advances the cache's prediction tick, load-bearing for the resync check below
         reconciliation.postPredictionAll(step);
     }
 
@@ -622,7 +630,8 @@ TEST_CASE("DAttack.SimulationNetSync.ResyncWipeClearsTheLocalInputCache",
     inputResolution.wipeAllForResync(5u);
 
     SimulationTimeStep postResync(5u, false, StepKind::Normal);
-    auto inputs = inputResolution.prepareSimulationStep(postResync);
+    auto inputs = inputResolution.collectInputAll(postResync);
+    reconciliation.allocateFrontierSlotsAll(postResync); // [item 94] opens the frontier pair
     const auto& map = std::get<
         std::unordered_map<unsigned int, simulatableBrawler::PlayerInput>>(inputs);
 
@@ -637,10 +646,10 @@ TEST_CASE("DAttack.SimulationNetSync.ResyncWipeClearsTheLocalInputCache",
 
 // ===========================================================================
 // [og-netcode-v2-input-relay T2] THE APPLIED CAPTURE TICK + UNDERRUN SENTINEL —
-// end-to-end through the REAL SimulationInputResolution::prepareSimulationStep REMOTE branch.
+// end-to-end through the REAL SimulationInputResolution::collectInputAll REMOTE branch.
 //
 // WHY HERE and not in og-simulation-tests. Same reason as the client-delay block
-// above: prepareSimulationStep is variadic over a simulatable pack and needs
+// above: collectInputAll is variadic over a simulatable pack and needs
 // SimulatableOwnerTraits bound to concrete owners, which only a suite linking a
 // real simulatable can supply. The container-level half of this task — the proof
 // that a bare dequeue CANNOT classify an underrun — is unit-tested in the core
@@ -668,13 +677,17 @@ namespace
 {
     // Drive one authority tick through the real branch and hand back the input it
     // resolved, so each case asserts on the SAME tick it inspects the record for.
-    // [item 87] Re-targeted onto the resolution peer — prepareSimulationStep moved
-    // off SimulationNetSync at the promotion.
+    // [item 87] Re-targeted onto the resolution peer — collectInputAll moved
+    // off SimulationNetSync at the promotion (named prepareSimulationStep
+    // between item 90 and item 94). [item 94] No allocateFrontierSlotsAll
+    // call here — this drives the AUTHORITY (remote-queue) branch, which
+    // never opens a frontier pair (no cache exists for this id, matching
+    // production's server-overload registerSimulatable exactly).
     simulatableBrawler::PlayerInput authorityTick(
         SimulationInputResolution<SimulatableBrawler>& inputResolution, unsigned int id, unsigned int tick)
     {
         SimulationTimeStep step(tick, false, StepKind::Normal);
-        auto inputs = inputResolution.prepareSimulationStep(step);
+        auto inputs = inputResolution.collectInputAll(step);
         const auto& map = std::get<
             std::unordered_map<unsigned int, simulatableBrawler::PlayerInput>>(inputs);
         REQUIRE(map.find(id) != map.end());
@@ -696,7 +709,7 @@ TEST_CASE("DAttack.SimulationNetSync.RemoteBranchRecordsAppliedCaptureTick",
     MockPredictionOwner predictionOwner;
     MockAuthorityOwner  authorityOwner;
 
-    // Server shape: prediction owner WITHOUT an input provider (so prepareSimulationStep
+    // Server shape: prediction owner WITHOUT an input provider (so collectInputAll
     // takes the remote branch) plus an authority owner (so the queue exists).
     netSync.registerPredictionOwner<SimulatableBrawler>(20u, predictionOwner, nullptr, inputResolution);
     netSync.registerAuthorityOwner<SimulatableBrawler>(20u, authorityOwner, inputResolution);
@@ -1057,17 +1070,19 @@ TEST_CASE("DAttack.SimulationNetSync.RemoteInputCacheSURVIVESAHardResyncWipe",
 
     // Fill the local delay line with real captures...
     //
-    // [og-netcode-v2-input-relay item 84, reworded item 91 part H1] Completes
-    // the frontier pair after each prepareSimulationStep — see the identical
-    // note in InjectCorrectionStateStashesRefPerTick in
-    // SimulationNetSyncTest.cpp (item 88 moved that case to the sibling file
-    // this split produced; "above" stopped being true then).
+    // [og-netcode-v2-input-relay item 84, reworded item 91 part H1, re-pointed
+    // item 94] Completes the frontier pair after each collectInputAll +
+    // allocateFrontierSlotsAll — see the identical note in
+    // InjectCorrectionStateStashesRefPerTick in SimulationNetSyncTest.cpp
+    // (item 88 moved that case to the sibling file this split produced;
+    // "above" stopped being true then).
     constexpr int32 kDelay = 2;
     inputResolution.setClientEffectiveInputDelayTicks(kDelay);
     for (unsigned int tick = 1u; tick <= 6u; ++tick)
     {
         const SimulationTimeStep step(tick, false, StepKind::Normal);
-        inputResolution.prepareSimulationStep(step);
+        inputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
         reconciliation.postPredictionAll(step);
     }
 
@@ -1092,7 +1107,9 @@ TEST_CASE("DAttack.SimulationNetSync.RemoteInputCacheSURVIVESAHardResyncWipe",
     // ...while the LOCAL delay line WAS wiped, which is what makes the assertion
     // above a contrast rather than a coincidence: the very next collect at a tick
     // whose capture existed before the wipe now reads the injected neutral.
-    const auto inputs = inputResolution.prepareSimulationStep(SimulationTimeStep(7u, false, StepKind::Normal));
+    const SimulationTimeStep postWipeStep(7u, false, StepKind::Normal);
+    const auto inputs = inputResolution.collectInputAll(postWipeStep);
+    reconciliation.allocateFrontierSlotsAll(postWipeStep); // [item 94] opens the frontier pair
     const auto& map = std::get<
         std::unordered_map<unsigned int, simulatableBrawler::PlayerInput>>(inputs);
     REQUIRE(isGameZeroInput(map.at(56u)));
@@ -1139,7 +1156,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingVersionMismatchIsDroppedWholesale"
 
 // ===========================================================================
 // [og-netcode-v2-input-relay T17] THE AUTHORITY'S SUBSTITUTE IS THE GAME'S ZERO
-// INPUT — through the REAL prepareSimulationStep remote branch and the REAL
+// INPUT — through the REAL collectInputAll remote branch and the REAL
 // sendCorrectionAll.
 //
 // THE DEFECT THESE PIN. `RemoteMoveQueue::dequeueMove()` returns a
@@ -1157,7 +1174,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingVersionMismatchIsDroppedWholesale"
 //
 // [og-netcode-v2-input-relay T8] T17 NAMED THREE POISON SITES; ONE SURVIVES,
 // BECAUSE THE OTHER TWO WERE THE CHANNEL.
-//   1. the INTEGRATED value (prepareSimulationStep's return, fed to integrateAll) —
+//   1. the INTEGRATED value (collectInputAll's return, fed to integrateAll) —
 //      ALIVE, and still pinned below. This is the site that decides what the
 //      authority actually simulates.
 //   2. `m_lastUsedInputs` on the same tick — GONE. That map existed only to be
@@ -1454,7 +1471,7 @@ TEST_CASE("DAttack.SimulationNetSync.AuthorityNeutralInputInjectionIsObservable"
 //
 // This is the ordering that used to be an unwritten cross-file contract: the
 // provider must not observe the tick it is being asked to produce. Before T15
-// nothing at either site said so — it held only because prepareSimulationStep's
+// nothing at either site said so — it held only because collectInputAll's
 // provider call happened to precede its localInputCache.push. Now the line arrives as
 // a parameter and the two statements are adjacent in one function, so this case
 // pins the property the code makes visible.
@@ -1503,8 +1520,10 @@ TEST_CASE("DAttack.SimulationNetSync.ProviderSeesHistoryStrictlyBeforeTheCurrent
     constexpr unsigned int kLast  = 5u;
     for (unsigned int tick = kFirst; tick <= kLast; ++tick)
     {
-        inputResolution.prepareSimulationStep(SimulationTimeStep(tick, false, StepKind::Normal));
-        reconciliation.postPredictionAll(SimulationTimeStep(tick, false, StepKind::Normal));
+        const SimulationTimeStep step(tick, false, StepKind::Normal);
+        inputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
+        reconciliation.postPredictionAll(step);
     }
 
     REQUIRE(observedTicks.size() == (kLast - kFirst + 1u));
@@ -1528,7 +1547,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProviderSeesHistoryStrictlyBeforeTheCurrent
     }
 
     // The same holds under a nonzero input delay: the line is CAPTURE-tick keyed,
-    // so the delay changes which tick prepareSimulationStep reads for the applied value
+    // so the delay changes which tick collectInputAll reads for the applied value
     // and nothing about what the provider can see.
     observedTicks.clear();
     sawCurrentTick.clear();
@@ -1538,8 +1557,10 @@ TEST_CASE("DAttack.SimulationNetSync.ProviderSeesHistoryStrictlyBeforeTheCurrent
     inputResolution.setClientEffectiveInputDelayTicks(4);
     for (unsigned int tick = kLast + 1u; tick <= kLast + 4u; ++tick)
     {
-        inputResolution.prepareSimulationStep(SimulationTimeStep(tick, false, StepKind::Normal));
-        reconciliation.postPredictionAll(SimulationTimeStep(tick, false, StepKind::Normal));
+        const SimulationTimeStep step(tick, false, StepKind::Normal);
+        inputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
+        reconciliation.postPredictionAll(step);
     }
 
     REQUIRE(observedTicks.size() == 4u);
@@ -1568,8 +1589,9 @@ TEST_CASE("DAttack.SimulationNetSync.ProviderSeesHistoryStrictlyBeforeTheCurrent
 //   NoRef (frontier) | localInputCache.at(t - d)  | the scheduled read
 //   NoSlot           | no entry at all
 //
-// EVERY CASE BELOW DRIVES THE REAL PATH end to end: the real prepareSimulationStep to
-// create the cache slots, the real OnRep-bound correction callback and
+// EVERY CASE BELOW DRIVES THE REAL PATH end to end: the real collectInputAll +
+// allocateFrontierSlotsAll (item 94; was prepareSimulationStep alone through
+// item 93) to create the cache slots, the real OnRep-bound correction callback and
 // injectCorrectionState to land the refs, the real RelayedInputRingCodec +
 // populateRemoteInputCache to fill the stores, and the real
 // collectResimInputAll to resolve. Nothing here mirrors production logic except
@@ -1616,12 +1638,14 @@ namespace
         rig.netSync.registerPredictionOwner<SimulatableBrawler>(id, owner, nullptr, rig.inputResolution);
     }
 
-    // One prediction tick through the REAL prepareSimulationStep — which is what creates
-    // the cache slot a correction can later land in, and what fills the delay line.
+    // One prediction tick through the REAL collectInputAll + allocateFrontierSlotsAll
+    // (item 94) — which is what creates the cache slot a correction can later
+    // land in, and what fills the delay line.
     void predictTick(ResimRig& rig, unsigned int tick)
     {
         const SimulationTimeStep step(tick, false, StepKind::Normal);
-        rig.inputResolution.prepareSimulationStep(step);
+        rig.inputResolution.collectInputAll(step);
+        rig.reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
         rig.reconciliation.postPredictionAll(step);
     }
 
@@ -2105,8 +2129,9 @@ TEST_CASE("DAttack.SimulationNetSync.ResimSentinelMatchesWhatTheAuthorityIntegra
 
     // TWO netsyncs over one storage: the SERVER half (authority owner, remote
     // branch) and the CLIENT half (a proxy for the same character). One rig cannot
-    // play both roles — prepareSimulationStep's authority branch never pushes the
-    // prediction ticks a correction needs a slot in.
+    // play both roles — the authority role never calls allocateFrontierSlotsAll
+    // at all (item 94), so it never pushes the prediction ticks a correction
+    // needs a slot in.
     SimulationInputResolution<SimulatableBrawler> serverInputResolution(storage, reconciliation);
     SimulationNetSync<SimulatableBrawler> serverNetSync(storage, reconciliation, serverInputResolution);
     SimulationInputResolution<SimulatableBrawler> clientInputResolution(storage, reconciliation);
@@ -2121,16 +2146,18 @@ TEST_CASE("DAttack.SimulationNetSync.ResimSentinelMatchesWhatTheAuthorityIntegra
     serverNetSync.registerAuthorityOwner<SimulatableBrawler>(80u, authorityOwner, serverInputResolution);
     clientNetSync.registerPredictionOwner<SimulatableBrawler>(80u, predictionOwner, nullptr, clientInputResolution);
 
-    // [og-netcode-v2-input-relay item 84, reworded item 91 part H1] Completes
-    // the frontier pair after each prepareSimulationStep — see the identical
-    // note in InjectCorrectionStateStashesRefPerTick in
-    // SimulationNetSyncTest.cpp (item 88 moved that case to the sibling file
-    // this split produced; "above" stopped being true then).
+    // [og-netcode-v2-input-relay item 84, reworded item 91 part H1, re-pointed
+    // item 94] Completes the frontier pair after each collectInputAll +
+    // allocateFrontierSlotsAll — see the identical note in
+    // InjectCorrectionStateStashesRefPerTick in SimulationNetSyncTest.cpp
+    // (item 88 moved that case to the sibling file this split produced;
+    // "above" stopped being true then).
     constexpr unsigned int kTick = 12u;
     for (unsigned int tick = 10u; tick <= kTick; ++tick)
     {
         const SimulationTimeStep step(tick, false, StepKind::Normal);
-        clientInputResolution.prepareSimulationStep(step);
+        clientInputResolution.collectInputAll(step);
+        reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
         reconciliation.postPredictionAll(step);
     }
 
@@ -2168,7 +2195,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimSentinelMatchesWhatTheAuthorityIntegra
 
 // ===========================================================================
 // [og-netcode-v2-input-relay T7] REMOTE-PROXY PREDICTION — THE UNIFIED
-// SCHEDULED READ, through the REAL prepareSimulationStep proxy branch.
+// SCHEDULED READ, through the REAL collectInputAll proxy branch.
 //
 // WHAT MOVED. The branch used to answer `getLastCorrectionInput().value_or(
 // InputType{})`: hold the server's last reported input, and — when no correction
@@ -2179,7 +2206,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimSentinelMatchesWhatTheAuthorityIntegra
 //
 // WHY THESE CASES LIVE HERE. The ladder itself is unit-tested against a bare
 // store in og-simulation-tests, and its resim caller in the [ResimResolution]
-// block above. What neither reaches is THIS branch: prepareSimulationStep is variadic
+// block above. What neither reaches is THIS branch: collectInputAll is variadic
 // over a simulatable pack and needs SimulatableOwnerTraits bound to concrete
 // owners, so only a suite linking a real simulatable can drive the shipped path.
 //
@@ -2195,24 +2222,26 @@ TEST_CASE("DAttack.SimulationNetSync.ResimSentinelMatchesWhatTheAuthorityIntegra
 namespace
 {
     // The resolved PREDICTION input for one character at `tick`, through the REAL
-    // prepareSimulationStep. There is no NoSlot row here (unlike resimInputFor above):
+    // collectInputAll. There is no NoSlot row here (unlike resimInputFor above):
     // the proxy branch emplaces for every id it sees, so a missing key is a
     // failure rather than a meaningful answer.
     //
-    // [og-netcode-v2-input-relay item 84] TAKES THE RIG, NOT A BARE `netSync&`,
-    // and completes the frontier pair via `reconciliation.postPredictionAll`
-    // after `prepareSimulationStep` — mirroring `predictTick` above (and what
-    // production always does within one manager tick: collect, then capture).
-    // Before item 84 this helper opened the pair and never closed it, which
-    // was harmless only because nothing checked; back-to-back calls for the
-    // SAME id (several cases below call this in a tick loop) now trip the
-    // frontier-pair detector on the second call unless this helper closes
-    // what it opens.
+    // [og-netcode-v2-input-relay item 84, re-pointed item 94] TAKES THE RIG,
+    // NOT A BARE `netSync&`, and completes the frontier pair via
+    // `reconciliation.allocateFrontierSlotsAll` then
+    // `reconciliation.postPredictionAll` after `collectInputAll` — mirroring
+    // `predictTick` above (and what production always does within one manager
+    // tick: collect, allocate, then capture). Before item 84 this helper
+    // opened the pair and never closed it, which was harmless only because
+    // nothing checked; back-to-back calls for the SAME id (several cases
+    // below call this in a tick loop) now trip the frontier-pair detector on
+    // the second call unless this helper closes what it opens.
     simulatableBrawler::PlayerInput proxyInputFor(
         ResimRig& rig, unsigned int tick, unsigned int id)
     {
         const SimulationTimeStep step(tick, false, StepKind::Normal);
-        const auto inputs = rig.inputResolution.prepareSimulationStep(step);
+        const auto inputs = rig.inputResolution.collectInputAll(step);
+        rig.reconciliation.allocateFrontierSlotsAll(step); // [item 94] opens the frontier pair
         rig.reconciliation.postPredictionAll(step);
         const auto& map = std::get<
             std::unordered_map<unsigned int, simulatableBrawler::PlayerInput>>(inputs);
@@ -2250,7 +2279,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProxyEmptyStoreIntegratesTheGameZeroNotAVal
     MockPredictionOwner remote;
     addRemoteCharacter(rig, 60u, remote);
 
-    // A character present in STORAGE but never REGISTERED. prepareSimulationStep
+    // A character present in STORAGE but never REGISTERED. collectInputAll
     // iterates storage, so the proxy branch really does see ids like this one
     // (T5's accessor is nullable for exactly this reason), and it must answer the
     // same injected neutral rather than throwing or inventing InputType{}.
@@ -2643,7 +2672,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProxyVisualizationInputComesFromTheRemoteIn
 // evidence.
 //
 // Both call sites need SimulatableOwnerTraits bound to concrete owners
-// (prepareSimulationStep / collectResimInputAll are variadic over a simulatable pack),
+// (collectInputAll / collectResimInputAll are variadic over a simulatable pack),
 // and the arrival path needs the real ingest behind a real callback — i.e. this
 // suite, exactly as the [ProxyScheduledRead] and [ResimResolution] blocks above.
 // ===========================================================================
