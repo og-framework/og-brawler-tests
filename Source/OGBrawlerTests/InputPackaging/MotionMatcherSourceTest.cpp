@@ -11,7 +11,7 @@
 #include "OGBrawler/BrawlerMotionMatching.h"
 #include "OGBrawler/InputSequence/GameMotions.h"
 #include "OGBrawler/InputSequence/InputSequence.h"
-#include "OGSimulation/Network/ClientInputDelayLine.h"
+#include "OGSimulation/Network/LocalInputCache.h"
 
 // ---------------------------------------------------------------------------
 // og-netcode-v2-input-relay T15 — WHERE THE MOTION MATCHER GETS ITS HISTORY.
@@ -21,7 +21,7 @@
 // DelayLineMotionHistory in OGBrawler/BrawlerMotionMatching.h — against the two
 // competing history sources:
 //
-//   THE NEW SOURCE  ClientInputDelayLine: raw captures, keyed by CAPTURE tick.
+//   THE NEW SOURCE  LocalInputCache: raw captures, keyed by CAPTURE tick.
 //   THE OLD SOURCE  the correction cache's input column: the APPLIED input,
 //                   keyed by APPLICATION tick, so under an input delay `d`
 //                   slot `t` holds capture(t - d).
@@ -354,7 +354,7 @@ TEST_CASE("MotionMatcherSource.RisingEdge.HeldButtonEdgesExactlyOnce",
 // WHAT IT WAS. A MIGRATION PROOF, of the same shape T8 retired in
 // SimulationNetSyncTest.cpp. It wrote 46 scripted ticks into a REAL
 // StateCorrectionCache (pushPredictionTick + pushPredictionInput) and the same
-// captures into a REAL ClientInputDelayLine, then swept ticks 131..145 asserting
+// captures into a REAL LocalInputCache, then swept ticks 131..145 asserting
 // the shipped adapter and the verbatim pre-T15 cache accessor produced the
 // IDENTICAL match result at every tick, with an anti-vacuity pin
 // (matches == 1, noMatches > 0) so "identical" could not be satisfied by two
@@ -412,7 +412,7 @@ TEST_CASE("MotionMatcherSource.TickZero.DelayLineHasNoPhantomSlot",
 	constexpr uint32 kFirstTick = 100u;
 	constexpr uint32 kLastTick  = 110u;
 
-	ClientInputDelayLine<simulatableBrawler::PlayerInput> line(
+	LocalInputCache<simulatableBrawler::PlayerInput> line(
 		simulatableBrawler::getZeroPlayerInput());
 
 	for (uint32 tick = kFirstTick; tick <= kLastTick; ++tick)
@@ -439,7 +439,7 @@ TEST_CASE("MotionMatcherSource.TickZero.DelayLineHasNoPhantomSlot",
 // ---------------------------------------------------------------------------
 // AM-4 — THE ADAPTER IS has()-GATED, and that is observable.
 //
-// ClientInputDelayLine::at() answers an absent tick with the NEUTRAL input and
+// LocalInputCache::at() answers an absent tick with the NEUTRAL input and
 // never returns null. matchSequence's contract is nullptr-for-out-of-window. The
 // two are near-equivalent in outcome (the neutral's (0,0,1) aim makes
 // aimRelativeAngle return nullopt, so the matcher skips the entry either way),
@@ -455,7 +455,7 @@ TEST_CASE("MotionMatcherSource.Adapter.AbsentTickIsNullNotNeutral",
 {
 	using namespace motionsourcetests;
 
-	ClientInputDelayLine<simulatableBrawler::PlayerInput> line(
+	LocalInputCache<simulatableBrawler::PlayerInput> line(
 		simulatableBrawler::getZeroPlayerInput());
 
 	const auto packed = composite(stickForAngle(inputSequence::angle::Back), true, false);
@@ -495,7 +495,7 @@ TEST_CASE("MotionMatcherSource.Adapter.AbsentTickIsNullNotNeutral",
 //
 // THE MARGIN IS INDEPENDENT OF THE INPUT DELAY. The line is keyed by CAPTURE
 // tick, so relayDelayFloorTicks (and the tier delay) change WHICH tick
-// collectInputAll reads for the applied value, never which ticks are resident.
+// prepareSimulationStep reads for the applied value, never which ticks are resident.
 // This bound therefore holds unchanged at floor 0, at the scenario-4 floor of 8,
 // and at the hard cap.
 // ---------------------------------------------------------------------------
@@ -505,15 +505,15 @@ TEST_CASE("MotionMatcherSource.CapacityPin.DelayLineOutlivesTheMatcherWindow",
 	REQUIRE(simulatableBrawler::kMotionMatcherDeepestReachTicks
 	        == static_cast<std::size_t>(inputSequence::kHistoryWindowFrames));
 
-	REQUIRE(kClientInputDelayLineCapacityTicks
+	REQUIRE(kLocalInputCacheCapacityTicks
 	        >= simulatableBrawler::kMotionMatcherDeepestReachTicks
 	           + simulatableBrawler::kMotionMatcherResidencyMarginTicks);
 
 	// A default-constructed line really does retain that many distinct ticks —
 	// the constant and the container agree.
-	ClientInputDelayLine<simulatableBrawler::PlayerInput> line(
+	LocalInputCache<simulatableBrawler::PlayerInput> line(
 		simulatableBrawler::getZeroPlayerInput());
-	REQUIRE(line.capacity() == kClientInputDelayLineCapacityTicks);
+	REQUIRE(line.capacity() == kLocalInputCacheCapacityTicks);
 
 	constexpr int kNewestTick = 500;
 	const int reach = static_cast<int>(simulatableBrawler::kMotionMatcherDeepestReachTicks);
