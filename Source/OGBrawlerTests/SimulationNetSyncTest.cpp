@@ -1273,7 +1273,7 @@ TEST_CASE("DAttack.SimulationNetSync.LandingProbeIsPurelyObservational",
 {
     // BEHAVIOUR-NEUTRALITY, ASSERTED RATHER THAN CLAIMED. Item 42 changes no
     // behaviour, and the one thing on this path that COULD have changed it is the
-    // hoisted provider-presence lookup and the extra `findInputCache` read now
+    // hoisted provider-presence lookup and the extra `findCorrectionCache` read now
     // sitting between `injectCorrectionState` and the verdict probe. So: land a
     // correction that DISAGREES and check the cache still adopted authority state,
     // exactly as the T24 case one block up does — the simulation must act on the
