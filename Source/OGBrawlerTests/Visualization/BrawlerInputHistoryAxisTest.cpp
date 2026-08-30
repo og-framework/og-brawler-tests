@@ -13,8 +13,10 @@
 //
 // The second half of the file drives the REAL poll through a mock reader and pins the
 // other side of the same story: WHO decides a break has happened. The poll owns that,
-// from one reading it already holds -- the gate's own last polled tick -- and no second
-// seam is asked for it. A FORWARD resync is not visible from here at all.
+// from two readings it already holds -- the gate's own last polled tick, which sees a
+// backward jump and nothing else, and the clock's own resync count, which sees either
+// direction and names the exact tick the clock left. The residency edges are asked for
+// neither: they cannot tell a wipe from a push that landed mid-sweep.
 
 #include "catch_amalgamated.hpp"
 
@@ -35,6 +37,7 @@ namespace inputhistoryaxistests
 
 using brawlerInputHistoryVisualization::AppliedCaptureInversion;
 using brawlerInputHistoryVisualization::CaptureRowFields;
+using brawlerInputHistoryVisualization::ClockDriftReading;
 using brawlerInputHistoryVisualization::DirectionBucket;
 using brawlerInputHistoryVisualization::InputHistoryTickLanes;
 using brawlerInputHistoryVisualization::LaneAdmission;
@@ -124,6 +127,34 @@ static TickLanePollCounts pollIdle(const MockSlotReader&  reader,
 	return brawlerInputHistoryVisualization::pollInputHistoryLanes(
 		reader, liveSimTick, DAttackState::Idle, idle, true, std::nullopt, std::nullopt,
 		std::nullopt, inversion, lanes);
+}
+
+// The same entry point again, with a CLOCK READING. A forward resync leaves nothing
+// else behind: the poll's tick jumps AHEAD, so every arm watching for a tick going
+// backwards stays silent, and the residency edges cannot be asked.
+static TickLanePollCounts pollWithClock(const MockSlotReader&  reader,
+                                        uint32_t               liveSimTick,
+                                        ClockDriftReading      clock,
+                                        InputHistoryTickLanes& lanes)
+{
+	AppliedCaptureInversion inversion;
+	return brawlerInputHistoryVisualization::pollInputHistoryLanes(
+		reader, liveSimTick, DAttackState::Idle, std::nullopt, false, std::nullopt,
+		std::nullopt, std::optional<ClockDriftReading>(clock), inversion, lanes);
+}
+
+// One reading of the clock's event seam. The drift half is left alone -- the clock
+// suite pins that, and no case here reads it.
+// ⛔ THE COUNT IS A TOTAL: a case MOVES it between two polls, never sets a delta.
+static ClockDriftReading seamReading(uint32_t simTick, uint32_t hardResyncCount,
+                                     uint32_t fromTick, uint32_t toTick)
+{
+	ClockDriftReading reading;
+	reading.predictionTick         = simTick;
+	reading.hardResyncCount        = hardResyncCount;
+	reading.lastHardResyncFromTick = fromTick;
+	reading.lastHardResyncToTick   = toTick;
+	return reading;
 }
 
 // ---------------------------------------------------------------------------
@@ -612,16 +643,18 @@ TEST_CASE("Axis.ARingAheadByASkipWithThePollAdvancingOneFilesNoBreak",
 {
 	constexpr uint32_t kFirstPollTick = 6219u;
 
-	// The steady state the case above ends in: the ring already runs one ahead of the
-	// tick the game thread read, and stays there while a Skip pushes the cache twice.
+	// Ring and poll in LOCKSTEP first, which is where every session starts and where the
+	// two cases either side of this one begin. A Skip then pushes the cache twice while
+	// the ring is already one ahead, so the old edge moves by two and the clamped
+	// frontier by one -- different amounts, with nothing wrong at all.
 	MockSlotReader reader;
-	reader.markResidentRange(kFirstPollTick - kWindowTicks + 2u, kFirstPollTick + 1u);
+	reader.markResidentRange(kFirstPollTick - kWindowTicks + 1u, kFirstPollTick);
 
 	InputHistoryTickLanes lanes;
 	poll(reader, kFirstPollTick, DAttackState::Idle, lanes);
 
 	REQUIRE(lanes.residencyReading().has_value());
-	CHECK(lanes.residencyReading()->residency.oldestResident == kFirstPollTick - kWindowTicks + 2u);
+	CHECK(lanes.residencyReading()->residency.oldestResident == kFirstPollTick - kWindowTicks + 1u);
 	CHECK(lanes.residencyReading()->residency.newestResident == kFirstPollTick);
 
 	reader.clearResidents();
@@ -631,8 +664,10 @@ TEST_CASE("Axis.ARingAheadByASkipWithThePollAdvancingOneFilesNoBreak",
 		poll(reader, kFirstPollTick + 1u, DAttackState::Idle, lanes);
 
 	CHECK(skipped.axisBreaksBackward == 0u);
+	CHECK(skipped.axisBreaksFromSeam == 0u);
 	CHECK(lanes.gate().axisEventCount() == 0u);
 
+	// The old edge moved by TWO and the clamped frontier by one.
 	CHECK(lanes.residencyReading()->residency.oldestResident == kFirstPollTick - kWindowTicks + 3u);
 	CHECK(lanes.residencyReading()->residency.newestResident == kFirstPollTick + 1u);
 }
@@ -697,6 +732,262 @@ TEST_CASE("Axis.TheSweepClampsTheNewestResidentAtTheTickBeingPolled",
 
 	CHECK(counts.axisBreaksBackward == 0u);
 	CHECK(lanes.gate().axisEventCount() == 0u);
+}
+
+// ---------------------------------------------------------------------------
+// THE CLOCK'S OWN SEAM -- the only race-free witness, and the only forward one.
+//
+// A counter that changed since the last reading is not derived from anything: it is
+// the clock saying it corrected itself, whichever way the tick moved. It also names
+// the exact tick the clock left, which nothing on this side of the seam can.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Axis.AForwardResyncSeenOnlyThroughTheSeamFilesTheExactFromAndToPair",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// A FORWARD hard resync: the clock is assigned ahead, so the poll tick jumps ahead
+	// too and the backward arm has nothing to see. The wiped ring shows only as a
+	// one-tick residency span -- a state, honestly drawn, and not what files the break.
+	constexpr uint32_t kFromTick = 6197u;
+	constexpr uint32_t kJump     = 31u;
+	constexpr uint32_t kToTick   = kFromTick + kJump;
+
+	MockSlotReader reader;
+	reader.markResidentRange(kFromTick - kWindowTicks + 1u, kFromTick);
+
+	InputHistoryTickLanes lanes;
+
+	const TickLanePollCounts healthy =
+		pollWithClock(reader, kFromTick, seamReading(kFromTick, 0u, 0u, 0u), lanes);
+	REQUIRE(healthy.axisBreaksFromSeam == 0u);
+	REQUIRE(lanes.gate().axisEventCount() == 0u);
+
+	reader.clearResidents();
+	reader.markResident(kToTick);
+
+	const TickLanePollCounts broken = pollWithClock(
+		reader, kToTick, seamReading(kToTick, 1u, kFromTick, kToTick), lanes);
+
+	CHECK(broken.axisBreaksFromSeam == 1u);
+	CHECK(broken.axisBreaksBackward == 0u);
+	// The backward arm being silent on a FORWARD jump is what it is for, not a dispute.
+	CHECK(broken.axisBreakDisagreements == 0u);
+
+	REQUIRE(lanes.gate().axisEventCount() == 1u);
+	CHECK(lanes.gate().axisEventAt(0u).kind == LaneAxisEventKind::Resync);
+	CHECK(lanes.gate().axisEventAt(0u).fromSimTick == kFromTick);
+	CHECK(lanes.gate().axisEventAt(0u).simTick == kToTick);
+
+	REQUIRE(lanes.residencyReading().has_value());
+	CHECK(lanes.residencyReading()->residency.oldestResident == kToTick);
+	CHECK(lanes.residencyReading()->residency.newestResident == kToTick);
+
+	// The ticks the client never ran have no cell, and the epoch before them still does.
+	CHECK_FALSE(lanes.gate().laneTickOf(kFromTick + 1u).has_value());
+	CHECK_FALSE(lanes.gate().laneTickOf(kToTick - 1u).has_value());
+	CHECK(lanes.gate().laneTickOf(kFromTick).has_value());
+}
+
+TEST_CASE("Axis.TheStormThroughBothArmsFilesOneBreakPerResyncAndNeverDisagrees",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// The user's own session: 128 x `oldTick=6219 -> newTick=6197`. BOTH arms see each
+	// one -- the poll tick goes backwards and the clock's count moves -- and the two must
+	// produce ONE break between them, never two and never none.
+	constexpr uint32_t kOldTick = 6219u;
+	constexpr uint32_t kNewTick = 6197u;
+	constexpr uint32_t kEpochs  = 128u;
+	constexpr int64_t  kLabel   =
+		static_cast<int64_t>(kNewTick) - static_cast<int64_t>(kOldTick);
+
+	MockSlotReader reader;
+	reader.markResidentRange(kNewTick - kWindowTicks + 1u, kOldTick);
+
+	InputHistoryTickLanes lanes;
+
+	uint32_t resyncCount   = 0u;
+	uint32_t fromTheSeam   = 0u;
+	uint32_t fromTheArm    = 0u;
+	uint32_t disagreements = 0u;
+
+	pollWithClock(reader, kOldTick, seamReading(kOldTick, resyncCount, 0u, 0u), lanes);
+
+	for (uint32_t epoch = 0u; epoch < kEpochs; ++epoch)
+	{
+		++resyncCount;
+		const TickLanePollCounts broken = pollWithClock(
+			reader, kNewTick, seamReading(kNewTick, resyncCount, kOldTick, kNewTick), lanes);
+
+		fromTheSeam   += broken.axisBreaksFromSeam;
+		fromTheArm    += broken.axisBreaksBackward;
+		disagreements += broken.axisBreakDisagreements;
+
+		// The epoch it interrupts: the client climbs back to the tick it fell from, and
+		// the count does not move again until the next resync fires.
+		for (uint32_t tick = kNewTick + 1u; tick <= kOldTick; ++tick)
+		{
+			const TickLanePollCounts refill = pollWithClock(
+				reader, tick, seamReading(tick, resyncCount, kOldTick, kNewTick), lanes);
+
+			fromTheSeam   += refill.axisBreaksFromSeam;
+			fromTheArm    += refill.axisBreaksBackward;
+			disagreements += refill.axisBreakDisagreements;
+		}
+	}
+
+	CHECK(fromTheSeam == kEpochs);
+	CHECK(fromTheArm == kEpochs);
+	CHECK(disagreements == 0u);
+
+	// ONE break FILED per resync. The storm outruns the ledger, which drops its oldest:
+	// that costs reach backwards and never fabricates a column.
+	REQUIRE(kEpochs > kLaneElisionLedgerCapacity);
+	REQUIRE(lanes.gate().axisEventCount() == kLaneElisionLedgerCapacity);
+
+	std::size_t labelled = 0u;
+	for (std::size_t index = 0u; index < lanes.gate().axisEventCount(); ++index)
+	{
+		const LaneAxisEvent& event = lanes.gate().axisEventAt(index);
+		if (event.kind == LaneAxisEventKind::Resync
+		    && static_cast<int64_t>(event.simTick)
+		           - static_cast<int64_t>(event.fromSimTick) == kLabel)
+		{
+			++labelled;
+		}
+	}
+
+	CHECK(labelled == kLaneElisionLedgerCapacity);
+	CHECK(kLabel == -22);
+}
+
+TEST_CASE("Axis.TheSeamNamesTheExactOldTickWhereTheBackwardArmCouldOnlyBoundIt",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// A poll is a RENDER frame and the clock runs at sim rate, so the clock can leave a
+	// tick this display never polled. The backward arm can name only the last tick it
+	// DID see, which is a bound on the old tick; the seam names the old tick itself.
+	constexpr uint32_t kLastPolled = 6200u;
+	constexpr uint32_t kOldTick    = 6219u;
+	constexpr uint32_t kNewTick    = 6197u;
+
+	MockSlotReader reader;
+	reader.markResidentRange(kNewTick - kWindowTicks + 1u, kOldTick);
+
+	InputHistoryTickLanes lanes;
+	pollWithClock(reader, kLastPolled, seamReading(kLastPolled, 0u, 0u, 0u), lanes);
+
+	REQUIRE(lanes.gate().lastPolledSimTick().has_value());
+	REQUIRE(*lanes.gate().lastPolledSimTick() == kLastPolled);
+
+	// Nineteen sim ticks pass between two drawn frames, and then the resync fires.
+	const TickLanePollCounts broken = pollWithClock(
+		reader, kNewTick, seamReading(kNewTick, 1u, kOldTick, kNewTick), lanes);
+
+	CHECK(broken.axisBreaksFromSeam == 1u);
+	CHECK(broken.axisBreaksBackward == 1u);
+	CHECK(broken.axisBreakDisagreements == 0u);
+
+	REQUIRE(lanes.gate().axisEventCount() == 1u);
+	const LaneAxisEvent& event = lanes.gate().axisEventAt(0u);
+
+	CHECK(event.fromSimTick == kOldTick);
+	CHECK(event.fromSimTick != kLastPolled);
+
+	const int64_t label =
+		static_cast<int64_t>(event.simTick) - static_cast<int64_t>(event.fromSimTick);
+	const int64_t bound =
+		static_cast<int64_t>(event.simTick) - static_cast<int64_t>(kLastPolled);
+
+	// ⭐ THE LOG'S OWN NUMBER, AND THE ONE THE OLD BOUND WOULD HAVE DRAWN INSTEAD.
+	CHECK(label == -22);
+	CHECK(bound == -3);
+	CHECK(label != bound);
+}
+
+TEST_CASE("Axis.EitherArmFiringAloneIsCountedAsADisagreementAndStillFilesOneBreak",
+          "[CharacterViz][InputHistoryViz]")
+{
+	constexpr uint32_t kOldTick   = 6219u;
+	constexpr uint32_t kNewTick   = 6197u;
+	constexpr uint32_t kBoundTick = 6210u;
+
+	MockSlotReader reader;
+	reader.markResidentRange(kNewTick - kWindowTicks + 1u, kOldTick);
+
+	// The seam says a BACKWARD resync fired and the poll's tick did not move. One of the
+	// two is wrong about time, and the display reports that rather than choosing.
+	{
+		InputHistoryTickLanes lanes;
+		pollWithClock(reader, kOldTick, seamReading(kOldTick, 0u, 0u, 0u), lanes);
+
+		const TickLanePollCounts broken = pollWithClock(
+			reader, kOldTick, seamReading(kOldTick, 1u, kOldTick, kNewTick), lanes);
+
+		CHECK(broken.axisBreaksFromSeam == 1u);
+		CHECK(broken.axisBreaksBackward == 0u);
+		CHECK(broken.axisBreakDisagreements == 1u);
+
+		// ONE break, never none: a reported disagreement is not a refusal to draw.
+		REQUIRE(lanes.gate().axisEventCount() == 1u);
+		CHECK(lanes.gate().axisEventAt(0u).fromSimTick == kOldTick);
+	}
+
+	// The other way round: the poll's tick went backwards and the count did not move.
+	{
+		InputHistoryTickLanes lanes;
+		pollWithClock(reader, kBoundTick, seamReading(kBoundTick, 4u, kOldTick, kNewTick),
+			lanes);
+
+		const TickLanePollCounts broken = pollWithClock(
+			reader, kNewTick, seamReading(kNewTick, 4u, kOldTick, kNewTick), lanes);
+
+		CHECK(broken.axisBreaksFromSeam == 0u);
+		CHECK(broken.axisBreaksBackward == 1u);
+		CHECK(broken.axisBreakDisagreements == 1u);
+
+		// ONE break, never two -- and its label is the bound, because the seam's own pair
+		// belongs to a resync this poll did not witness.
+		REQUIRE(lanes.gate().axisEventCount() == 1u);
+		CHECK(lanes.gate().axisEventAt(0u).fromSimTick == kBoundTick);
+		CHECK(lanes.gate().axisEventAt(0u).fromSimTick != kOldTick);
+	}
+}
+
+TEST_CASE("Axis.AFirstReadingAndAnAbsentOneFileNoSeamBreakAndNoDisagreement",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// A counter is a TOTAL. The first reading a display takes has nothing to difference
+	// against, so a clock that resynced a hundred times before the display opened files
+	// nothing -- and a role that hands in no clock at all cannot be cross-checked.
+	constexpr uint32_t kTick = 6100u;
+
+	MockSlotReader reader;
+	reader.markResidentRange(kTick - kWindowTicks + 1u, kTick);
+
+	InputHistoryTickLanes lanes;
+
+	const TickLanePollCounts first = pollWithClock(
+		reader, kTick, seamReading(kTick, 100u, kTick - 22u, kTick), lanes);
+
+	CHECK(first.axisBreaksFromSeam == 0u);
+	CHECK(first.axisBreakDisagreements == 0u);
+	CHECK(first.rateMarksFiled == 0u);
+	CHECK(lanes.gate().axisEventCount() == 0u);
+
+	const TickLanePollCounts silent = poll(reader, kTick + 1u, DAttackState::Idle, lanes);
+	CHECK(silent.axisBreaksFromSeam == 0u);
+	CHECK(silent.axisBreakDisagreements == 0u);
+	CHECK(silent.rateMarksFiled == 0u);
+
+	// And a reading arriving after that gap is a first reading again: the display was
+	// told nothing about the polls in between and may not claim them.
+	const TickLanePollCounts resumed = pollWithClock(
+		reader, kTick + 2u, seamReading(kTick + 2u, 101u, kTick - 22u, kTick), lanes);
+
+	CHECK(resumed.axisBreaksFromSeam == 0u);
+	CHECK(resumed.axisBreakDisagreements == 0u);
+	CHECK(lanes.gate().axisEventCount() == 0u);
+	CHECK(lanes.rateMarkCount() == 0u);
 }
 
 } // namespace inputhistoryaxistests

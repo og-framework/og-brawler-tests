@@ -46,6 +46,8 @@ using brawlerInputHistoryVisualization::FrameMeterGeometry;
 using brawlerInputHistoryVisualization::FrameMeterHorizon;
 using brawlerInputHistoryVisualization::FrameMeterHorizonKind;
 using brawlerInputHistoryVisualization::FrameMeterLayout;
+using brawlerInputHistoryVisualization::FrameMeterRateMark;
+using brawlerInputHistoryVisualization::FrameMeterRateMarkList;
 using brawlerInputHistoryVisualization::FrameMeterSimTickPlacement;
 using brawlerInputHistoryVisualization::InputDelayCell;
 using brawlerInputHistoryVisualization::InputDelayDecomposition;
@@ -62,6 +64,8 @@ using brawlerInputHistoryVisualization::LaneRun;
 using brawlerInputHistoryVisualization::LaneRunList;
 using brawlerInputHistoryVisualization::MachineStateCell;
 using brawlerInputHistoryVisualization::PollWindow;
+using brawlerInputHistoryVisualization::RateMark;
+using brawlerInputHistoryVisualization::RateMarkKind;
 using brawlerInputHistoryVisualization::ProvenanceResidencyReadout;
 using brawlerInputHistoryVisualization::ResidencyReading;
 using brawlerInputHistoryVisualization::RowProvenanceSummary;
@@ -71,6 +75,7 @@ using brawlerInputHistoryVisualization::authorityMarkerX;
 using brawlerInputHistoryVisualization::buildInputDelayReadout;
 using brawlerInputHistoryVisualization::buildProvenanceResidencyReadout;
 using brawlerInputHistoryVisualization::collectFrameMeterAxisEvents;
+using brawlerInputHistoryVisualization::collectFrameMeterRateMarks;
 using brawlerInputHistoryVisualization::collectLaneRuns;
 using brawlerInputHistoryVisualization::delayVerdictStyleOf;
 using brawlerInputHistoryVisualization::delayVerdictStyleOfOrdinal;
@@ -95,6 +100,7 @@ using brawlerInputHistoryVisualization::provenanceCellStyleOf;
 using brawlerInputHistoryVisualization::provenanceCellStyleOfOrdinal;
 using brawlerInputHistoryVisualization::readDelayBar;
 using brawlerInputHistoryVisualization::readMachineStateBar;
+using brawlerInputHistoryVisualization::rateMarkX;
 using brawlerInputHistoryVisualization::readProvenanceBar;
 using brawlerInputHistoryVisualization::retainedLaneWindow;
 using brawlerInputHistoryVisualization::runLabelCenterX;
@@ -1786,6 +1792,196 @@ TEST_CASE("FrameMeter.AResyncEndingAPausedSpanDrawsTwoAdjacentCellsOfDifferentKi
 	CHECK(lanes.provenanceAt(resync.laneTick) == nullptr);
 	CHECK(lanes.machineCellAt(elision.laneTick) == MachineStateCell::NotSampled);
 	CHECK(lanes.machineCellAt(resync.laneTick) == MachineStateCell::NotSampled);
+}
+
+// ---------------------------------------------------------------------------
+// THE RATE MARKS -- THE TWO EDGES OF ONE COLUMN
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FrameMeter.ASkipTakesTheLeftEdgeOfItsBackfilledTickAndAStallTheRightEdgeOfItsOwn",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// The two kinds are placed against ONE column here on purpose: a skip whose backfilled
+	// tick is T hangs on the left edge of T's column and a stall at T on the right edge of
+	// the same one, so what separates them on screen is a single stride and nothing else.
+	InputHistoryTickLanes lanes;
+	for (uint32_t tick = 0u; tick <= 60u; ++tick)
+		stepLane(tick, false, std::nullopt, lanes);
+
+	REQUIRE(lanes.gate().axisEventCount() == 0u);
+
+	const uint32_t stallTick = 40u;
+	const uint32_t skipTick  = 41u;
+
+	lanes.noteRateMark(RateMark{ RateMarkKind::Stall, stallTick, 4u });
+	lanes.noteRateMark(RateMark{ RateMarkKind::Skip, skipTick, 2u });
+
+	const PollWindow window = retainedLaneWindow(lanes, 120u);
+
+	FrameMeterRateMarkList marks;
+	collectFrameMeterRateMarks(lanes, window, marks);
+	REQUIRE(marks.count == 2u);
+
+	// The column each lands on, read off the GATE rather than off the sim tick: the stall's
+	// own tick, and for the skip the backfilled tick that arrived with it.
+	REQUIRE(lanes.gate().laneTickOf(stallTick).has_value());
+	REQUIRE(lanes.gate().laneTickOf(skipTick - 1u).has_value());
+
+	CHECK(marks.marks[0].kind == RateMarkKind::Stall);
+	CHECK(marks.marks[0].offset == *lanes.gate().laneTickOf(stallTick) - window.oldestTick);
+	CHECK(marks.marks[0].rightEdge);
+	CHECK(marks.marks[0].count == 4u);
+
+	CHECK(marks.marks[1].kind == RateMarkKind::Skip);
+	CHECK(marks.marks[1].offset == *lanes.gate().laneTickOf(skipTick - 1u) - window.oldestTick);
+	CHECK_FALSE(marks.marks[1].rightEdge);
+	CHECK(marks.marks[1].count == 2u);
+
+	// ONE column, two edges.
+	REQUIRE(marks.marks[0].offset == marks.marks[1].offset);
+
+	const FrameMeterGeometry geometry = geometryFor(1920.f, 1080.f, frameMeterCellCount(window));
+
+	CHECK(nearlyEqual(rateMarkX(geometry, marks.marks[1]),
+		frameMeterCellX(geometry, marks.marks[1].offset)));
+	CHECK(nearlyEqual(rateMarkX(geometry, marks.marks[0]) - rateMarkX(geometry, marks.marks[1]),
+		geometry.cellStride));
+
+	// A window that no longer reaches those columns places neither: a mark off the bar is
+	// dropped rather than pinned to an edge, which would name a column it is not on.
+	const PollWindow narrow = retainedLaneWindow(lanes, 8u);
+	REQUIRE(narrow.oldestTick > *lanes.gate().laneTickOf(stallTick));
+
+	FrameMeterRateMarkList offBar;
+	collectFrameMeterRateMarks(lanes, narrow, offBar);
+	CHECK(offBar.count == 0u);
+}
+
+TEST_CASE("FrameMeter.ARateMarkInsideAClosedSpanTakesThatSpansOwnCellAndItsLeftEdge",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// The span's one cell already stands for the whole stretch of removed time, so a mark
+	// that fell inside it lands there -- and on the cell's LEFT edge whichever kind it is,
+	// because the boundary it marked is somewhere inside that cell and not at an end of it.
+	InputHistoryTickLanes lanes;
+	const uint32_t        afterIdle = pollRun(0u, 10u, 35u, lanes);
+	pollRun(afterIdle, 15u, 0u, lanes);
+
+	REQUIRE(lanes.gate().axisEventCount() == 1u);
+	const LaneAxisEvent& span = lanes.gate().axisEventAt(0u);
+	REQUIRE(span.kind == LaneAxisEventKind::Elision);
+	REQUIRE(span.skippedTicks >= 2u);
+
+	// A skip whose backfilled tick is inside the span, and a stall whose own tick is.
+	const uint32_t insideTheSpan = span.simTick + 1u;
+	REQUIRE_FALSE(lanes.gate().laneTickOf(insideTheSpan).has_value());
+
+	lanes.noteRateMark(RateMark{ RateMarkKind::Skip, insideTheSpan + 1u, 3u });
+	lanes.noteRateMark(RateMark{ RateMarkKind::Stall, insideTheSpan, 1u });
+
+	const PollWindow window = retainedLaneWindow(lanes, 120u);
+
+	FrameMeterRateMarkList marks;
+	collectFrameMeterRateMarks(lanes, window, marks);
+	REQUIRE(marks.count == 2u);
+
+	const uint32_t spanOffset = span.laneTick - window.oldestTick;
+
+	CHECK(marks.marks[0].kind == RateMarkKind::Skip);
+	CHECK(marks.marks[0].offset == spanOffset);
+	CHECK_FALSE(marks.marks[0].rightEdge);
+	CHECK(marks.marks[0].count == 3u);
+
+	// The stall would take a right edge on a cell of its own; on a span's cell it does not.
+	CHECK(marks.marks[1].kind == RateMarkKind::Stall);
+	CHECK(marks.marks[1].offset == spanOffset);
+	CHECK_FALSE(marks.marks[1].rightEdge);
+	CHECK(marks.marks[1].count == 1u);
+}
+
+TEST_CASE("FrameMeter.ARateMarkInsideTheStillOpenSpanIsDroppedAndTheOneBesideItIsNot",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// A DELIBERATE LOSS. The span being collapsed right now owns no cell, so a mark inside
+	// it has nowhere to land and is left out of the bar entirely; the readout's counts are
+	// where it survives. The placed mark beside it is what stops this reading as "nothing
+	// was collected at all".
+	InputHistoryTickLanes lanes;
+	pollRun(0u, 10u, 20u, lanes);
+
+	REQUIRE(lanes.gate().paused());
+	REQUIRE(lanes.gate().axisEventCount() == 0u);
+
+	const uint32_t insideOpenSpan = 10u + kLanePauseEngageTicks + 2u;
+	REQUIRE_FALSE(lanes.gate().laneTickOf(insideOpenSpan).has_value());
+
+	lanes.noteRateMark(RateMark{ RateMarkKind::Stall, insideOpenSpan, 1u });
+	lanes.noteRateMark(RateMark{ RateMarkKind::Skip, insideOpenSpan + 1u, 1u });
+	lanes.noteRateMark(RateMark{ RateMarkKind::Stall, 5u, 7u });
+
+	const PollWindow window = retainedLaneWindow(lanes, 120u);
+
+	REQUIRE(placeFrameMeterSimTick(lanes, window, insideOpenSpan).kind
+		== AuthorityMarkerKind::InsideOpenSpan);
+
+	FrameMeterRateMarkList marks;
+	collectFrameMeterRateMarks(lanes, window, marks);
+
+	REQUIRE(marks.count == 1u);
+	CHECK(marks.marks[0].kind == RateMarkKind::Stall);
+	CHECK(marks.marks[0].offset == *lanes.gate().laneTickOf(5u) - window.oldestTick);
+	CHECK(marks.marks[0].rightEdge);
+	CHECK(marks.marks[0].count == 7u);
+}
+
+TEST_CASE("FrameMeter.ARateMarkOlderThanTheLedgerStillReachesIsDroppedRatherThanPlaced",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// The gate is driven directly so its elision ledger overflows and drops its oldest
+	// entries: a mark inside a span nothing remembers can no longer be placed, and moving
+	// it onto the nearest cell would name a boundary it is not at.
+	InputHistoryTickLanes lanes;
+	uint32_t              tick = 0u;
+
+	auto step = [&lanes, &tick](bool inactive)
+	{
+		if (lanes.editGate().admit(tick, inactive, true) == LaneAdmission::Recorded)
+			lanes.noteAxisTick(*lanes.gate().laneTickOf(tick));
+		++tick;
+	};
+
+	for (std::size_t cycle = 0u; cycle <= kLaneElisionLedgerCapacity + 1u; ++cycle)
+	{
+		step(false);
+		for (uint32_t idle = 0u; idle < kLanePauseEngageTicks + 16u; ++idle)
+			step(true);
+	}
+	step(false);
+
+	REQUIRE(lanes.gate().axisEventCount() == kLaneElisionLedgerCapacity);
+
+	const uint32_t droppedSpanTick = lanes.gate().axisEventAt(0u).simTick - 4u;
+	REQUIRE_FALSE(lanes.gate().laneTickOf(droppedSpanTick).has_value());
+
+	// The skip's backfilled tick is the dropped one; the stall beside it is on a live cell,
+	// so an empty list here would be the fixture failing rather than the rule holding.
+	const uint32_t newestTick = tick - 1u;
+	lanes.noteRateMark(RateMark{ RateMarkKind::Skip, droppedSpanTick + 1u, 2u });
+	lanes.noteRateMark(RateMark{ RateMarkKind::Stall, newestTick, 1u });
+
+	const PollWindow window = retainedLaneWindow(lanes, 120u);
+
+	REQUIRE(placeFrameMeterSimTick(lanes, window, droppedSpanTick).kind
+		== AuthorityMarkerKind::TooOldToPlace);
+
+	FrameMeterRateMarkList marks;
+	collectFrameMeterRateMarks(lanes, window, marks);
+
+	REQUIRE(marks.count == 1u);
+	CHECK(marks.marks[0].kind == RateMarkKind::Stall);
+	CHECK(marks.marks[0].offset == *lanes.gate().laneTickOf(newestTick) - window.oldestTick);
+	CHECK(marks.marks[0].rightEdge);
+	CHECK(marks.marks[0].count == 1u);
 }
 
 } // namespace inputhistoryframemetertests

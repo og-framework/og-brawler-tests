@@ -78,6 +78,7 @@ using brawlerInputHistoryVisualization::retainedLaneWindow;
 using brawlerInputHistoryVisualization::kFrameMeterAuthorityOffBarStyle;
 using brawlerInputHistoryVisualization::kFrameMeterAuthorityStyle;
 using brawlerInputHistoryVisualization::kFrameMeterHorizonStyle;
+using brawlerInputHistoryVisualization::kFrameMeterRateMarkStyle;
 using brawlerInputHistoryVisualization::kInputDelayVerdictCount;
 using brawlerInputHistoryVisualization::kLaneElisionColor;
 using brawlerInputHistoryVisualization::kLaneResyncColor;
@@ -704,28 +705,83 @@ TEST_CASE("Authority.TheMarkerIsAThinCallerOfThePlacementHelperAcrossEveryKind",
 // THE TWO VERTICAL MARKERS
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Authority.TheAuthorityRuleAndTheFrozenHorizonCannotRenderIdentically",
+TEST_CASE("Authority.NoTwoOfTheFourMarkerStylesCanRenderIdentically",
           "[CharacterViz][InputHistoryViz]")
 {
-	// One says the correction cache can no longer answer for anything left of here; the
-	// other says the server is here. Confusing them inverts a desync diagnosis, so all four
-	// fields differ and no single edit can collapse the pair.
-	const FrameMeterMarkerStyle authority[] = {
-		kFrameMeterAuthorityStyle, kFrameMeterAuthorityOffBarStyle };
+	// Four rules now share one between-column vocabulary: the cache horizon, the authority
+	// marker on and off the bar, and the rate mark. One says the cache can no longer answer
+	// for anything left of here, one says the server is here, one says the clock corrected
+	// its rate -- and confusing any two inverts a diagnosis. Every field that could make a
+	// pair look alike is swept, pair by pair.
+	const FrameMeterMarkerStyle styles[] = { kFrameMeterHorizonStyle, kFrameMeterAuthorityStyle,
+		kFrameMeterAuthorityOffBarStyle, kFrameMeterRateMarkStyle };
 
-	for (const FrameMeterMarkerStyle& style : authority)
+	const std::size_t styleCount = sizeof(styles) / sizeof(styles[0]);
+
+	// The two indices the exception below names, pinned to the styles they claim, so that
+	// reordering the array cannot quietly move the exception onto a different pair.
+	const std::size_t authorityIndex = 1u;
+	const std::size_t offBarIndex    = 2u;
+	REQUIRE(styles[authorityIndex].thickness == kFrameMeterAuthorityStyle.thickness);
+	REQUIRE(styles[offBarIndex].thickness == kFrameMeterAuthorityOffBarStyle.thickness);
+
+	uint32_t sweptPairs  = 0u;
+	uint32_t colourPairs = 0u;
+	uint32_t shapePairs  = 0u;
+	float    tightestGap = 3.f;
+
+	for (std::size_t left = 0u; left < styleCount; ++left)
 	{
-		CHECK(laneColorGap(style.color, kFrameMeterHorizonStyle.color) >= kLanePaletteMinCrossGap);
-		CHECK(style.alpha != kFrameMeterHorizonStyle.alpha);
-		CHECK(style.thickness != kFrameMeterHorizonStyle.thickness);
-		CHECK(style.shape != kFrameMeterHorizonStyle.shape);
+		for (std::size_t right = left + 1u; right < styleCount; ++right)
+		{
+			const FrameMeterMarkerStyle& first  = styles[left];
+			const FrameMeterMarkerStyle& second = styles[right];
+			++sweptPairs;
+
+			CHECK(first.alpha != second.alpha);
+			CHECK(first.thickness != second.thickness);
+
+			// ONE PAIR IS EXCEPTED, and only from colour and shape: those two are ONE marker
+			// with its target off the bar, kept apart by how lit and how wide it is.
+			if (left == authorityIndex && right == offBarIndex)
+				continue;
+
+			const float gap = laneColorGap(first.color, second.color);
+			CHECK(gap >= kLanePaletteMinPairGap);
+			CHECK(first.shape != second.shape);
+
+			if (gap < tightestGap)
+				tightestGap = gap;
+
+			++colourPairs;
+			++shapePairs;
+		}
 	}
 
-	// The horizon carries no number of its own, which is the difference a reader sees
-	// before any of the other three register.
+	// ⛔ DERIVED FROM THE STYLE COUNT: a fifth style left unswept fails here, not silently.
+	CHECK(sweptPairs == static_cast<uint32_t>(styleCount * (styleCount - 1u) / 2u));
+	CHECK(sweptPairs == 6u);
+
+	// EXACTLY ONE exception, counted once per field it is excepted from.
+	CHECK(colourPairs == sweptPairs - 1u);
+	CHECK(shapePairs == sweptPairs - 1u);
+
+	// The floor the sweep asserts is the in-palette one; the family in fact clears the
+	// stricter cross-palette floor, which is the claim this sweep held before it grew.
+	CHECK(tightestGap >= kLanePaletteMinCrossGap);
+
+	// The horizon carries no number of its own and the rate mark crosses no cell: the two
+	// differences a reader sees before any of the other fields register.
 	CHECK(kFrameMeterHorizonStyle.shape == FrameMeterMarkerShape::PlainRule);
 	CHECK(kFrameMeterAuthorityStyle.shape == FrameMeterMarkerShape::LabelledRule);
 	CHECK(kFrameMeterAuthorityOffBarStyle.shape == FrameMeterMarkerShape::LabelledRule);
+	CHECK(kFrameMeterRateMarkStyle.shape == FrameMeterMarkerShape::SignedTickMark);
+
+	// The rate mark's colour IS the resync marker's, channel for channel: the header names
+	// that constant instead of restating its floats, so the two cannot drift apart.
+	CHECK(kFrameMeterRateMarkStyle.color.r == kLaneResyncColor.r);
+	CHECK(kFrameMeterRateMarkStyle.color.g == kLaneResyncColor.g);
+	CHECK(kFrameMeterRateMarkStyle.color.b == kLaneResyncColor.b);
 }
 
 TEST_CASE("Authority.TheAuthorityRuleClearsThePaletteFloorAgainstEveryCellItCovers",

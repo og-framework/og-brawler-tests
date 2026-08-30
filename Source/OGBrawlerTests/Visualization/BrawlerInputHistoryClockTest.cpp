@@ -22,6 +22,7 @@
 
 #include "catch_amalgamated.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -43,6 +44,12 @@ using brawlerInputHistoryVisualization::ClockDriftReadout;
 using brawlerInputHistoryVisualization::DirectionBucket;
 using brawlerInputHistoryVisualization::InputHistoryTickLanes;
 using brawlerInputHistoryVisualization::LaneAdmission;
+using brawlerInputHistoryVisualization::RateMarkKind;
+using brawlerInputHistoryVisualization::TickLanePollCounts;
+
+using brawlerInputHistoryVisualization::clockEventDelta;
+using brawlerInputHistoryVisualization::kRateMarkKindCount;
+using brawlerInputHistoryVisualization::kRateMarkLedgerCapacity;
 
 using brawlerInputHistoryVisualization::buildClockDriftReadout;
 
@@ -106,6 +113,18 @@ static LaneAdmission poll(uint32_t simTick, std::optional<ClockDriftReading> clo
 	return brawlerInputHistoryVisualization::pollInputHistoryLanes(reader, simTick,
 		DAttackState::Idle, active ? movingInput() : neutralInput(), pauseWhileIdle,
 		std::nullopt, std::nullopt, clock, inversion, lanes).admission;
+}
+
+// The same poll again, returning everything it counted rather than only what the gate
+// decided. ⛔ SAME ENTRY POINT: no case below reaches past pollInputHistoryLanes.
+static TickLanePollCounts pollCounts(uint32_t simTick, ClockDriftReading clock,
+                                     InputHistoryTickLanes& lanes)
+{
+	const SilentReader      reader;
+	AppliedCaptureInversion inversion;
+	return brawlerInputHistoryVisualization::pollInputHistoryLanes(reader, simTick,
+		DAttackState::Idle, movingInput(), false, std::nullopt, std::nullopt,
+		std::optional<ClockDriftReading>(clock), inversion, lanes);
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +371,10 @@ TEST_CASE("Clock.NoReadingDrawsNothingRatherThanAPlausibleZero",
 	CHECK_FALSE(buildClockDriftReadout(lanes).present);
 	CHECK(lanes.authorityStaticSimTicks() == kRunTicks);
 
+	// ⛔ AND NO MARK EITHER: a rate mark comes from a DIFFERENCE of two readings, so a
+	//   role that never files one leaves the bar's marks absent rather than sitting at zero.
+	CHECK(lanes.rateMarkCount() == 0u);
+
 	// ⚠ A reading arriving after a gap starts a NEW run, at zero: the lanes cannot claim
 	// the authority stood still across polls they were told nothing about.
 	poll(kRunTicks + 2u, readingOf(kRunTicks + 2u, kAuthorityTick, DriftAction::None), lanes);
@@ -400,6 +423,228 @@ TEST_CASE("Clock.EveryPendingDriftActionAndTheStallDebtReachTheReadoutUnchanged"
 	poll(6200u, readingOf(6200u, 6100u, DriftAction::HardResync), lanes);
 	CHECK(buildClockDriftReadout(lanes).reading.driftTicks
 		== static_cast<int32_t>(6100u + kOffsetTicks) - 6200);
+}
+
+// ---------------------------------------------------------------------------
+// THE RATE MARKS -- what a skip and a stall leave behind, and where it is kept.
+//
+// Neither owns a cell: both ticks of a skip are recorded and a stall repeats a frame.
+// What they leave is a BOUNDARY, and the clock remembers only the last one of each
+// kind -- so the display's own ledger is the only history of them there is.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Clock.TwoSkipsBetweenTwoPollsFileOneMarkCarryingTheCountAndAStallFilesItsOwn",
+          "[CharacterViz][InputHistoryViz]")
+{
+	constexpr uint32_t kAuthorityTick = 4000u;
+	constexpr uint32_t kFirstTick     = 4010u;
+	constexpr uint32_t kSkipTick      = 4013u;
+	constexpr uint32_t kStallTick     = 4016u;
+
+	InputHistoryTickLanes lanes;
+
+	ClockDriftReading quiet = readingOf(kFirstTick, kAuthorityTick, DriftAction::None);
+	quiet.skipCount  = 7u;   quiet.lastSkipTick  = 3900u;
+	quiet.stallCount = 3u;   quiet.lastStallTick = 3950u;
+	poll(kFirstTick, quiet, lanes);
+
+	// Totals the clock had already reached before this display opened file nothing.
+	CHECK(lanes.rateMarkCount() == 0u);
+
+	// TWO skips land between two drawn frames. The clock kept only the second's tick, so
+	// the poll files ONE mark that says two rather than two it cannot place.
+	ClockDriftReading hitched = readingOf(kSkipTick, kAuthorityTick, DriftAction::Skip);
+	hitched.skipCount  = 9u;   hitched.lastSkipTick  = kSkipTick;
+	hitched.stallCount = 3u;   hitched.lastStallTick = 3950u;
+	const TickLanePollCounts skipped = pollCounts(kSkipTick, hitched, lanes);
+
+	CHECK(skipped.rateMarksFiled == 1u);
+	REQUIRE(lanes.rateMarkCount() == 1u);
+	CHECK(lanes.rateMarkAt(0u).kind == RateMarkKind::Skip);
+	CHECK(lanes.rateMarkAt(0u).simTick == kSkipTick);
+	CHECK(lanes.rateMarkAt(0u).count == 2u);
+
+	// One stall on its own: the other kind, and a count of one.
+	ClockDriftReading stalled = readingOf(kStallTick, kAuthorityTick, DriftAction::Stall);
+	stalled.skipCount  = 9u;   stalled.lastSkipTick  = kSkipTick;
+	stalled.stallCount = 4u;   stalled.lastStallTick = kStallTick;
+	const TickLanePollCounts halted = pollCounts(kStallTick, stalled, lanes);
+
+	CHECK(halted.rateMarksFiled == 1u);
+	REQUIRE(lanes.rateMarkCount() == 2u);
+	CHECK(lanes.rateMarkAt(1u).kind == RateMarkKind::Stall);
+	CHECK(lanes.rateMarkAt(1u).simTick == kStallTick);
+	CHECK(lanes.rateMarkAt(1u).count == 1u);
+
+	// The ledger and the clock line's tokens are derived apart -- one by the poll, one by
+	// the reading that replaced its predecessor -- and this is where they are held
+	// against each other, so a count that moved in one place cannot sit still in the other.
+	CHECK(buildClockDriftReadout(lanes).skips == 2u);
+	CHECK(buildClockDriftReadout(lanes).stalls == 1u);
+
+	// A poll where neither counter moved files nothing, however far the tick ran.
+	ClockDriftReading settled =
+		readingOf(kStallTick + 5u, kAuthorityTick, DriftAction::None);
+	settled.skipCount  = 9u;   settled.lastSkipTick  = kSkipTick;
+	settled.stallCount = 4u;   settled.lastStallTick = kStallTick;
+	const TickLanePollCounts calm = pollCounts(kStallTick + 5u, settled, lanes);
+
+	CHECK(calm.rateMarksFiled == 0u);
+	CHECK(lanes.rateMarkCount() == 2u);
+}
+
+TEST_CASE("Clock.TheRateMarkLedgerDropsItsOldestEntryOnceItIsFull",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// A long enough session outruns the ledger. It drops the OLDEST rather than refusing
+	// the newest, so reach is lost backwards and never at the frontier.
+	constexpr uint32_t    kAuthorityTick = 200u;
+	constexpr uint32_t    kFirstTick     = 1000u;
+	constexpr std::size_t kOverrun       = 7u;
+
+	InputHistoryTickLanes lanes;
+
+	const std::size_t polls = kRateMarkLedgerCapacity + kOverrun + 1u;
+	for (std::size_t index = 0u; index < polls; ++index)
+	{
+		const uint32_t tick = kFirstTick + static_cast<uint32_t>(index);
+
+		ClockDriftReading reading = readingOf(tick, kAuthorityTick, DriftAction::Skip);
+		reading.skipCount    = static_cast<uint32_t>(index);
+		reading.lastSkipTick = tick;
+		poll(tick, reading, lanes);
+	}
+
+	// The first poll has no predecessor and files nothing, so the filings are one fewer
+	// than the polls -- and the oldest survivor is the overrun's own depth in.
+	REQUIRE(lanes.rateMarkCount() == kRateMarkLedgerCapacity);
+	CHECK(lanes.rateMarkAt(0u).simTick == kFirstTick + 1u + static_cast<uint32_t>(kOverrun));
+	CHECK(lanes.rateMarkAt(kRateMarkLedgerCapacity - 1u).simTick
+	      == kFirstTick + static_cast<uint32_t>(polls) - 1u);
+}
+
+TEST_CASE("Clock.ACounterReadingLowerThanTheLastOneFilesNothingRatherThanAWrappedCount",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// The counters are written on the physics thread and read on the game thread, so a
+	// reading can be torn. A plain subtraction of a lower total wraps to four billion and
+	// would file a mark claiming more skips than the session has ticks.
+	constexpr uint32_t kAuthorityTick = 300u;
+	constexpr uint32_t kFirstTick     = 2000u;
+
+	CHECK(clockEventDelta(12u, 11u) == 0u);
+	CHECK(clockEventDelta(11u, 12u) == 1u);
+
+	InputHistoryTickLanes lanes;
+
+	ClockDriftReading high = readingOf(kFirstTick, kAuthorityTick, DriftAction::None);
+	high.skipCount  = 12u;  high.lastSkipTick  = kFirstTick;
+	high.stallCount = 8u;   high.lastStallTick = kFirstTick;
+	high.hardResyncCount = 5u;
+	poll(kFirstTick, high, lanes);
+
+	ClockDriftReading torn = readingOf(kFirstTick + 1u, kAuthorityTick, DriftAction::None);
+	torn.skipCount  = 11u;  torn.lastSkipTick  = kFirstTick;
+	torn.stallCount = 7u;   torn.lastStallTick = kFirstTick;
+	torn.hardResyncCount = 4u;
+	const TickLanePollCounts counts = pollCounts(kFirstTick + 1u, torn, lanes);
+
+	CHECK(counts.rateMarksFiled == 0u);
+	CHECK(counts.axisBreaksFromSeam == 0u);
+	CHECK(lanes.rateMarkCount() == 0u);
+
+	const ClockDriftReadout readout = buildClockDriftReadout(lanes);
+	CHECK(readout.skips == 0u);
+	CHECK(readout.stalls == 0u);
+	CHECK(readout.resyncs == 0u);
+}
+
+TEST_CASE("Clock.TheReadoutCountsWhatTheDisplayWatchedAndNotTheClocksOwnTotals",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// The clock was counting long before the display opened. A line printing its totals
+	// would say the session had stalled two hundred times in the second it has been up.
+	constexpr uint32_t kAuthorityTick = 500u;
+	constexpr uint32_t kFirstTick     = 801u;
+	constexpr uint32_t kResyncTo      = kFirstTick + 1u - 22u;
+
+	InputHistoryTickLanes lanes;
+
+	ClockDriftReading opening = readingOf(kFirstTick, kAuthorityTick, DriftAction::None);
+	opening.skipCount = 40u;  opening.stallCount = 200u;  opening.hardResyncCount = 9u;
+	poll(kFirstTick, opening, lanes);
+
+	ClockDriftReadout readout = buildClockDriftReadout(lanes);
+	REQUIRE(readout.present);
+	CHECK(readout.skips == 0u);
+	CHECK(readout.stalls == 0u);
+	CHECK(readout.resyncs == 0u);
+
+	// The reading itself still carries the clock's own totals, untouched: the tokens are
+	// a second fact beside it, not a replacement for it.
+	CHECK(readout.reading.stallCount == 200u);
+	CHECK(readout.reading.skipCount == 40u);
+
+	ClockDriftReading busy = readingOf(kFirstTick + 1u, kAuthorityTick, DriftAction::None);
+	busy.skipCount  = 43u;   busy.lastSkipTick  = kFirstTick + 1u;
+	busy.stallCount = 201u;  busy.lastStallTick = kFirstTick + 1u;
+	busy.hardResyncCount = 9u;
+	poll(kFirstTick + 1u, busy, lanes);
+
+	readout = buildClockDriftReadout(lanes);
+	CHECK(readout.skips == 3u);
+	CHECK(readout.stalls == 1u);
+	CHECK(readout.resyncs == 0u);
+
+	// A real backward resync, and the three tokens move independently of each other.
+	ClockDriftReading resynced =
+		readingOf(kResyncTo, kAuthorityTick, DriftAction::HardResync);
+	resynced.skipCount  = 43u;   resynced.lastSkipTick  = kFirstTick + 1u;
+	resynced.stallCount = 201u;  resynced.lastStallTick = kFirstTick + 1u;
+	resynced.hardResyncCount        = 10u;
+	resynced.lastHardResyncFromTick = kFirstTick + 1u;
+	resynced.lastHardResyncToTick   = kResyncTo;
+	poll(kResyncTo, resynced, lanes);
+
+	readout = buildClockDriftReadout(lanes);
+	CHECK(readout.skips == 3u);
+	CHECK(readout.stalls == 1u);
+	CHECK(readout.resyncs == 1u);
+}
+
+TEST_CASE("Clock.BothRateMarkKindsAreReachedAndTheSweepIsCountedAgainstItsEnum",
+          "[CharacterViz][InputHistoryViz]")
+{
+	// Swept against the count, never a literal 2: a third kind added without a case here
+	// leaves this at two and fails, rather than passing in silence.
+	constexpr uint32_t kAuthorityTick = 100u;
+	constexpr uint32_t kFirstTick     = 3000u;
+
+	InputHistoryTickLanes lanes;
+	poll(kFirstTick, readingOf(kFirstTick, kAuthorityTick, DriftAction::None), lanes);
+
+	ClockDriftReading both = readingOf(kFirstTick + 1u, kAuthorityTick, DriftAction::None);
+	both.skipCount  = 1u;   both.lastSkipTick  = kFirstTick + 1u;
+	both.stallCount = 1u;   both.lastStallTick = kFirstTick + 1u;
+	const TickLanePollCounts counts = pollCounts(kFirstTick + 1u, both, lanes);
+
+	// ONE MARK PER KIND, so a poll that saw both files exactly two.
+	CHECK(counts.rateMarksFiled == 2u);
+
+	std::size_t reached = 0u;
+	for (uint8_t kind = 0u; kind < kRateMarkKindCount; ++kind)
+	{
+		for (std::size_t index = 0u; index < lanes.rateMarkCount(); ++index)
+		{
+			if (static_cast<uint8_t>(lanes.rateMarkAt(index).kind) == kind)
+			{
+				++reached;
+				break;
+			}
+		}
+	}
+
+	CHECK(reached == static_cast<std::size_t>(kRateMarkKindCount));
 }
 
 } // namespace inputhistoryclocktests
