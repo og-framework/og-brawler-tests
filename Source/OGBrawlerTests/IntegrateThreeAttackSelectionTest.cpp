@@ -85,7 +85,8 @@ static dAttackMachineSimulation::State integrateOnce(
         dAttackRadialSimulation::PlayerInput(aimDirection, attackLeft, attackRight),
         dAttackMachineSimulation::PlayerInput{aimDirection, attackLeft, attackRight, moveStick, moveDirectionWorld},
         dAttackGuardSimulation::PlayerInput(aimDirection),
-        brawlerProjectileSimulation::PlayerInput{aimDirection});
+        brawlerProjectileSimulation::PlayerInput{aimDirection},
+        brawlerMovementSimulation::PlayerInput{});
 
     SimulationTimeStep step(0u, false, false, false, 1.f / 60.f);
     character.integrate(step, input, physAdapter, queryAdapter, staticData);
@@ -272,7 +273,8 @@ TEST_CASE("DAttack.Integrate3.HadoukenCommitmentHoldsAttackingState", "[DAttack]
             dAttackRadialSimulation::PlayerInput(aim, attackLeft, false),
             dAttackMachineSimulation::PlayerInput{aim, attackLeft, false, glm::vec2(0.f, 0.f), aim, triggeredActionId},
             dAttackGuardSimulation::PlayerInput(aim),
-            brawlerProjectileSimulation::PlayerInput{aim});
+            brawlerProjectileSimulation::PlayerInput{aim},
+            brawlerMovementSimulation::PlayerInput{});
 
         SimulationTimeStep step(tick, false, false, false, dt);
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
@@ -345,7 +347,8 @@ TEST_CASE("DAttack.Integrate3.MachineHadoukenUsesCharacterBindings", "[DAttack][
         dAttackMachineSimulation::PlayerInput{aim, false, false, glm::vec2(0.f), aim,
                                               inputSequence::kHadoukenActionId},
         dAttackGuardSimulation::PlayerInput(aim),
-        brawlerProjectileSimulation::PlayerInput{aim});
+        brawlerProjectileSimulation::PlayerInput{aim},
+        brawlerMovementSimulation::PlayerInput{});
 
     // Drive at a non-zero tick so the spawned slot's spawnTick (== currentTick) is non-zero
     // (spawnTick 0 reads as a free slot). The projectile sub-sim runs after the machine in the
@@ -396,12 +399,14 @@ TEST_CASE("DAttack.Integrate3.InboundHitTransitionsToHitFlinch", "[DAttack][HitF
     // BEFORE integrate (playing T3's routing-pass role); attackLeft is held to prove the veto.
     auto runTick = [&](unsigned int tick, bool inboundHit, bool attackLeft)
     {
-        character.editAllState().editDerivedState().m_inboundHitDerivedState.wasHitThisTick = inboundHit;
+        character.editAllState().editDerivedState()
+            .edit<brawlerInboundHit::DerivedState>().wasHitThisTick = inboundHit;
         simulatableBrawler::PlayerInput input(
             dAttackRadialSimulation::PlayerInput(aim, attackLeft, false),
             dAttackMachineSimulation::PlayerInput{aim, attackLeft, false, glm::vec2(0.f, 0.f), aim},
             dAttackGuardSimulation::PlayerInput(aim),
-            brawlerProjectileSimulation::PlayerInput{aim});
+            brawlerProjectileSimulation::PlayerInput{aim},
+            brawlerMovementSimulation::PlayerInput{});
         SimulationTimeStep step(tick, false, false, false, dt);
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
         return character.getAllState().getState().get<dAttackMachineSimulation::State>();

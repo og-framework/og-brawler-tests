@@ -297,7 +297,14 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     REQUIRE(relayedInputRing::kHeaderBytes == 2u);
     REQUIRE(correctionStateBuffer::kHeaderBytes == 8u);
     REQUIRE(ringWireBytes(1u) == 85u);
-    REQUIRE(kStateWireBytes == 311u);
+    // [movement-sim T1 -> T5, 2026-09-02] 311 -> 363 -> 335 B, and 335 is the
+    // SETTLED figure. T1 appended the movement sub-sim's State carrying a placeholder
+    // 52 B PhysicsBodyState (composite 300 -> 352 B); T5 swapped that slice to the
+    // 24 B LinearBodyState (composite 352 -> 324 B, -28 B). 335 = 1 (version)
+    // + 2 (used count) + 8 (correction header) + 324 (composite). The composite's own
+    // absolute size and its headroom against FSimulationStateSyncBuffer::kBufferBytes
+    // are fenced in SimulatableBrawlerTest.cpp's WireFootprint case.
+    REQUIRE(kStateWireBytes == 335u);
 }
 
 // ---------------------------------------------------------------------------
@@ -323,9 +330,13 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
 
     // ...and the boundary is where the arithmetic says, not merely "somewhere
     // above 1". At six characters the rings alone at two entries are 5 x 173 = 865 B,
-    // which leaves no room for a state (318 B) inside 952 B.
+    // which leaves no room for a state (342 B) inside 952 B.
     REQUIRE(ringWireBytes(2u) == 166u);
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1192u);
+    // [movement-sim T1 -> T5, 2026-09-02] 1192 -> 1244 -> 1216 B, all of it the state
+    // term (318 -> 370 -> 342 B batched). The ring term never moved: the movement
+    // sub-sim's PlayerInput slice is empty, so this task changed the STATE wire and
+    // not the INPUT wire at all.
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1216u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will
@@ -480,7 +491,17 @@ TEST_CASE("PacketBudget: K=2 pre-diet does NOT fit at the cap — the other half
 
     // At three characters K=2 still fits on average, which is why §16.2 had to
     // reason about the window rather than about bytes to rule it out there.
+    //
+    // [movement-sim T1 -> T5, 2026-09-02] RESTORED. T1's placeholder 52 B body state
+    // put this row 2.384 B over the bunch (954.384 vs 952 B) and neutralised the CASE
+    // behind `[!shouldfail]` rather than inverting the claim; T5's LinearBodyState
+    // swap took kStateBatchBytes 370 -> 342 B and this round to 898.384 B, clearing
+    // by 53.616 B. The tag and its comment block are gone and the `<=` below is live
+    // again. The row above (N=4) stayed red throughout — 1001.076 B, still over by
+    // 49.076 B — so the positive control this case exists for never lapsed.
     const std::uint64_t avgRingsAtThree = ringsOnlyBytesX1000(3u, 2u * kAvgEntriesX1000);
+    INFO("N=3 K=2 avgRound(x1000)=" << (avgRingsAtThree + 2ull * kStateBatchBytes * 1000ull)
+         << " budget(x1000)=" << kBudgetX1000);
     REQUIRE(avgRingsAtThree + 2ull * kStateBatchBytes * 1000ull <= kBudgetX1000);
 }
 
