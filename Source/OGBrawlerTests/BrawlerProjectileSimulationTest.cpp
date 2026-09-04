@@ -50,6 +50,10 @@ struct MockPhysicsAdapter
     glm::mat4 getBodyTransform(BodyId id) const            { return bodies[id.value].transform; }
     void setBodyTransform(BodyId id, const glm::mat4& t)   { bodies[id.value].transform = t; }
     void setBodyLinearVelocity(BodyId id, const glm::vec3& v) { bodies[id.value].linearVelocity = v; }
+    // Task 3b force seam. No-op: this task adds the capability only; task 12's
+    // movement-sim tests are the ones that record these calls.
+    void addBodyAcceleration(BodyId, const glm::vec3&) {}
+    void addBodyVelocityChange(BodyId, const glm::vec3&) {}
     void addBodyTorque(BodyId, const glm::vec3&)           {}
     void setBodyAngularVelocity(BodyId, const glm::vec3&)  {}
     glm::vec3 getBodyInertiaTensor(BodyId) const           { return glm::vec3(1.f); }

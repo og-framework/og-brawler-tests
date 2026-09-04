@@ -297,14 +297,18 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     REQUIRE(relayedInputRing::kHeaderBytes == 2u);
     REQUIRE(correctionStateBuffer::kHeaderBytes == 8u);
     REQUIRE(ringWireBytes(1u) == 85u);
-    // [movement-sim T1 -> T5, 2026-09-02] 311 -> 363 -> 335 B, and 335 is the
-    // SETTLED figure. T1 appended the movement sub-sim's State carrying a placeholder
-    // 52 B PhysicsBodyState (composite 300 -> 352 B); T5 swapped that slice to the
-    // 24 B LinearBodyState (composite 352 -> 324 B, -28 B). 335 = 1 (version)
-    // + 2 (used count) + 8 (correction header) + 324 (composite). The composite's own
-    // absolute size and its headroom against FSimulationStateSyncBuffer::kBufferBytes
-    // are fenced in SimulatableBrawlerTest.cpp's WireFootprint case.
-    REQUIRE(kStateWireBytes == 335u);
+    // [movement-sim T1 -> T5, 2026-09-02] 311 -> 363 -> 335 B. T1 appended the
+    // movement sub-sim's State carrying a placeholder 52 B PhysicsBodyState
+    // (composite 300 -> 352 B); T5 swapped that slice to the 24 B LinearBodyState
+    // (composite 352 -> 324 B, -28 B).
+    //
+    // [movement-sim T29, 2026-09-04] 335 -> 279 B. The guard sub-simulation went
+    // entirely off the wire (composite 324 -> 268 B, -56 B: a 4 B phantom timer and
+    // a 52 B derivable body state). 279 = 1 (version) + 2 (used count) + 8
+    // (correction header) + 268 (composite). The composite's own absolute size and
+    // its headroom against FSimulationStateSyncBuffer::kBufferBytes are fenced in
+    // SimulatableBrawlerTest.cpp's WireFootprint case.
+    REQUIRE(kStateWireBytes == 279u);
 }
 
 // ---------------------------------------------------------------------------
@@ -334,9 +338,12 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     REQUIRE(ringWireBytes(2u) == 166u);
     // [movement-sim T1 -> T5, 2026-09-02] 1192 -> 1244 -> 1216 B, all of it the state
     // term (318 -> 370 -> 342 B batched). The ring term never moved: the movement
-    // sub-sim's PlayerInput slice is empty, so this task changed the STATE wire and
+    // sub-sim's PlayerInput slice is empty, so that task changed the STATE wire and
     // not the INPUT wire at all.
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1216u);
+    // [movement-sim T29, 2026-09-04] 1216 -> 1160 B, again all state term
+    // (342 -> 286 B batched), and again with the ring term untouched — the guard's
+    // PlayerInput still carries its aim, only its State left the wire.
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1160u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will
@@ -470,24 +477,48 @@ TEST_CASE("PacketBudget: at the cap the whole round fits on average AND at corre
     REQUIRE(kShippedRotationK == 1u);
 }
 
-TEST_CASE("PacketBudget: K=2 pre-diet does NOT fit at the cap — the other half of the reorder condition",
+TEST_CASE("PacketBudget: the diet cleared the K=2 round at the cap — the premise K=1 shipped on no longer holds",
           "[PacketBudget][InputFirstReplication]")
 {
-    // The second inverted row. T38 §16.2's argument for K=1 is Iris's huge-object
-    // window, which this target cannot model (it is an engine control-flow fact
-    // about `HandleObjectBatchFailure`, not an arithmetic one). What CAN be asserted
-    // here is the necessary condition underneath it: at four characters a K=2 round
-    // does not fit one packet even on an AVERAGE frame, so a second state batch is
-    // attempted-and-failed on essentially every frame — which is precisely the
-    // situation in which the window's 192-316 B fork gets reached.
+    // ⭐ THIS ROW WAS AN INVERTED POSITIVE CONTROL AND IT HAS NOW FIRED. Read the
+    // history before changing it again — the whole point of this case is that the
+    // reasoning it retired stays legible.
     //
-    // So this row does not prove §16.2. It proves the premise §16.2 reasons from,
-    // and it goes red the moment the diet makes that premise false — which is the
-    // signal that K may return to 2.
+    // WHAT IT USED TO ASSERT, AND WHY. T38 §16.2's argument for shipping K=1 is
+    // Iris's huge-object window, which this target cannot model (that is an engine
+    // control-flow fact about `HandleObjectBatchFailure`, not an arithmetic one).
+    // What COULD be asserted here was the necessary condition underneath it: at four
+    // characters a K=2 round did not fit one packet even on an AVERAGE frame, so a
+    // second state batch was attempted-and-failed on essentially every frame — which
+    // is precisely the situation in which the window's 192-316 B fork gets reached.
+    // So this row never proved §16.2; it proved the PREMISE §16.2 reasons from, and
+    // it was written to go red the moment a diet made that premise false — which is
+    // the signal that K may return to 2.
+    //
+    // ⭐ [movement-sim T29, 2026-09-04] THE DIET LANDED AND THE PREMISE IS NOW FALSE,
+    // measured. Task 29 took the guard sub-simulation's State entirely off the wire
+    // (composite 324 -> 268 B, -56 B), which moved kStateBatchBytes 342 -> 286 B and
+    // this round from 1001.076 B — over a 952 B bunch by 49.076 B, where it had sat
+    // red since the row was written — to 889.076 B, CLEARING by 62.924 B. The
+    // comparison below is therefore inverted to record the measurement rather than
+    // to keep asserting a falsehood. The control did exactly the job it was built
+    // for; it is not being weakened, it is being updated.
+    //
+    // ⛔ RESTORING K=2 IS NOW A LIVE OPTION, AND IT IS ITS OWN DECISION. Task 29 did
+    // NOT take it: `TimeConfig::correctionRotationK` is untouched, K is still 1, and
+    // the preceding case still asserts `kShippedRotationK == 1u` truthfully. This row
+    // only removes the ARITHMETIC objection at N=4 — §16.2 also rested on the Iris
+    // huge-object window, which is an engine fact this target still cannot model, so
+    // clearing the bytes is necessary but NOT sufficient to justify K=2. Raising K is
+    // the user's call, informed by item 40's post-diet table.
+    //
+    // ⚠ Note the literal `2ull` below: this row prices a HYPOTHETICAL K=2 round and
+    // is deliberately independent of the configured `kShippedRotationK`. Changing the
+    // config does not change this arithmetic by a single byte.
     const std::uint64_t avgRingsAtCap = ringsOnlyBytesX1000(4u, 3u * kAvgEntriesX1000);
     INFO("N=4 K=2 avgRound(x1000)=" << (avgRingsAtCap + 2ull * kStateBatchBytes * 1000ull)
          << " budget(x1000)=" << kBudgetX1000);
-    REQUIRE(avgRingsAtCap + 2ull * kStateBatchBytes * 1000ull > kBudgetX1000);
+    REQUIRE(avgRingsAtCap + 2ull * kStateBatchBytes * 1000ull <= kBudgetX1000);
 
     // At three characters K=2 still fits on average, which is why §16.2 had to
     // reason about the window rather than about bytes to rule it out there.
@@ -497,8 +528,14 @@ TEST_CASE("PacketBudget: K=2 pre-diet does NOT fit at the cap — the other half
     // behind `[!shouldfail]` rather than inverting the claim; T5's LinearBodyState
     // swap took kStateBatchBytes 370 -> 342 B and this round to 898.384 B, clearing
     // by 53.616 B. The tag and its comment block are gone and the `<=` below is live
-    // again. The row above (N=4) stayed red throughout — 1001.076 B, still over by
-    // 49.076 B — so the positive control this case exists for never lapsed.
+    // again. The row above (N=4) stayed red from then until movement-sim task 29 —
+    // 1001.076 B, over by 49.076 B — so the positive control this case exists for
+    // never lapsed while the premise it guarded was still true.
+    //
+    // [movement-sim T29, 2026-09-04] This arm was ALREADY clearing and still is; the
+    // diet only widened its margin, 898.384 -> 786.384 B (214.384 B of rings plus
+    // 2 x 286 B of state), so nothing here needed re-pointing. The N=4 arm above is
+    // the one task 29 flipped.
     const std::uint64_t avgRingsAtThree = ringsOnlyBytesX1000(3u, 2u * kAvgEntriesX1000);
     INFO("N=3 K=2 avgRound(x1000)=" << (avgRingsAtThree + 2ull * kStateBatchBytes * 1000ull)
          << " budget(x1000)=" << kBudgetX1000);

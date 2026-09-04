@@ -31,6 +31,10 @@ struct FMockPhysicsBodyAdapter
     void addBodyTorque(BodyId, const glm::vec3&) {}
     void setBodyAngularVelocity(BodyId, const glm::vec3& v) {}
     void setBodyLinearVelocity(BodyId, const glm::vec3& v) { lastSetLinearVelocity = v; }
+    // Task 3b force seam. No-op: this task adds the capability only; task 12's
+    // movement-sim tests are the ones that record these calls.
+    void addBodyAcceleration(BodyId, const glm::vec3&) {}
+    void addBodyVelocityChange(BodyId, const glm::vec3&) {}
     glm::vec3 getBodyInertiaTensor(BodyId) const { return glm::vec3(1.f); }
     PhysicsBodyState captureBodyState(BodyId) const
     {
@@ -136,8 +140,17 @@ TEST_CASE("DAttack.SimulatableBrawler.FirstResimStep", "[DAttack][SimulatableBra
 // NOTHING, because that shape was known to be temporary; it only recorded the
 // figure. Task 5's LinearBodyState swap makes the shape final, so it is pinned.
 // Supporting evidence, not the assertion: task 1 recorded the composite at 352 B,
-// this measures 324 B, a **-28 B** delta — exactly the 52 -> 24 B narrowing of the
-// one movement slice, with every other slice untouched.
+// task 5 measured 324 B, a **-28 B** delta — exactly the 52 -> 24 B narrowing of
+// the one movement slice, with every other slice untouched.
+//
+// [movement-sim task 29, 2026-09-04] 324 -> 268 B, a **-56 B** delta, and it is the
+// WHOLE of the guard sub-simulation's wire presence: 4 B `attackTimer` (a phantom —
+// never written by the sim, kept alive only by a test that used it as a mutation
+// probe) plus 52 B `bodyState` (derivable every tick from the capsule pose and the
+// aim input, so it carried no information). dAttackGuardSimulation::State now
+// serializes NOTHING, joining its already-empty InitialConditions; the slice stays
+// in the composite at 0 B. Every other slice is untouched — asserted directly two
+// assertions below, so a break says which one moved.
 // ---------------------------------------------------------------------------
 
 // Serialized size of a SimulationComposite. The synced buffer writes a composite
@@ -178,15 +191,22 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
 
     // 1. THE ABSOLUTE SIZE. A diff that moves this is a wire change, and a wire
     //    change is a deliberate, versioned act (correctionStateBuffer::kWireFormatVersion).
-    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 324u,
+    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 268u,
         "The simulatableBrawler::State wire footprint moved. That is a WIRE FORMAT "
         "CHANGE: re-measure it, bump correctionStateBuffer::kWireFormatVersion if the "
         "layout (not just the size) changed, and re-price RoundVsPacketBudgetTest.cpp.");
-    REQUIRE(kComposite == 324u);
+    REQUIRE(kComposite == 268u);
 
     // 2. WHICH SLICE, so a break says what moved rather than only that something did.
     REQUIRE(syncSize<brawlerMovementSimulation::State>() == 24u);
     REQUIRE(syncSize<brawlerMovementSimulation::InitialConditions>() == 0u);
+
+    // [movement-sim task 29] The guard slice, both halves, at zero. This is the term
+    // the -56 B came out of, and pinning it HERE — beside the total — is what makes a
+    // future re-serialization of the guard read as "the guard grew" rather than as an
+    // unattributed 56 B on the composite.
+    REQUIRE(syncSize<dAttackGuardSimulation::State>() == 0u);
+    REQUIRE(syncSize<dAttackGuardSimulation::InitialConditions>() == 0u);
 
     // 3. THE HEADROOM FENCE — the one that would have caught a silent runtime OOB.
     //    Also a compile-time fence, which is the whole point: it converts a failure
@@ -202,7 +222,7 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     REQUIRE(kBufferUsed <= kStateSyncBufferBytes);
 
     WARN("simulatableBrawler::State wire footprint: composite=" << kComposite
-         << " B (was 352 B before the LinearBodyState swap; -28 B), buffer used="
+         << " B (was 324 B before the task-29 guard diet; -56 B), buffer used="
          << kBufferUsed << "/" << kStateSyncBufferBytes << " B");
 }
 
