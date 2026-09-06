@@ -59,6 +59,9 @@ static_assert(PhysicsBodyAdapter<MockPhysicsAdapter>);
 struct MockSpatialQueryAdapter
 {
     SpatialQueryReport overlap(const std::vector<QueryVolumeId>&) const { return {}; }
+    // Task 7 sweep seam. No-op: this task adds the capability only; task 12's
+    // movement-sim tests are the ones that script sweeps and record these calls.
+    SweepHit sweep(QueryVolumeId, const glm::mat4&, const glm::vec3&) const { return SweepHit{}; }
     void setVolumeParentTransform(QueryVolumeId, const glm::mat4&) {}
     void enableShape(ShapeId) {}
     void disableShape(ShapeId) {}

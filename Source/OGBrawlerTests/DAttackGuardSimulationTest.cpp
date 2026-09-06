@@ -104,6 +104,9 @@ struct MockSpatialQueryAdapter
     std::vector<ShapeId> disabled;
 
     SpatialQueryReport overlap(const std::vector<QueryVolumeId>&) const { return SpatialQueryReport{}; }
+    // Task 7 sweep seam. No-op: this task adds the capability only; task 12's
+    // movement-sim tests are the ones that script sweeps and record these calls.
+    SweepHit sweep(QueryVolumeId, const glm::mat4&, const glm::vec3&) const { return SweepHit{}; }
     void setVolumeParentTransform(QueryVolumeId, const glm::mat4&) {}
     void enableShape(ShapeId id)  { enabled.push_back(id); }
     void disableShape(ShapeId id) { disabled.push_back(id); }

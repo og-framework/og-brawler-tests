@@ -51,6 +51,9 @@ static_assert(PhysicsBodyAdapter<FMockPhysicsBodyAdapter>,
 struct FMockSpatialQueryAdapter
 {
     SpatialQueryReport overlap(const std::vector<QueryVolumeId>&) const { return {}; }
+    // Task 7 sweep seam. No-op: this task adds the capability only; task 12's
+    // movement-sim tests are the ones that script sweeps and record these calls.
+    SweepHit sweep(QueryVolumeId, const glm::mat4&, const glm::vec3&) const { return SweepHit{}; }
     void setVolumeParentTransform(QueryVolumeId, const glm::mat4&) {}
     void enableShape(ShapeId) {}
     void disableShape(ShapeId) {}
@@ -501,9 +504,20 @@ TEST_CASE("DAttack.SimulatableBrawler.DerivedStateIsOffWire", "[DAttack][Simulat
     // 6. THE DEFAULTED CONSTRUCTION STILL RUNS EACH SLICE'S OWN CONSTRUCTOR.
     //    The radial slice reserves 4 entries in each of its two hit vectors in its
     //    default ctor; a tuple that value-initialised past it would show 0.
+    //
+    //    [movement-sim task 34] RE-ANCHORED FROM size() TO capacity(), and the intent
+    //    stated above is unchanged — capacity() is a strictly better observable for it.
+    //    The ctor used to say `attackHits(4)`, which is a RESIZE, so size() happened to
+    //    read 4 and was used as the proxy for "the slice ctor ran". Those four
+    //    default-constructed entries were a live bug: dAttackRadialSimulation's
+    //    collisionCheck early-returns at `attackHits.size() >= 4`, so a fresh character
+    //    swinging on its first tick registered no hits at all (task 34). The ctor now
+    //    RESERVES, which is what the comment above always claimed it did. A tuple that
+    //    value-initialised past the slice ctor still shows 0 here — capacity 0 — so this
+    //    case still fails for exactly the reason it was written to catch.
     const simulatableBrawler::DerivedState fresh;
-    REQUIRE(fresh.get<dAttackRadialSimulation::DerivedState>().getAttackHits().size() == 4u);
-    REQUIRE(fresh.get<dAttackRadialSimulation::DerivedState>().getGuardHits().size() == 4u);
+    REQUIRE(fresh.get<dAttackRadialSimulation::DerivedState>().getAttackHits().capacity() >= 4u);
+    REQUIRE(fresh.get<dAttackRadialSimulation::DerivedState>().getGuardHits().capacity() >= 4u);
     REQUIRE_FALSE(fresh.get<brawlerInboundHit::DerivedState>().wasHitThisTick);
 }
 
