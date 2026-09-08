@@ -171,7 +171,8 @@ inline simulatableBrawler::PlayerInput composite(glm::vec2 stick, bool leftAttac
 	fields.moveStick          = stick;
 	fields.moveDirectionWorld = glm::vec3(stick.x, stick.y, 0.f);
 	return simulatableBrawler::makeSimPlayerInput(fields, leftAttack, rightAttack,
-	                                              inputSequence::kNoMatch);
+	                                              inputSequence::kNoMatch,
+	                                              simulatableBrawler::InputFlagFields{});
 }
 
 } // namespace motionsourcetests

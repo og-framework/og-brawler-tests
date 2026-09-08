@@ -13,6 +13,13 @@
 // likely to see only `::abs(int)`. If they bind the float overload HERE they bind it in
 // every richer TU in this tree, because a later include can only ADD overloads. Move
 // these below catch2 and the probe silently starts measuring catch2's include closure.
+// ⚠ [movement-sim task 17, from the task-32 review's F-2] "MINIMAL" IS RELATIVE TO THIS TU'S
+// OWN INCLUDE LIST, NOT ABSOLUTE. UBT force-includes `SharedPCH.Core….h` ahead of line 1, and
+// the reviewer compiled a TU carrying nothing but the probe assertion on this same response
+// file: it PASSES, so the PCH alone already supplies the float overload. Ordering the sim
+// header first is still the right shape — it is the leanest set this TU can choose, and a
+// later include can only ADD overloads — but it does not measure a bare `::abs(int)` world,
+// and nothing downstream may be written as if it did.
 //
 // (This is the technique task 29 established in DAttackGuardSimulationTest.cpp. Ordering
 // DAttackRadialSimulation.h before DAttackMachineSimulation.h costs nothing and changes

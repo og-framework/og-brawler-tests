@@ -12,6 +12,7 @@
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
 #include "OGBrawler/CollisionCategoryConstants.h"
+#include "BrawlerSimulationMocks.h"
 
 // ---------------------------------------------------------------------------
 // Closed-form projectile (Task 13).
@@ -26,60 +27,26 @@
 // explicit currentTick into integrate via IntegrationUtils.
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Mock physics adapter — tracks per-body transform and linear velocity.
-// BodyId.value is used as the index into the bodies vector.
-// ---------------------------------------------------------------------------
 namespace projectiletests
 {
 
-struct MockPhysicsAdapter
-{
-    struct BodyRecord
-    {
-        glm::mat4 transform{ 1.f };
-        glm::vec3 linearVelocity{ 0.f };
-    };
-
-    std::vector<BodyRecord> bodies;
-
-    explicit MockPhysicsAdapter(std::size_t bodyCount)
-        : bodies(bodyCount)
-    {}
-
-    glm::mat4 getBodyTransform(BodyId id) const            { return bodies[id.value].transform; }
-    void setBodyTransform(BodyId id, const glm::mat4& t)   { bodies[id.value].transform = t; }
-    void setBodyLinearVelocity(BodyId id, const glm::vec3& v) { bodies[id.value].linearVelocity = v; }
-    // Task 3b force seam. No-op: this task adds the capability only; task 12's
-    // movement-sim tests are the ones that record these calls.
-    void addBodyAcceleration(BodyId, const glm::vec3&) {}
-    void addBodyVelocityChange(BodyId, const glm::vec3&) {}
-    void addBodyTorque(BodyId, const glm::vec3&)           {}
-    void setBodyAngularVelocity(BodyId, const glm::vec3&)  {}
-    glm::vec3 getBodyInertiaTensor(BodyId) const           { return glm::vec3(1.f); }
-    PhysicsBodyState captureBodyState(BodyId) const        { return PhysicsBodyState{}; }
-};
-
-static_assert(PhysicsBodyAdapter<MockPhysicsAdapter>);
-
 // ---------------------------------------------------------------------------
-// Mock spatial query adapter — returns a configurable hit report.
-// Set nextReport before calling integrate to inject hits.
+// THE MOCK ADAPTERS MOVED TO `BrawlerSimulationMocks.h` [movement-sim task 12].
+//
+// They were hoisted, not rewritten: task 12 needed the SAME two mocks from a second
+// translation unit (`BrawlerMovementSimulationTest.cpp`), and a mock defined in a `.cpp`
+// cannot be reached from another one. The extensions that came with the move -- recorded
+// `setBodyTransform` / `setBodyLinearVelocity` / `addBodyAcceleration` /
+// `addBodyVelocityChange` calls, a settable `captureBodyState` return, and a scripted
+// `sweep` -- are all ADDITIVE. Every use below still reads `MockPhysicsAdapter` /
+// `MockSpatialQueryAdapter` and behaves identically: the pool tests neither set a sweep
+// script (so `sweep` still returns a miss) nor read the recorded call vectors.
+//
+// The two `static_assert`s that stood here moved with the types and now live in the
+// header, so the concept conformance is still asserted exactly once per type.
 // ---------------------------------------------------------------------------
-struct MockSpatialQueryAdapter
-{
-    SpatialQueryReport nextReport{};
-
-    SpatialQueryReport overlap(const std::vector<QueryVolumeId>&) const { return nextReport; }
-    // Task 7 sweep seam. No-op: this task adds the capability only; task 12's
-    // movement-sim tests are the ones that script sweeps and record these calls.
-    SweepHit sweep(QueryVolumeId, const glm::mat4&, const glm::vec3&) const { return SweepHit{}; }
-    void setVolumeParentTransform(QueryVolumeId, const glm::mat4&) {}
-    void enableShape(ShapeId) {}
-    void disableShape(ShapeId) {}
-};
-
-static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
+using brawlerTestMocks::MockPhysicsAdapter;
+using brawlerTestMocks::MockSpatialQueryAdapter;
 
 // ---------------------------------------------------------------------------
 // Helpers

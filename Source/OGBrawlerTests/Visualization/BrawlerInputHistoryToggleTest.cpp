@@ -52,7 +52,8 @@ static simulatableBrawler::PlayerInput makeCapture(glm::vec3 aimDirection,
 	fields.moveStick          = glm::vec2(moveDirectionWorld.x, moveDirectionWorld.y);
 	fields.moveDirectionWorld = moveDirectionWorld;
 
-	return simulatableBrawler::makeSimPlayerInput(fields, false, false, inputSequence::kNoMatch);
+	return simulatableBrawler::makeSimPlayerInput(fields, false, false, inputSequence::kNoMatch,
+	                                              simulatableBrawler::InputFlagFields{});
 }
 
 static simulatableBrawler::PlayerInput forwardCapture()

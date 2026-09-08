@@ -152,7 +152,8 @@ inline simulatableBrawler::PlayerInput cachedSampleWithAim(const glm::vec3& aim)
 	src.moveDirectionWorld = someMoveDirection();
 	return simulatableBrawler::makeSimPlayerInput(
 		simulatableBrawler::readContinuousInputFields(src),
-		/*leftAttack*/ false, /*rightAttack*/ false, inputSequence::kNoMatch);
+		/*leftAttack*/ false, /*rightAttack*/ false, inputSequence::kNoMatch,
+		simulatableBrawler::InputFlagFields{});
 }
 
 // Four render frames per 60 Hz sim tick — the AC's 4x sampling rate.
@@ -353,7 +354,8 @@ TEST_CASE("Visualization.RenderRateInputEcho.DiscreteEdgesNeverRenderEcho",
 	const std::optional<simulatableBrawler::PlayerInput> cachedWithEdges =
 		simulatableBrawler::makeSimPlayerInput(
 			simulatableBrawler::readContinuousInputFields(pressed),
-			/*leftAttack*/ true, /*rightAttack*/ true, /*triggeredActionId*/ 4242u);
+			/*leftAttack*/ true, /*rightAttack*/ true, /*triggeredActionId*/ 4242u,
+			simulatableBrawler::InputFlagFields{});
 
 	const std::optional<simulatableBrawler::PlayerInput> echoed =
 		simulatableBrawler::selectVisualizationInput(

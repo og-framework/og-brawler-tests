@@ -63,7 +63,8 @@ static simulatableBrawler::PlayerInput makeCapture(glm::vec3 aimDirection,
 	fields.moveStick          = moveStick;
 	fields.moveDirectionWorld = moveDirectionWorld;
 
-	return simulatableBrawler::makeSimPlayerInput(fields, leftAttack, rightAttack, triggeredActionId);
+	return simulatableBrawler::makeSimPlayerInput(fields, leftAttack, rightAttack, triggeredActionId,
+	                                              simulatableBrawler::InputFlagFields{});
 }
 
 // Aim along +X, so a world move along +X is Forward and along +Y is right-of-aim.
