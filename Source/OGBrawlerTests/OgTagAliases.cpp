@@ -26,7 +26,14 @@
 // to the alias spec below — that append is the only thing keeping those two counts
 // equal. Catch2 v3 expands the alias at filter-parse time, so the change is local
 // to this file.
+// [movement-sim task 12, 2026-09-06] `[BrawlerMovement]` APPENDED (12 -> 13 terms).
+// Task 11 shipped an "ADDING A MOVEMENT MODEL" instruction telling authors to tag
+// movement cases `[BrawlerMovement]` while the tag was NOT in this whitelist, so every
+// case written under it would have been selected by a direct `exe "[BrawlerMovement]"`
+// call and INVISIBLE to `[@og]` -- green suite, zero coverage. The append and the first
+// cases under the tag land in the same diff, deliberately: the register is what makes
+// the case-count delta a measurement rather than a coincidence.
 CATCH_REGISTER_TAG_ALIAS("[@og]",
-    "[DAttack],[CharacterViz],[SimulatableBrawler],[SimulationComposite],[SimulationIntegrationExecutor],[SimulationNetSync],[SimulationReconciliation],[InputSequence],[BrawlerProjectile],[InputPackaging],[PacketBudget],[attackdirection]")
+    "[DAttack],[CharacterViz],[SimulatableBrawler],[SimulationComposite],[SimulationIntegrationExecutor],[SimulationNetSync],[SimulationReconciliation],[InputSequence],[BrawlerProjectile],[InputPackaging],[PacketBudget],[attackdirection],[BrawlerMovement]")
 
 #endif // WITH_LOW_LEVEL_TESTS

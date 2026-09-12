@@ -296,15 +296,43 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     // them is a wire change, and a wire change must be a deliberate, versioned act.
     REQUIRE(relayedInputRing::kHeaderBytes == 2u);
     REQUIRE(correctionStateBuffer::kHeaderBytes == 8u);
-    REQUIRE(ringWireBytes(1u) == 85u);
-    // [movement-sim T1 -> T5, 2026-09-02] 311 -> 363 -> 335 B, and 335 is the
-    // SETTLED figure. T1 appended the movement sub-sim's State carrying a placeholder
-    // 52 B PhysicsBodyState (composite 300 -> 352 B); T5 swapped that slice to the
-    // 24 B LinearBodyState (composite 352 -> 324 B, -28 B). 335 = 1 (version)
-    // + 2 (used count) + 8 (correction header) + 324 (composite). The composite's own
-    // absolute size and its headroom against FSimulationStateSyncBuffer::kBufferBytes
-    // are fenced in SimulatableBrawlerTest.cpp's WireFootprint case.
-    REQUIRE(kStateWireBytes == 335u);
+    // [movement-sim task 11, 2026-09-06] 85 -> 86 B. The movement sub-sim's PlayerInput
+    // gained `holdGuard` as a `bool` member, so the INPUT composite went 76 -> 77 B and the
+    // per-entry stride with it (81 -> 82). This is the first movement-sim task to move the
+    // ring term at all: T1/T5/T29 all moved the STATE wire and left the input untouched.
+    //
+    // [movement-sim task 51, 2026-09-06] RE-QUOTED UNCHANGED at 86 B, and that is the whole
+    // result of the task. `PlayerInput` went from a `bool` member to `uint8_t flags`, with
+    // holdGuard as bit 0 and bits 1-7 reserved for wall-grab (20), jump (21), dash (31) and
+    // ski-tuck (48). `bool` and `uint8_t` are both 1 B, so the input composite is still 77 B,
+    // the entry stride is still 82 B and this line still reads 86. The four future signals
+    // now cost ZERO further ring bytes instead of ~10.264 B of margin each.
+    REQUIRE(ringWireBytes(1u) == 86u);
+    // [movement-sim T1 -> T5, 2026-09-02] 311 -> 363 -> 335 B. T1 appended the
+    // movement sub-sim's State carrying a placeholder 52 B PhysicsBodyState
+    // (composite 300 -> 352 B); T5 swapped that slice to the 24 B LinearBodyState
+    // (composite 352 -> 324 B, -28 B).
+    //
+    // [movement-sim T29, 2026-09-04] 335 -> 279 B. The guard sub-simulation went
+    // entirely off the wire (composite 324 -> 268 B, -56 B: a 4 B phantom timer and
+    // a 52 B derivable body state). 279 = 1 (version) + 2 (used count) + 8
+    // (correction header) + 268 (composite). The composite's own absolute size and
+    // its headroom against FSimulationStateSyncBuffer::kBufferBytes are fenced in
+    // SimulatableBrawlerTest.cpp's WireFootprint case.
+    //
+    // [movement-sim task 11, 2026-09-06] 279 -> 320 B. The movement sub-simulation stopped
+    // being a skeleton: its State went 24 -> 49 B (bodyState 24 + a sim-owned velocity 12 +
+    // committedStepDir 8 + stepStartTick 4 + flags 1, per ruling #17 b) and its
+    // InitialConditions 0 -> 16 B (the teleport seed), so the composite went 268 -> 309 B.
+    // 320 = 1 (version) + 2 (used count) + 8 (correction header) + 309 (composite).
+    //
+    // [movement-sim task 50, 2026-09-06] 320 -> 332 B, and the INPUT wire DOES NOT MOVE:
+    // `ringWireBytes(1u)` above is re-quoted UNCHANGED at 86 B. The movement sub-simulation's
+    // `State::positionCmd` went from off-wire scratch onto the wire (+12 B, slice 49 -> 61,
+    // composite 309 -> 321) because a correction restores by whole-struct assignment over a
+    // default-constructed state, which zeroed the one operand step 6' cannot re-derive.
+    // 332 = 1 (version) + 2 (used count) + 8 (correction header) + 321 (composite).
+    REQUIRE(kStateWireBytes == 332u);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,14 +357,34 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     REQUIRE(roundBytes(kTargetCharacters, kP99Entries) > kUsableSingleBunchBytes);
 
     // ...and the boundary is where the arithmetic says, not merely "somewhere
-    // above 1". At six characters the rings alone at two entries are 5 x 173 = 865 B,
-    // which leaves no room for a state (342 B) inside 952 B.
-    REQUIRE(ringWireBytes(2u) == 166u);
+    // above 1". At six characters the rings alone at two entries are 5 x 175 = 875 B,
+    // which leaves no room for a state (327 B) inside 952 B.
+    // [movement-sim task 51, 2026-09-06] RE-QUOTED UNCHANGED at 168 B: the flags re-layout
+    // is 1 B for 1 B, so neither the stride nor any multiple of it moved.
+    // [movement-sim task 11, 2026-09-06] 166 -> 168 B (2 x the 81 -> 82 B entry stride);
+    // the state batch is 327 B, not 342. Both terms moved, and the row's conclusion is
+    // unchanged and now holds by a wider margin.
+    REQUIRE(ringWireBytes(2u) == 168u);
     // [movement-sim T1 -> T5, 2026-09-02] 1192 -> 1244 -> 1216 B, all of it the state
     // term (318 -> 370 -> 342 B batched). The ring term never moved: the movement
-    // sub-sim's PlayerInput slice is empty, so this task changed the STATE wire and
+    // sub-sim's PlayerInput slice is empty, so that task changed the STATE wire and
     // not the INPUT wire at all.
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1216u);
+    // [movement-sim T29, 2026-09-04] 1216 -> 1160 B, again all state term
+    // (342 -> 286 B batched), and again with the ring term untouched — the guard's
+    // PlayerInput still carries its aim, only its State left the wire.
+    // [movement-sim task 11, 2026-09-06] 1160 -> 1211 B, and this is the FIRST movement-sim
+    // task to move BOTH terms: the state batch 286 -> 327 B (+41, the composite growth) and
+    // the ring term 5 x (166+7) -> 5 x (168+7) = +10, because the movement PlayerInput
+    // stopped being empty. 1211 = 875 (rings) + 327 (state batch) + 9 (per-packet overhead).
+    // The row's conclusion — six characters at two entries does not fit 952 B — is
+    // unchanged and now holds by 259 B instead of 208 B.
+    // [movement-sim task 50, 2026-09-06] 1211 -> 1223 B, and ALL of it is the state term
+    // (327 -> 339 B batched, the +12 B of `positionCmd`). The ring term is UNTOUCHED at
+    // 5 x (168+7) = 875 B — this task moves the STATE wire and not one input byte, which is
+    // the constraint the ordinary-join table below is now only ~2.5 input bytes away from.
+    // 1223 = 875 (rings) + 339 (state batch) + 9 (per-packet overhead); the conclusion is
+    // unchanged and now holds by 271 B.
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1223u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will
@@ -407,7 +455,37 @@ TEST_CASE("PacketBudget: the shipped round leaves the margin the PIE gate is set
 // THE SCENARIO THAT DECIDES IT is an ORDINARY JOIN: the joining character's ring at
 // the stage cap while everyone else sits at the measured steady average. It needs no
 // server hitch and no correlated burst — it happens every time somebody connects.
-// N = 4 clears it with about nine tenths of one entry to spare; N = 5 does not.
+// N = 4 clears it with about five sixths of one entry to spare; N = 5 does not.
+//
+// [movement-sim task 11, 2026-09-06] ⭐⭐ THE INPUT WIRE IS THE SCARCE ONE, AND THE NUMBER
+// IS SMALL. Task 11's `PlayerInput::holdGuard` moved the entry stride 81 -> 82 B, and the
+// margin at the cap went **78.616 -> 68.352 B = 0.970 -> 0.833 entries** -- hence "nine
+// tenths" becoming "five sixths" above. Nothing is red and both guards below still hold,
+// but the arithmetic underneath is the load-bearing part:
+//   * `:472` guards `margin > half an entry` -- a floor that is now **41.0 B** against a
+//     margin of **68.352 B**, so **27.352 B of slack**.
+//   * One byte of INPUT composite costs **10.264 B of margin**, because it is multiplied
+//     across every ring entry in the scenario (8 join-burst + 2 x 1.132 average = 10.264
+//     entries at N = 4). An input byte is roughly **TEN TIMES more expensive than a state
+//     byte**, which costs nothing here at all -- this row prices rings ONLY.
+//   * The half-entry floor itself rises 0.5 B per stride byte, so net closure is
+//     **10.764 B per input byte**.
+//   * ⛔ **27.352 / 10.764 = 2.54 -- TWO more bytes of input wire and `:472` goes RED.**
+// `holdGuard` is a single `bool` and it consumed A QUARTER of the entire remaining input
+// budget. ⭐ STANDING RULE, recorded at the "ADDING A MOVEMENT MODEL" block in
+// `OGBrawler/BrawlerMovementSimulation.h`: future per-tick input fields go in as BITS IN AN
+// EXISTING FLAGS BYTE, never as new `bool` members. Jump (21), dash (31), wall-grab (20) and
+// ski-tuck (48) as four separate bools would blow this fence twice over; as four bits in one
+// byte they cost nothing beyond what `holdGuard` already spent.
+//
+// ⭐⭐ [movement-sim task 51, 2026-09-06] THE FLAGS BYTE NOW EXISTS, AND NONE OF THE
+// ARITHMETIC ABOVE MOVED. `brawlerMovementSimulation::PlayerInput` is `uint8_t flags` with
+// holdGuard as bit 0 and bits 1-7 reserved for exactly those four tasks. `bool` -> `uint8_t`
+// is 1 B for 1 B, so the entry stride is still 82 B, `ringWireBytes(1u)` is still 86 B, and
+// the margin at the cap is still 68.352 B with 27.352 B of slack over the half-entry floor.
+// The four coming signals are now free at this fence rather than ~10.264 B of margin each,
+// which is what turns "2.54 more input bytes, ever" into a budget the roadmap fits inside.
+// The rule is no longer advisory: the type it names has nowhere to put a new `bool`.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("PacketBudget: the pre-diet cap is 4, and it is where join-alone crosses the bound",
@@ -470,20 +548,72 @@ TEST_CASE("PacketBudget: at the cap the whole round fits on average AND at corre
     REQUIRE(kShippedRotationK == 1u);
 }
 
-TEST_CASE("PacketBudget: K=2 pre-diet does NOT fit at the cap — the other half of the reorder condition",
+TEST_CASE("PacketBudget: the K=2 round at the cap does NOT fit — the premise K=1 shipped on holds again",
           "[PacketBudget][InputFirstReplication]")
 {
-    // The second inverted row. T38 §16.2's argument for K=1 is Iris's huge-object
-    // window, which this target cannot model (it is an engine control-flow fact
-    // about `HandleObjectBatchFailure`, not an arithmetic one). What CAN be asserted
-    // here is the necessary condition underneath it: at four characters a K=2 round
-    // does not fit one packet even on an AVERAGE frame, so a second state batch is
-    // attempted-and-failed on essentially every frame — which is precisely the
-    // situation in which the window's 192-316 B fork gets reached.
+    // ⭐ THIS ROW WAS AN INVERTED POSITIVE CONTROL AND IT HAS NOW FIRED. Read the
+    // history before changing it again — the whole point of this case is that the
+    // reasoning it retired stays legible.
     //
-    // So this row does not prove §16.2. It proves the premise §16.2 reasons from,
-    // and it goes red the moment the diet makes that premise false — which is the
-    // signal that K may return to 2.
+    // WHAT IT USED TO ASSERT, AND WHY. T38 §16.2's argument for shipping K=1 is
+    // Iris's huge-object window, which this target cannot model (that is an engine
+    // control-flow fact about `HandleObjectBatchFailure`, not an arithmetic one).
+    // What COULD be asserted here was the necessary condition underneath it: at four
+    // characters a K=2 round did not fit one packet even on an AVERAGE frame, so a
+    // second state batch was attempted-and-failed on essentially every frame — which
+    // is precisely the situation in which the window's 192-316 B fork gets reached.
+    // So this row never proved §16.2; it proved the PREMISE §16.2 reasons from, and
+    // it was written to go red the moment a diet made that premise false — which is
+    // the signal that K may return to 2.
+    //
+    // ⭐ [movement-sim T29, 2026-09-04] THE DIET LANDED AND THE PREMISE WENT FALSE,
+    // measured. Task 29 took the guard sub-simulation's State entirely off the wire
+    // (composite 324 -> 268 B, -56 B), which moved kStateBatchBytes 342 -> 286 B and
+    // this round from 1001.076 B — over a 952 B bunch by 49.076 B, where it had sat
+    // red since the row was written — to 889.076 B, CLEARING by 62.924 B. The
+    // comparison was therefore inverted to `<=` to record that measurement rather
+    // than to keep asserting a falsehood.
+    //
+    // ⭐⭐ [movement-sim task 11, 2026-09-06] AND NOW IT IS TRUE AGAIN, measured. The
+    // movement sub-simulation stopped being a skeleton: its State went 24 -> 49 B and
+    // its InitialConditions 0 -> 16 B (composite 268 -> 309 B, +41 B), and its
+    // PlayerInput gained one byte, which moved the ring entry stride 81 -> 82 B. Both
+    // terms grew, so this round went 889.076 -> 974.472 B — OVER the 952 B bunch by
+    // 22.472 B. `kStateBatchBytes` is 327 B, not 286.
+    //
+    // ⛔ THE COMPARISON IS THEREFORE BACK TO ITS ORIGINAL `>` FORM, and the case name
+    // with it. This is NOT a fence being flipped to hide a failure: `>` is the
+    // direction this row was WRITTEN in, the direction that is measured true today,
+    // and the direction that goes red the moment a future diet clears it — which is
+    // exactly the alarm it exists to raise. Task 29's `<=` recorded a fact that was
+    // true for two days. Both measurements are kept above so the swing is legible.
+    //
+    // ⛔ SO K=2 IS OFF THE TABLE ON ARITHMETIC ALONE AGAIN, at N=4. K is still 1:
+    // `TimeConfig::correctionRotationK` is untouched by task 11 and the preceding case
+    // still asserts `kShippedRotationK == 1u` truthfully. Note that the arithmetic
+    // objection was never the ONLY one — §16.2 also rested on the Iris huge-object
+    // window, an engine fact this target cannot model — so this row returning to red
+    // restores a sufficient objection, not merely a necessary one.
+    //
+    // ⚠ FOR THE LEAD: the shipped K=1 configuration is UNAFFECTED and still clears at
+    // every N up to the cap on both the average and the correlated-p99 frame (the
+    // preceding case, all green). What task 11 consumed is the hypothetical-K=2
+    // headroom that task 29 had opened.
+    //
+    // ⭐ [movement-sim task 50, 2026-09-06] MEASURED A FOURTH TIME, AND THE DIRECTION IS
+    // UNCHANGED. `kStateBatchBytes` 327 -> 339 B (+12, `positionCmd` onto the wire), so the
+    // N=4 round goes 974.472 -> 998.472 B against a 952 B bunch — OVER by 46.472 B where
+    // task 11 left it over by 22.472. The `>` comparison below stays the direction the row
+    // was written in and the direction that is measured true. The four historical
+    // measurements are all preserved above: 1001.076 B (as the row was first written, red)
+    // -> 889.076 (T29's -56 B diet, cleared) -> 974.472 (task 11, red again) -> 998.472
+    // (task 50, red by a further 24 B).
+    // ⛔ The row is NOT restructured — that is task 28's job. The N=3 arm below still
+    // clears: 2 x 339 B of state now, 894.648 B against 952.
+    //
+    // ⚠ Note the literal `2ull` below: this row prices a HYPOTHETICAL K=2 round and
+    // is deliberately independent of the configured `kShippedRotationK`. Changing the
+    // config does not change this arithmetic by a single byte.
     const std::uint64_t avgRingsAtCap = ringsOnlyBytesX1000(4u, 3u * kAvgEntriesX1000);
     INFO("N=4 K=2 avgRound(x1000)=" << (avgRingsAtCap + 2ull * kStateBatchBytes * 1000ull)
          << " budget(x1000)=" << kBudgetX1000);
@@ -497,8 +627,24 @@ TEST_CASE("PacketBudget: K=2 pre-diet does NOT fit at the cap — the other half
     // behind `[!shouldfail]` rather than inverting the claim; T5's LinearBodyState
     // swap took kStateBatchBytes 370 -> 342 B and this round to 898.384 B, clearing
     // by 53.616 B. The tag and its comment block are gone and the `<=` below is live
-    // again. The row above (N=4) stayed red throughout — 1001.076 B, still over by
-    // 49.076 B — so the positive control this case exists for never lapsed.
+    // again. The row above (N=4) stayed red from then until movement-sim task 29 —
+    // 1001.076 B, over by 49.076 B — so the positive control this case exists for
+    // never lapsed while the premise it guarded was still true.
+    //
+    // [movement-sim T29, 2026-09-04] This arm was ALREADY clearing and still is; the
+    // diet only widened its margin, 898.384 -> 786.384 B (214.384 B of rings plus
+    // 2 x 286 B of state), so nothing here needed re-pointing. The N=4 arm above is
+    // the one task 29 flipped.
+    //
+    // [movement-sim task 11, 2026-09-06] This arm STILL clears, which is what makes the
+    // N=4 arm above a boundary rather than a blanket failure: task 11's growth narrows
+    // this margin (2 x 327 B of state now, and a slightly wider ring term) without
+    // crossing it. One character fewer is the whole difference.
+    //
+    // [movement-sim task 50, 2026-09-06] STILL clears, and by a margin worth recording:
+    // 2 x 339 B of state now, so 870.648 -> 894.648 B against the 952 B bunch, clearing
+    // by 57.352 B. The N=4 arm above went the other way in the same edit (974.472 ->
+    // 998.472, over by 46.472), which is what keeps this pair a BOUNDARY.
     const std::uint64_t avgRingsAtThree = ringsOnlyBytesX1000(3u, 2u * kAvgEntriesX1000);
     INFO("N=3 K=2 avgRound(x1000)=" << (avgRingsAtThree + 2ull * kStateBatchBytes * 1000ull)
          << " budget(x1000)=" << kBudgetX1000);

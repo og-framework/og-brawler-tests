@@ -68,7 +68,8 @@ TEST_CASE("Sim and visualization packers agree on every continuous field", "[Inp
 
 	const simulatableBrawler::PlayerInput sim =
 		simulatableBrawler::makeSimPlayerInput(fields, src.leftAttack, src.rightAttack,
-		                                       src.triggeredActionId);
+		                                       src.triggeredActionId,
+		                                       simulatableBrawler::InputFlagFields{});
 	const simulatableBrawler::PlayerInput viz =
 		simulatableBrawler::makeVisualizationPlayerInput(fields);
 
@@ -90,7 +91,8 @@ TEST_CASE("Discrete fields are allowed to differ, and do", "[InputPackaging][Vis
 
 	const simulatableBrawler::PlayerInput sim =
 		simulatableBrawler::makeSimPlayerInput(fields, src.leftAttack, src.rightAttack,
-		                                       src.triggeredActionId);
+		                                       src.triggeredActionId,
+		                                       simulatableBrawler::InputFlagFields{});
 	const simulatableBrawler::PlayerInput viz =
 		simulatableBrawler::makeVisualizationPlayerInput(fields);
 
@@ -126,7 +128,8 @@ TEST_CASE("Agreement holds when the sim path carries no discrete input", "[Input
 		simulatableBrawler::readContinuousInputFields(src);
 
 	const simulatableBrawler::PlayerInput sim =
-		simulatableBrawler::makeSimPlayerInput(fields, false, false, inputSequence::kNoMatch);
+		simulatableBrawler::makeSimPlayerInput(fields, false, false, inputSequence::kNoMatch,
+		                                       simulatableBrawler::InputFlagFields{});
 	const simulatableBrawler::PlayerInput viz =
 		simulatableBrawler::makeVisualizationPlayerInput(fields);
 

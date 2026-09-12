@@ -1005,15 +1005,28 @@ namespace
     // Force this character's PREDICTED state to differ from the value-initialised
     // state a correction carries, so the next correction DISAGREES.
     //
-    // `attackTimer` is used because it is in dAttackGuardSimulation::State's
-    // SerializableFields, and isSimilarTo folds over exactly those — `testTick`,
-    // the other obvious candidate, is NOT serialized and is therefore invisible to
-    // the comparison. Must run BEFORE the predictTick that commits the slot.
-    void divergeState(ResimRig& rig, unsigned int id, float attackTimer)
+    // THE ONE PROPERTY THIS FIELD NEEDS is that it is in the sub-simulation's
+    // SerializableFields, because isSimilarTo folds over exactly those and nothing
+    // else — a field outside them is invisible to the comparison and the probe would
+    // report agreement on every correction. Must run BEFORE the predictTick that
+    // commits the slot.
+    //
+    // [movement-sim task 29] RE-POINTED from dAttackGuardSimulation::State::
+    // attackTimer, which no longer exists: task 29 took the guard's whole State off
+    // the wire (empty SerializableFields, -56 B), so no guard field can carry a
+    // divergence any more. brawlerMovementSimulation::State::bodyState is a
+    // LinearBodyState and `position` is one of its two serialized members, so it
+    // satisfies the property above exactly as attackTimer did.
+    //
+    // ⚠ It also has to SURVIVE until the commit, and it does for the same reason
+    // attackTimer did: predictTick() runs collectInputAll + allocateFrontierSlotsAll
+    // + postPredictionAll and never calls integrate or the post-solve body capture,
+    // so nothing in this rig writes a body state between the mutation and the slot.
+    void divergeState(ResimRig& rig, unsigned int id, float divergentValue)
     {
         rig.storage.get<SimulatableBrawler>(id)
             .editAllState().editState()
-            .edit<dAttackGuardSimulation::State>().attackTimer = attackTimer;
+            .edit<brawlerMovementSimulation::State>().bodyState.position.x = divergentValue;
     }
 }
 
@@ -1094,14 +1107,14 @@ TEST_CASE("DAttack.SimulationNetSync.CorrectionVerdictProbeCarriesTheRealDiverge
 
     // AND THE DISAGREEMENT IS THE SAME EVENT THE SIMULATION ACTED ON. The cache
     // overwrites the slot only when isSimilarTo said no, so restoring tick 2 must
-    // now hand back the AUTHORITY's attackTimer (0), not the 25 this client
-    // predicted. If the reported verdict could ever drift from the overwrite
-    // decision, this is the assertion that would notice — the telemetry would
-    // otherwise be free to describe a divergence the simulation never acted on.
+    // now hand back the AUTHORITY's value (0), not the 25 this client predicted. If
+    // the reported verdict could ever drift from the overwrite decision, this is the
+    // assertion that would notice — the telemetry would otherwise be free to describe
+    // a divergence the simulation never acted on.
     rig.reconciliation.prepareResimAll(2u);
     REQUIRE(rig.storage.get<SimulatableBrawler>(98u)
                 .getAllState().getState()
-                .get<dAttackGuardSimulation::State>().attackTimer == 0.f);
+                .get<brawlerMovementSimulation::State>().bodyState.position.x == 0.f);
 
     rig.netSync.unregisterSimulatable<SimulatableBrawler>(97u, &local, rig.inputResolution);
     rig.netSync.unregisterSimulatable<SimulatableBrawler>(98u, &remote, rig.inputResolution);
@@ -1296,11 +1309,11 @@ TEST_CASE("DAttack.SimulationNetSync.LandingProbeIsPurelyObservational",
     REQUIRE(rig.netSync.getDiagnostics().correctionVerdictProbe().disagreementsFor(
                 PredictedCharacterClass::RemoteProxy) == 1u);
     // ...and the cache still overwrote the slot, so a restore hands back the
-    // AUTHORITY's attackTimer (0) and not the 25 this client predicted.
+    // AUTHORITY's value (0) and not the 25 this client predicted.
     rig.reconciliation.prepareResimAll(2u);
     REQUIRE(rig.storage.get<SimulatableBrawler>(198u)
                 .getAllState().getState()
-                .get<dAttackGuardSimulation::State>().attackTimer == 0.f);
+                .get<brawlerMovementSimulation::State>().bodyState.position.x == 0.f);
 
     rig.netSync.unregisterSimulatable<SimulatableBrawler>(198u, &remote, rig.inputResolution);
 }
