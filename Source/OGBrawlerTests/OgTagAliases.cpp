@@ -33,7 +33,18 @@
 // call and INVISIBLE to `[@og]` -- green suite, zero coverage. The append and the first
 // cases under the tag land in the same diff, deliberately: the register is what makes
 // the case-count delta a measurement rather than a coincidence.
+// [ringout task 1, 2026-09-13] `[BrawlerRingout]` APPENDED (13 -> 14 terms), in the SAME diff
+// as the first cases carrying it — which is what makes the case-count delta a measurement
+// rather than a coincidence, exactly as the movement append above recorded.
+//
+// ⭐ MEASURED ON THIS TREE, AND THE ISOLATION ARM IS THE PART THAT MATTERS. With
+// `BrawlerRingoutSimulationTest.cpp` compiled in and its 8 cases PASSING on a direct
+// `exe "[BrawlerRingout]"` call (130 assertions), `[@og]` still reported 466 / 11888 while
+// this term was absent — the whitelist really does hide them, it is not merely undocumented.
+// With the term: 474 / 12018, i.e. exactly the +8 cases and +130 assertions of the direct run.
+// Appending the tag in a LATER diff than the cases would have left those eight green,
+// passing, and never executed by anything CI runs.
 CATCH_REGISTER_TAG_ALIAS("[@og]",
-    "[DAttack],[CharacterViz],[SimulatableBrawler],[SimulationComposite],[SimulationIntegrationExecutor],[SimulationNetSync],[SimulationReconciliation],[InputSequence],[BrawlerProjectile],[InputPackaging],[PacketBudget],[attackdirection],[BrawlerMovement]")
+    "[DAttack],[CharacterViz],[SimulatableBrawler],[SimulationComposite],[SimulationIntegrationExecutor],[SimulationNetSync],[SimulationReconciliation],[InputSequence],[BrawlerProjectile],[InputPackaging],[PacketBudget],[attackdirection],[BrawlerMovement],[BrawlerRingout]")
 
 #endif // WITH_LOW_LEVEL_TESTS
