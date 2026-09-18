@@ -307,6 +307,29 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     // ski-tuck (48). `bool` and `uint8_t` are both 1 B, so the input composite is still 77 B,
     // the entry stride is still 82 B and this line still reads 86. The four future signals
     // now cost ZERO further ring bytes instead of ~10.264 B of margin each.
+    //
+    // ⭐⭐ [ringout task 2, 2026-09-13] RE-QUOTED UNCHANGED AT 86 B, AND THAT IS THE POINT OF
+    // THE LINE, NOT AN ASIDE. This task appended a SIXTH slice to
+    // `simulatableBrawler::PlayerInput` — `brawlerRingout::PlayerInput` — and the number did
+    // not move, because that type has ZERO FIELDS and an EMPTY `SerializableFields` tuple.
+    // The input composite is still 77 B, the entry stride is still 82 B, and this line still
+    // reads 86.
+    //
+    // WHY IT COULD NOT HAVE MOVED, stated so the re-quote is a check and not a ritual: ring-
+    // out takes no per-tick player signal at all. Death is POSITIONAL (the movement sub-sim's
+    // solved body Z against an authored kill plane) and respawn is a TICK COUNTDOWN
+    // (`State::respawnAtTick`, compared against the current tick). There is nothing for a
+    // player to press, so there is nothing for the slice to carry. It exists only because
+    // `ValidDependencies` requires every sub-sim to name a `Dependencies::InputType`, and the
+    // ownership validator treats that type as OWNED — naming a neighbour's input there
+    // reports an `OwnershipOverlap` instead.
+    //
+    // ⛔ THIS IS THE FENCE THAT WOULD CATCH THE MISTAKE. A field added to
+    // `brawlerRingout::PlayerInput` would cost ~10.264 B of margin per byte against the
+    // ~27.352 B of slack in the ordinary-join table at the bottom of this file — roughly ten
+    // times what a STATE byte costs, because an input byte is multiplied across every entry
+    // of every remote ring. The whole ring-out state increment cost 9 STATE bytes; three
+    // input bytes would have cost more margin than all nine.
     REQUIRE(ringWireBytes(1u) == 86u);
     // [movement-sim T1 -> T5, 2026-09-02] 311 -> 363 -> 335 B. T1 appended the
     // movement sub-sim's State carrying a placeholder 52 B PhysicsBodyState
@@ -332,7 +355,34 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     // composite 309 -> 321) because a correction restores by whole-struct assignment over a
     // default-constructed state, which zeroed the one operand step 6' cannot re-derive.
     // 332 = 1 (version) + 2 (used count) + 8 (correction header) + 321 (composite).
-    REQUIRE(kStateWireBytes == 332u);
+    //
+    // [movement-sim task 27, 2026-09-12] 332 -> 337 B, and the INPUT wire DOES NOT MOVE:
+    // `ringWireBytes(1u)` above is re-quoted UNCHANGED at 86 B and the entry stride at 82 B.
+    // `dAttackMachineSimulation::State` gained `m_hitReaction` (1 B) and `m_flinchDuration`
+    // (4 B) — the slice 16 -> 21 B, composite 321 -> 326 B — because the hit REACTION and its
+    // per-attack DWELL are read on every tick of a flinch and must survive a correction. The
+    // hit SIGNAL itself stays off-wire (brawlerInboundHit::DerivedState), so not one input byte
+    // moved, which matters: the ordinary-join table below has ~2.5 input bytes of margin left.
+    // 337 = 1 (version) + 2 (used count) + 8 (correction header) + 326 (composite).
+    //
+    // [ringout task 2, 2026-09-13] 337 -> 346 B, and the INPUT wire DOES NOT MOVE:
+    // `ringWireBytes(1u)` above is re-quoted UNCHANGED at 86 B and the entry stride at 82 B.
+    // The slice that moved is a WHOLE NEW SUB-SIMULATION rather than a neighbour growing:
+    // `brawlerRingout::InitialConditions` (4 B — `spawnSlot`, the authority's per-character
+    // spawn-point index) and `brawlerRingout::State` (5 B — the dead bit plus the absolute
+    // `respawnAtTick`) are APPENDED to the composite, 326 -> 335 B. Both ride the wire
+    // because a death and its respawn must REPLAY IDENTICALLY under resim: a recomputed
+    // spawn slot can differ between peers, and a correction that dropped `respawnAtTick`
+    // would resume a countdown whose end nobody knows. The death EDGE itself
+    // (`brawlerRingout::DerivedState::diedThisTick`) stays OFF-wire, which is what keeps the
+    // authority-side score award from firing twice on one death.
+    // 346 = 1 (version) + 2 (used count) + 8 (correction header) + 335 (composite).
+    //
+    // ⚠ THE ROUND STILL FITS, but the state side is where the remaining slack now is: the
+    // correction buffer is at 343/384 B, 41 B of headroom, down from 50 (measured —
+    // `SimulatableBrawlerTest.cpp`, `DAttack.SimulatableBrawler.WireFootprint`). The
+    // `static_assert` in the case body above is what prices this against the packet.
+    REQUIRE(kStateWireBytes == 346u);
 }
 
 // ---------------------------------------------------------------------------
@@ -384,7 +434,22 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     // the constraint the ordinary-join table below is now only ~2.5 input bytes away from.
     // 1223 = 875 (rings) + 339 (state batch) + 9 (per-packet overhead); the conclusion is
     // unchanged and now holds by 271 B.
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1223u);
+    // [movement-sim task 27, 2026-09-12] 1223 -> 1228 B, and ALL of it is the state term
+    // (339 -> 344 B batched, the +5 B of the machine's reaction kind and flinch dwell). The
+    // ring term is UNTOUCHED at 5 x (168+7) = 875 B. 1228 = 875 + 344 + 9; the conclusion is
+    // unchanged and now holds by 276 B.
+    // [ringout task 2, 2026-09-13] 1228 -> **1237 B**, and ALL of it is the state term
+    // (344 -> 353 B batched, the +9 B of the two `brawlerRingout` state slices). The ring
+    // term is UNTOUCHED at 5 x (168+7) = 875 B, and `ringWireBytes(2u) == 168u` above is
+    // RE-QUOTED UNCHANGED for the same reason `ringWireBytes(1u) == 86u` is in the case
+    // before this one: ring-out's `PlayerInput` has zero fields, so this task moved the
+    // STATE wire and not one input byte. 1237 = 875 + 353 + 9; the conclusion — six
+    // characters at two entries does not fit 952 B — is unchanged and now holds by 285 B.
+    // ⚠ This fence is an EQUALITY on a NEGATIVE control, so unlike the inequality rows it
+    // must be re-quoted on every wire change even though its verdict never moves. It is the
+    // fourth state-side fence this task had to repair and the one no brief named — it turned
+    // up by running the suite, not by reading the file list.
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1237u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will
@@ -611,6 +676,18 @@ TEST_CASE("PacketBudget: the K=2 round at the cap does NOT fit — the premise K
     // ⛔ The row is NOT restructured — that is task 28's job. The N=3 arm below still
     // clears: 2 x 339 B of state now, 894.648 B against 952.
     //
+    // ⭐ [movement-sim task 27, 2026-09-12] MEASURED A FIFTH TIME, DIRECTION UNCHANGED.
+    // `kStateBatchBytes` 339 -> 344 B (+5, the machine's `m_hitReaction` + `m_flinchDuration`),
+    // so the N=4 round goes 998.472 -> 1008.472 B against a 952 B bunch — OVER by 56.472 B
+    // where task 50 left it over by 46.472. Measured, not asserted: the `>` below is still the
+    // direction the row was written in and still the direction that is true.
+    //
+    // ⭐ [ringout task 2, 2026-09-13] MEASURED A SIXTH TIME, DIRECTION UNCHANGED.
+    // `kStateBatchBytes` 344 -> 353 B (+9, the two `brawlerRingout` state slices), so the
+    // N=4 round goes 1008.472 -> **1026.472 B** against a 952 B bunch — OVER by 74.472 B
+    // where task 27 left it over by 56.472. Measured, not computed: read off this case's own
+    // INFO under `--success`, which is also how the N=3 correction below was found.
+    //
     // ⚠ Note the literal `2ull` below: this row prices a HYPOTHETICAL K=2 round and
     // is deliberately independent of the configured `kShippedRotationK`. Changing the
     // config does not change this arithmetic by a single byte.
@@ -645,6 +722,24 @@ TEST_CASE("PacketBudget: the K=2 round at the cap does NOT fit — the premise K
     // 2 x 339 B of state now, so 870.648 -> 894.648 B against the 952 B bunch, clearing
     // by 57.352 B. The N=4 arm above went the other way in the same edit (974.472 ->
     // 998.472, over by 46.472), which is what keeps this pair a BOUNDARY.
+    //
+    // [movement-sim task 27, 2026-09-12] STILL clears, and the margin is now THIN: 2 x 344 B
+    // of state, 894.648 -> 904.648 B against the 952 B bunch, clearing by 47.352 B. At the
+    // measured 5 B per state byte in this row, ~9 more state bytes close it. ⚠ THE ROW IS
+    // MEASURED, NOT RE-AIMED — task 28's K=2 restructure is where a crossing gets handled.
+    //
+    // ⭐⭐ [ringout task 2, 2026-09-13] STILL CLEARS — AND IT IS EXACTLY THE 9 STATE BYTES THE
+    // LINE ABOVE PREDICTED WOULD CLOSE IT. Measured: 2 x 353 B of state, 904.648 ->
+    // **922.648 B** against the 952 B bunch, clearing by **29.352 B**. The prediction was
+    // wrong, and wrong in a way worth leaving on the record rather than quietly deleting:
+    // this row carries TWO correction states and no state term anywhere else, so a state
+    // byte costs **2 B** of this round, not the ~5 B task 27 read off. 9 x 2 = 18, and
+    // 47.352 - 18 = 29.352 as measured. The 5 came from dividing a multi-term delta by the
+    // state bytes in it; the right divisor is the literal `2ull` below.
+    // ⚠ At the true 2 B per state byte there is room for ~14 more state bytes here before
+    // this arm crosses. That is the number the next sub-simulation should budget against,
+    // and it is SMALLER than the correction buffer's own 41 B of headroom — this row, not
+    // `kBufferBytes`, is the binding constraint on state growth now.
     const std::uint64_t avgRingsAtThree = ringsOnlyBytesX1000(3u, 2u * kAvgEntriesX1000);
     INFO("N=3 K=2 avgRound(x1000)=" << (avgRingsAtThree + 2ull * kStateBatchBytes * 1000ull)
          << " budget(x1000)=" << kBudgetX1000);

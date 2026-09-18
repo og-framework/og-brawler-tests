@@ -93,7 +93,12 @@ static dAttackMachineSimulation::State integrateOnce(
         dAttackMachineSimulation::PlayerInput{aimDirection, attackLeft, attackRight, moveStick, moveDirectionWorld},
         dAttackGuardSimulation::PlayerInput(aimDirection),
         brawlerProjectileSimulation::PlayerInput{aimDirection},
-        brawlerMovementSimulation::PlayerInput{});
+        brawlerMovementSimulation::PlayerInput{},
+        // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
+        // composite. No field, no wire cost: the input composite is still 77 B and
+        // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
+        // every sub-sim name an InputType it OWNS.
+        brawlerRingout::PlayerInput{});
 
     SimulationTimeStep step(0u, false, false, false, 1.f / 60.f);
     character.integrate(step, input, physAdapter, queryAdapter, staticData);
@@ -281,7 +286,12 @@ TEST_CASE("DAttack.Integrate3.HadoukenCommitmentHoldsAttackingState", "[DAttack]
             dAttackMachineSimulation::PlayerInput{aim, attackLeft, false, glm::vec2(0.f, 0.f), aim, triggeredActionId},
             dAttackGuardSimulation::PlayerInput(aim),
             brawlerProjectileSimulation::PlayerInput{aim},
-            brawlerMovementSimulation::PlayerInput{});
+            brawlerMovementSimulation::PlayerInput{},
+            // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
+            // composite. No field, no wire cost: the input composite is still 77 B and
+            // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
+            // every sub-sim name an InputType it OWNS.
+            brawlerRingout::PlayerInput{});
 
         SimulationTimeStep step(tick, false, false, false, dt);
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
@@ -355,7 +365,12 @@ TEST_CASE("DAttack.Integrate3.MachineHadoukenUsesCharacterBindings", "[DAttack][
                                               inputSequence::kHadoukenActionId},
         dAttackGuardSimulation::PlayerInput(aim),
         brawlerProjectileSimulation::PlayerInput{aim},
-        brawlerMovementSimulation::PlayerInput{});
+        brawlerMovementSimulation::PlayerInput{},
+        // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
+        // composite. No field, no wire cost: the input composite is still 77 B and
+        // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
+        // every sub-sim name an InputType it OWNS.
+        brawlerRingout::PlayerInput{});
 
     // Drive at a non-zero tick so the spawned slot's spawnTick (== currentTick) is non-zero
     // (spawnTick 0 reads as a free slot). The projectile sub-sim runs after the machine in the
@@ -406,14 +421,28 @@ TEST_CASE("DAttack.Integrate3.InboundHitTransitionsToHitFlinch", "[DAttack][HitF
     // BEFORE integrate (playing T3's routing-pass role); attackLeft is held to prove the veto.
     auto runTick = [&](unsigned int tick, bool inboundHit, bool attackLeft)
     {
-        character.editAllState().editDerivedState()
-            .edit<brawlerInboundHit::DerivedState>().wasHitThisTick = inboundHit;
+        // ⚠ [movement-sim task 27] THE DWELL NOW ARRIVES WITH THE HIT. The machine used to
+        // dwell on the file-scope `kHitFlinchDuration`; it dwells on `State::m_flinchDuration`,
+        // copied from this slice by the veto, because the lockout is per attack. A test that
+        // plays the routing pass's role must therefore resolve the WHOLE reaction, not just the
+        // bool — and the duration is read from the shipped projectile spec (a Stun at 0.3 s,
+        // today's value) rather than re-typed, so this case still measures the authored number.
+        auto& slice = character.editAllState().editDerivedState()
+            .edit<brawlerInboundHit::DerivedState>();
+        slice.wasHitThisTick = inboundHit;
+        slice.reactionKind   = staticData.m_projectileHitReaction.kind;
+        slice.flinchDuration = staticData.m_projectileHitReaction.lockoutDuration;
         simulatableBrawler::PlayerInput input(
             dAttackRadialSimulation::PlayerInput(aim, attackLeft, false),
             dAttackMachineSimulation::PlayerInput{aim, attackLeft, false, glm::vec2(0.f, 0.f), aim},
             dAttackGuardSimulation::PlayerInput(aim),
             brawlerProjectileSimulation::PlayerInput{aim},
-            brawlerMovementSimulation::PlayerInput{});
+            brawlerMovementSimulation::PlayerInput{},
+            // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
+            // composite. No field, no wire cost: the input composite is still 77 B and
+            // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
+            // every sub-sim name an InputType it OWNS.
+            brawlerRingout::PlayerInput{});
         SimulationTimeStep step(tick, false, false, false, dt);
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
         return character.getAllState().getState().get<dAttackMachineSimulation::State>();
@@ -426,7 +455,7 @@ TEST_CASE("DAttack.Integrate3.InboundHitTransitionsToHitFlinch", "[DAttack][HitF
     REQUIRE(state.m_activeAttackSequence == InvalidAttackSequenceId);
     REQUIRE(state.m_queuedAttackSequence == InvalidAttackSequenceId);
 
-    // Ticks 1..15 (< kHitFlinchDuration 0.3 s) — flag cleared, attackLeft still held. The machine
+    // Ticks 1..15 (< the resolved 0.3 s dwell) — flag cleared, attackLeft still held. The machine
     // must dwell in HitFlinch and ignore the attack input the whole time (input gating).
     for (unsigned int tick = 1; tick <= 15; ++tick)
     {
@@ -436,7 +465,7 @@ TEST_CASE("DAttack.Integrate3.InboundHitTransitionsToHitFlinch", "[DAttack][HitF
         REQUIRE(state.m_activeAttackSequence == InvalidAttackSequenceId);
     }
 
-    // Past kHitFlinchDuration the machine exits HitFlinch. With attackLeft released it lands in
+    // Past the resolved dwell the machine exits HitFlinch. With attackLeft released it lands in
     // Idle. (~18 ticks ≈ 0.3 s at 60 Hz; run a few past to catch the exit.)
     bool leftFlinch = false;
     for (unsigned int tick = 16; tick <= 40 && !leftFlinch; ++tick)
@@ -447,6 +476,302 @@ TEST_CASE("DAttack.Integrate3.InboundHitTransitionsToHitFlinch", "[DAttack][HitF
     }
     REQUIRE(leftFlinch);
     REQUIRE(state.m_currentState == DAttackState::Idle);
+}
+
+// ===========================================================================
+// THE HIT-REACTION LOCKOUT IS THE MACHINE'S  [movement-sim task 27]
+//
+// USER RULING 2026-09-12, asked whether a brawler can attack while being knocked back:
+// "No, and it should also block guarding."
+//
+// ⭐⭐ WHY THIS LIVES IN THE MACHINE AND NOT BEHIND A MOVEMENT FLAG, and it is the
+// architecture that decides it rather than taste: `ExecutionOrder` is machine -> guard -> radial
+// -> projectile -> movement LAST, and movement declares `ExternalDeps<const machine::State&>`, so
+// the machine CANNOT read movement without `findFirstViolation` rejecting it. A lockout that gates
+// attacking AND guarding AND the body has to live where all three can see it. `HitFlinch` already
+// is that state: the veto sits ahead of the switch so attack input is refused, and
+// `DAttackGuardSimulation` disables every guard shape whenever `m_currentState != Idle`.
+//
+// ⛔ WHAT TASK 27 CHANGES HERE, and the two things that would otherwise be silently wrong:
+//   * the dwell is `State::m_flinchDuration`, resolved PER HIT by `brawlerHitRouting::System`
+//     from the attacking sequence's `HitReactionSpec` -- never the old universal 0.3 s, and never
+//     a typed constant derived from movement constants the machine cannot see (task 16 turns those
+//     into cvar reads, so a typed constant would desynchronise the day one changed);
+//   * the `!= HitFlinch` condition is GONE from the hit veto, so every hit RE-ENTERS and REPLACES.
+//     Kept, that condition ends the lockout `flinchDuration` after hit ONE while the body is still
+//     sliding from hit TWO -- which is the attacking-mid-flight window the lockout exists to close.
+// ===========================================================================
+
+namespace integrate3tests
+{
+// One character, driven a tick at a time, with the routing pass's role played by hand: a test
+// writes the WHOLE resolved reaction onto the inbound slice exactly as
+// `brawlerHitRouting::System::resolveHitReaction` does, because the machine now copies two of its
+// fields into wire `State` and dwells on one of them.
+struct FMachineRig
+{
+    simulatableBrawler::StaticData staticData;
+    SimulatableBrawler            character;
+    MockPhysicsAdapter            physAdapter;
+    MockSpatialQueryAdapter       queryAdapter;
+
+    static constexpr float kDt = 1.f / 60.f;
+
+    FMachineRig() : character(staticData)
+    {
+        character.setCharacterBindings({ BodyId{1} });
+    }
+
+    const dAttackMachineSimulation::State& machine() const
+    {
+        return character.getAllState().getState().get<dAttackMachineSimulation::State>();
+    }
+
+    // The resolver's own arithmetic, spelled from the SHIPPED spec rather than re-typed: a
+    // knockback's dwell is `max(lockoutDuration, knockbackSpeed / launchDecel)` -- the slide time
+    // is a FLOOR, by the 2026-09-12 ruling, and an authored lockout may exceed it but never
+    // undercut it.
+    float resolvedDwell(const HitReactionSpec& spec) const
+    {
+        return spec.kind == HitReactionKind::Knockback
+            ? glm::max(spec.lockoutDuration,
+                       spec.knockbackSpeed / staticData.m_movementStaticData.launchDecel)
+            : spec.lockoutDuration;
+    }
+
+    void deliver(const HitReactionSpec& spec, glm::vec2 directionXY)
+    {
+        const bool knockback = spec.kind == HitReactionKind::Knockback;
+        auto& slice = character.editAllState().editDerivedState()
+            .edit<brawlerInboundHit::DerivedState>();
+        slice.wasHitThisTick = true;
+        slice.reactionKind   = spec.kind;
+        slice.knockbackSpeed = knockback ? spec.knockbackSpeed : 0.f;
+        slice.hitDirectionXY = knockback ? directionXY : glm::vec2(0.f);
+        slice.flinchDuration = resolvedDwell(spec);
+    }
+
+    void tick(unsigned int t, bool attackLeft, bool attackRight = false)
+    {
+        const glm::vec3 aim(1.f, 0.f, 0.f);
+        simulatableBrawler::PlayerInput input(
+            dAttackRadialSimulation::PlayerInput(aim, attackLeft, attackRight),
+            dAttackMachineSimulation::PlayerInput{aim, attackLeft, attackRight,
+                                                 glm::vec2(0.f), aim},
+            dAttackGuardSimulation::PlayerInput(aim),
+            brawlerProjectileSimulation::PlayerInput{aim},
+            brawlerMovementSimulation::PlayerInput{},
+            // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
+            // composite. No field, no wire cost: the input composite is still 77 B and
+            // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
+            // every sub-sim name an InputType it OWNS.
+            brawlerRingout::PlayerInput{});
+        character.integrate(SimulationTimeStep(t, false, false, false, kDt),
+                            input, physAdapter, queryAdapter, staticData);
+        // The routing pass owns the one-shot: it clears the whole slice at the top of every tick.
+        character.editAllState().editDerivedState()
+            .edit<brawlerInboundHit::DerivedState>() = brawlerInboundHit::DerivedState{};
+    }
+};
+}
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ THE LOCKOUT OUTLIVES THE SLIDE. A knockback slides for `knockbackSpeed / launchDecel`
+// = 0.5 s; the pre-task-27 dwell was 0.3 s, so the character was free to attack and to guard for
+// the last 0.2 s of its own flight. RED on the old dwell, by construction: at tick 24 (0.4 s) the
+// old machine has been back in `Idle` for six ticks with `attackLeft` held, so it is swinging.
+// [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.Integrate3.LockoutOutlivesSlide", "[DAttack][HitFlinch]")
+{
+    using namespace integrate3tests;
+
+    FMachineRig rig;
+    const HitReactionSpec& knockback =
+        rig.staticData.m_hitReactions[dAttackDirection::kRightSequenceId];
+
+    // PREMISE: the shipped right-hand swing really is a knockback, and its dwell really is the
+    // slide time rather than the authored floor of zero.
+    REQUIRE(knockback.kind == HitReactionKind::Knockback);
+    const float slideSeconds =
+        knockback.knockbackSpeed / rig.staticData.m_movementStaticData.launchDecel;
+    INFO("knockbackSpeed=" << knockback.knockbackSpeed << " launchDecel="
+         << rig.staticData.m_movementStaticData.launchDecel << " -> slide " << slideSeconds
+         << " s, authored lockout " << knockback.lockoutDuration
+         << " s, resolved dwell " << rig.resolvedDwell(knockback) << " s");
+    REQUIRE(slideSeconds == Catch::Approx(0.5f).margin(1e-6f));
+    REQUIRE(rig.resolvedDwell(knockback) == Catch::Approx(slideSeconds).margin(1e-6f));
+    // ...and it is STRICTLY longer than the value the machine used to dwell for.
+    REQUIRE(rig.resolvedDwell(knockback) > 0.3f);
+
+    rig.deliver(knockback, glm::vec2(1.f, 0.f));
+    rig.tick(0u, /*attackLeft*/ true);
+    REQUIRE(rig.machine().m_currentState == DAttackState::HitFlinch);
+    REQUIRE(rig.machine().m_hitReaction == HitReactionKind::Knockback);
+    REQUIRE(rig.machine().m_flinchDuration == Catch::Approx(slideSeconds).margin(1e-6f));
+
+    // THROUGH THE LAST SLIDING TICK, with the attack button held the whole way. 30 ticks is
+    // exactly the slide; the loop stops one short of the boundary so the exit below is the
+    // measurement rather than an off-by-one.
+    for (unsigned int t = 1u; t <= 29u; ++t)
+    {
+        rig.tick(t, /*attackLeft*/ true);
+        INFO("lockout tick " << t << " (t=" << (t * FMachineRig::kDt) << " s)");
+        // 1. THE ATTACK IS REFUSED.
+        REQUIRE(rig.machine().m_currentState == DAttackState::HitFlinch);
+        REQUIRE(rig.machine().m_activeAttackSequence == InvalidAttackSequenceId);
+        // 2. AND SO IS THE GUARD -- this is `DAttackGuardSimulation`'s own shape gate, quoted:
+        //    it disables every guard shape whenever the machine is not Idle.
+        REQUIRE(rig.machine().m_currentState != DAttackState::Idle);
+    }
+
+    // ⛔ THE ROW THAT IS RED ON THE OLD DWELL. At 0.4 s the pre-task-27 machine had been back in
+    // Idle since tick 19 and, with attackLeft still held, had started a swing.
+    REQUIRE(rig.machine().m_timeInCurrentState > 0.3f);
+    REQUIRE(rig.machine().m_timeInCurrentState < rig.machine().m_flinchDuration);
+
+    // ...and it does come out, on the far side, so the lockout is a window and not a trap.
+    bool left = false;
+    for (unsigned int t = 30u; t <= 60u && !left; ++t)
+    {
+        rig.tick(t, /*attackLeft*/ false);
+        left = rig.machine().m_currentState != DAttackState::HitFlinch;
+        if (left)
+            INFO("left HitFlinch at tick " << t);
+    }
+    REQUIRE(left);
+    REQUIRE(rig.machine().m_currentState == DAttackState::Idle);
+}
+
+// ---------------------------------------------------------------------------
+// ⛔ EVERY HIT RE-ENTERS AND REPLACES. RED on the `!= HitFlinch` condition the veto carried
+// until task 27: with it, the second hit leaves the timer where the first left it, the lockout
+// ends 0.5 s after hit ONE, and the reaction the movement sim reads is still hit one's.
+// [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.Integrate3.RehitRestartsLockoutAndReplaces", "[DAttack][HitFlinch]")
+{
+    using namespace integrate3tests;
+
+    FMachineRig rig;
+    const HitReactionSpec& knockback =
+        rig.staticData.m_hitReactions[dAttackDirection::kRightSequenceId];
+    const HitReactionSpec& stun =
+        rig.staticData.m_hitReactions[dAttackDirection::kForwardSequenceId];
+    REQUIRE(knockback.kind == HitReactionKind::Knockback);
+    REQUIRE(stun.kind == HitReactionKind::Stun);
+
+    rig.deliver(knockback, glm::vec2(1.f, 0.f));
+    rig.tick(0u, false);
+    for (unsigned int t = 1u; t <= 10u; ++t)
+        rig.tick(t, false);
+
+    const float elapsed = rig.machine().m_timeInCurrentState;
+    INFO("first lockout has run " << elapsed << " s of " << rig.machine().m_flinchDuration
+         << " s when the second hit lands");
+    REQUIRE(elapsed > 0.15f);
+    REQUIRE(rig.machine().m_currentState == DAttackState::HitFlinch);
+
+    // THE SECOND HIT, a STUN, while still flinching from the knockback.
+    rig.deliver(stun, glm::vec2(0.f));
+    rig.tick(11u, false);
+
+    // 1. THE TIMER RESTARTED, to EXACTLY zero. `integrate3` advances
+    //    `m_timeInCurrentState += deltaTime` at the TOP of the body and the veto zeroes it
+    //    afterwards, so a re-entry tick ends at 0 -- the same shape a first entry has, and not
+    //    one step. Under the old `!= HitFlinch` guard this reads `elapsed + dt`, which is what
+    //    the INFO line names so a break says which side it landed on.
+    INFO("after the re-hit: timer=" << rig.machine().m_timeInCurrentState
+         << " (the old `!= HitFlinch` guard would have left it at "
+         << (elapsed + FMachineRig::kDt) << ")");
+    REQUIRE(rig.machine().m_timeInCurrentState == 0.f);
+    REQUIRE(rig.machine().m_timeInCurrentState < elapsed);
+
+    // 2. AND THE REACTION WAS REPLACED, kind and dwell together. This is what the movement sim
+    //    reads every tick, so a stale kind here is a character still sliding under a stun.
+    REQUIRE(rig.machine().m_hitReaction == HitReactionKind::Stun);
+    REQUIRE(rig.machine().m_flinchDuration
+            == Catch::Approx(stun.lockoutDuration).margin(1e-6f));
+    REQUIRE(rig.machine().m_flinchDuration < knockback.knockbackSpeed
+            / rig.staticData.m_movementStaticData.launchDecel);
+
+    // 3. ...and a knockback landing on a STUN replaces the other way, discarding the stun's
+    //    remaining time -- the fourth row of the cross-kind table in `design_hit_reactions.md`.
+    rig.deliver(knockback, glm::vec2(0.f, 1.f));
+    rig.tick(12u, false);
+    REQUIRE(rig.machine().m_hitReaction == HitReactionKind::Knockback);
+    REQUIRE(rig.machine().m_flinchDuration
+            == Catch::Approx(rig.resolvedDwell(knockback)).margin(1e-6f));
+    REQUIRE(rig.machine().m_timeInCurrentState == 0.f);
+}
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ A KNOCKBACK LOCKOUT MAY OUTLAST ITS SLIDE; IT MAY NEVER UNDERCUT IT. The authored
+// `lockoutDuration` is a FLOOR-CANDIDATE, not the answer: `max(lockoutDuration, slide)`. Authoring
+// 0.8 s buys a grounded beat after the body has stopped; authoring 0.1 s buys nothing, because
+// ending the lockout at 0.1 s would hand the attack button back to a character still travelling at
+// 1600 cm/s. Both arms are driven on the MACHINE, which is what actually consumes the dwell.
+// [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.Integrate3.KnockbackLockoutCanOutlastSlideButNeverUndercutIt",
+          "[DAttack][HitFlinch]")
+{
+    using namespace integrate3tests;
+
+    FMachineRig rig;
+    const float launchDecel = rig.staticData.m_movementStaticData.launchDecel;
+    const float speed =
+        rig.staticData.m_hitReactions[dAttackDirection::kRightSequenceId].knockbackSpeed;
+    const float slideSeconds = speed / launchDecel;
+
+    // ARM 1 -- AUTHORED LONGER THAN THE SLIDE. The lockout is the authored number.
+    {
+        const HitReactionSpec grounded{ HitReactionKind::Knockback, speed, 0.8f };
+        REQUIRE(rig.resolvedDwell(grounded) == Catch::Approx(0.8f).margin(1e-6f));
+        REQUIRE(rig.resolvedDwell(grounded) > slideSeconds);
+
+        rig.deliver(grounded, glm::vec2(1.f, 0.f));
+        rig.tick(0u, true);
+        REQUIRE(rig.machine().m_flinchDuration == Catch::Approx(0.8f).margin(1e-6f));
+
+        // At 0.6 s the body has been at rest for 0.1 s and the character is STILL locked out --
+        // the grounded beat. 36 ticks is 0.6 s.
+        for (unsigned int t = 1u; t <= 36u; ++t)
+            rig.tick(t, true);
+        INFO("grounded beat: timer=" << rig.machine().m_timeInCurrentState
+             << " s, slide ended at " << slideSeconds << " s");
+        REQUIRE(rig.machine().m_timeInCurrentState > slideSeconds);
+        REQUIRE(rig.machine().m_currentState == DAttackState::HitFlinch);
+    }
+
+    // ARM 2 -- AUTHORED SHORTER THAN THE SLIDE. The slide wins; the authored number is ignored.
+    {
+        FMachineRig brief;
+        const HitReactionSpec tooShort{ HitReactionKind::Knockback, speed, 0.1f };
+        INFO("authored 0.1 s against a " << slideSeconds << " s slide -> resolved "
+             << brief.resolvedDwell(tooShort) << " s");
+        REQUIRE(brief.resolvedDwell(tooShort) == Catch::Approx(slideSeconds).margin(1e-6f));
+
+        brief.deliver(tooShort, glm::vec2(1.f, 0.f));
+        brief.tick(0u, true);
+        REQUIRE(brief.machine().m_flinchDuration == Catch::Approx(slideSeconds).margin(1e-6f));
+
+        // At 0.2 s -- twice the authored lockout -- the character is still locked out, because the
+        // body is still moving. 12 ticks is 0.2 s.
+        for (unsigned int t = 1u; t <= 12u; ++t)
+            brief.tick(t, true);
+        REQUIRE(brief.machine().m_timeInCurrentState > 0.1f);
+        REQUIRE(brief.machine().m_currentState == DAttackState::HitFlinch);
+        REQUIRE(brief.machine().m_activeAttackSequence == InvalidAttackSequenceId);
+    }
+
+    // ARM 3 -- A STUN IGNORES THE SLIDE TERM ENTIRELY: no knockback speed, so nothing to floor it
+    // against, and the authored lockout is the whole answer.
+    {
+        const HitReactionSpec stun{ HitReactionKind::Stun, 0.f, 0.3f };
+        REQUIRE(rig.resolvedDwell(stun) == Catch::Approx(0.3f).margin(1e-6f));
+        REQUIRE(rig.resolvedDwell(stun) < slideSeconds);
+    }
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

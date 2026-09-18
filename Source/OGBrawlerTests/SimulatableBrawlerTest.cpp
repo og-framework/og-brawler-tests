@@ -9,6 +9,9 @@
 #include "catch_amalgamated.hpp"
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
+#include "OGBrawler/HitReaction.h"
+#include "OGBrawler/BrawlerInboundHit.h"
+#include "OGBrawler/DAttackDirectionClassifier.h"
 #include "OGSimulation/CorrectionStateBufferCodec.h"
 #include "OGSimulation/SimulationComposite.h"
 #include "OGSimulation/PhysicsBodyAdapter.h"
@@ -112,6 +115,79 @@ TEST_CASE("DAttack.SimulatableBrawler.IntegrateAndVizState", "[DAttack][Simulata
 }
 
 // ---------------------------------------------------------------------------
+// ⭐⭐ [ringout task 2, 2026-09-13] THE CALL SITE ACTUALLY RUNS.
+//
+// THIS CASE EXISTS BECAUSE EVERYTHING ELSE THIS TASK ADDED WOULD HAVE PASSED WITHOUT IT.
+// Wiring `brawlerRingout` into the composite is four type-level edits — State, DerivedState,
+// PlayerInput, ExecutionOrder — and every one of them compiles, serializes, fences and
+// reports green whether or not `SimulatableBrawler::integrate` ever calls
+// `brawlerRingout::integrate`. The wire footprint would still read 335 B. The budget fences
+// would still re-price. The whole 474-case suite would still pass. And the sub-simulation
+// would never run once, in PIE or anywhere else, until somebody noticed nobody ever died.
+// An inert sub-simulation that looks green is worse than a missing one, so the call gets a
+// test of its own rather than a comment.
+//
+// The proof is deliberately the SHORTEST one that can only pass if the call is present: seed
+// the movement slice's solved position below the authored kill plane, integrate ONE tick
+// through the real `SimulatableBrawler::integrate`, and read the dead bit back out of the
+// composite. Nothing else in this function writes `brawlerRingout::State`.
+//
+// ⚠ It is NOT a test of the ring-out LAW — that lives in BrawlerRingoutSimulationTest.cpp's
+// eight cases against the sub-sim directly, and duplicating them here would mean two places
+// to update when the law changes. This case pins the WIRING, and the decoy arm below is what
+// keeps it from passing on a default-constructed state that happens to look dead.
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.SimulatableBrawler.RingoutIntegrateIsReachedFromTheComposite",
+          "[DAttack][SimulatableBrawler][BrawlerRingout]")
+{
+    FMockPhysicsBodyAdapter physAdapter;
+    FMockSpatialQueryAdapter queryAdapter;
+    const simulatableBrawler::StaticData staticData;
+    const simulatableBrawler::PlayerInput zeroInput = simulatableBrawler::getZeroPlayerInput();
+
+    // Authored, not assumed: the arms below are positioned relative to the SHIPPED kill
+    // plane, so retuning it in brawlerRingout::StaticData moves this test with it instead of
+    // silently making one arm vacuous.
+    const float killPlaneZ = staticData.m_ringoutStaticData.killPlaneZ;
+
+    auto integrateOneTickAtZ = [&](float z)
+    {
+        SimulatableBrawler character = makeTestCharacter();
+
+        // Ring-out reads the position the movement sub-sim LEFT BEHIND, so seeding the
+        // movement State slice is exactly the input the law consumes. `teleportPending` is 0
+        // on a default-constructed InitialConditions, which the death arm also requires.
+        character.editAllState().editState()
+            .edit<brawlerMovementSimulation::State>().bodyState.position.z = z;
+
+        const SimulationTimeStep step(0u, false, false, false, 1.f / 60.f);
+        character.integrate(step, zeroInput, physAdapter, queryAdapter, staticData);
+        return character.getAllState().getState().get<brawlerRingout::State>();
+    };
+
+    SECTION("below the kill plane, the composite's integrate kills the character")
+    {
+        const brawlerRingout::State dead = integrateOneTickAtZ(killPlaneZ - 100.f);
+
+        // THE WHOLE POINT: this bit is only ever written by brawlerRingout::integrate, and
+        // the only thing that can call it on this object is the block in
+        // SimulatableBrawler::integrate. If that block is deleted, reordered out of the
+        // function, or guarded off, this assertion is what fails.
+        REQUIRE(brawlerRingout::isDead(dead));
+        REQUIRE(dead.respawnAtTick
+                == 0u + staticData.m_ringoutStaticData.respawnDelayTicks);
+    }
+
+    SECTION("above the kill plane it does not — the decoy that keeps the arm above honest")
+    {
+        // Without this arm, an implementation that set the dead bit unconditionally — or a
+        // default-constructed State that already had it — would satisfy the section above.
+        const brawlerRingout::State alive = integrateOneTickAtZ(killPlaneZ + 100.f);
+        REQUIRE_FALSE(brawlerRingout::isDead(alive));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test: firstResimStep captures body state via adapter.
 // ---------------------------------------------------------------------------
 TEST_CASE("DAttack.SimulatableBrawler.FirstResimStep", "[DAttack][SimulatableBrawler]")
@@ -194,11 +270,37 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
 
     // 1. THE ABSOLUTE SIZE. A diff that moves this is a wire change, and a wire
     //    change is a deliberate, versioned act (correctionStateBuffer::kWireFormatVersion).
-    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 321u,
+    //    [ringout task 2, 2026-09-13] 326 -> 335 B, +9 B, and the slice that moved is
+    //    RING-OUT's — a NEW sub-simulation appended to the composite, not a neighbour that
+    //    grew. `brawlerRingout::InitialConditions` (4 B: `spawnSlot`) and
+    //    `brawlerRingout::State` (5 B: `flags` + `respawnAtTick`) both ride the wire so a
+    //    death and its respawn REPLAY IDENTICALLY under resim. The two ring-out slices are
+    //    pinned individually three assertions below, so a future break says which of them
+    //    moved. `brawlerRingout::DerivedState` (`diedThisTick`) is deliberately OFF the wire
+    //    and costs nothing here — see the derived-composite section further down.
+    //
+    //    ⭐ `correctionStateBuffer::kWireFormatVersion` IS BUMPED 2 -> 3 FOR THIS CHANGE, AND
+    //    THE APPEND ARGUMENT IS WHY THAT IS NOT OBVIOUS. Both slices are APPENDED at the end
+    //    of the composite declaration in SimulatableBrawlerTypes.h, so every pre-existing
+    //    field keeps the byte offset it already had — the exact condition movement-sim tasks
+    //    11, 27 and 50 each cited when they DECLINED the bump. ⛔ That precedent does not
+    //    carry here, because those tasks grew sub-simulations BOTH builds compiled in, and
+    //    this one appends a sub-simulation an older archived build does not have AT ALL. The
+    //    layout is silent about that: the reverse pairing (new client, old server) walks 335
+    //    bytes out of a 326-byte payload and restores the dead bit and the respawn tick from
+    //    whatever the fixed-capacity buffer last held. Mixed archives are ordinary practice
+    //    in this project (three independently-cooked targets; see PLAYTEST_PORTABLE_README.md),
+    //    so the version byte is the only thing between that and a loud refusal. The full
+    //    reasoning lives at the constant in CorrectionStateBufferCodec.h; the cost side — a
+    //    stale peer now gets a build-mismatch error instead of a silent ring-out-shaped hole —
+    //    is written out in impl_notes_ringout_2.md §5/§5a.
+    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 335u,
         "The simulatableBrawler::State wire footprint moved. That is a WIRE FORMAT "
-        "CHANGE: re-measure it, bump correctionStateBuffer::kWireFormatVersion if the "
-        "layout (not just the size) changed, and re-price RoundVsPacketBudgetTest.cpp.");
-    REQUIRE(kComposite == 321u);
+        "CHANGE: re-measure it, re-price RoundVsPacketBudgetTest.cpp, and bump "
+        "correctionStateBuffer::kWireFormatVersion if the layout moved OR if a whole "
+        "sub-simulation entered or left the composite - an append that only grows an "
+        "EXISTING slice is the one case that does not need the bump.");
+    REQUIRE(kComposite == 335u);
 
     // 2. WHICH SLICE, so a break says what moved rather than only that something did.
     //
@@ -214,6 +316,23 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     REQUIRE(syncSize<brawlerMovementSimulation::State>() == 61u);
     REQUIRE(syncSize<brawlerMovementSimulation::InitialConditions>() == 16u);
 
+    // [movement-sim task 27, 2026-09-12] THE MACHINE SLICE 16 -> 21 B, composite 321 -> 326 B,
+    // +5 B, and the INPUT wire DOES NOT MOVE (ZeroInputIsTheFold below re-quotes 77 B unchanged;
+    // RoundVsPacketBudgetTest.cpp re-quotes ringWireBytes(1u) == 86u and the 82 B entry stride).
+    // `m_hitReaction` (1 B) and `m_flinchDuration` (4 B) are APPENDED to
+    // dAttackMachineSimulation::State: the movement sub-sim needs the reaction KIND on every tick
+    // of a flinch (it decides freeze-vs-slide) and the machine needs the DWELL on every tick (the
+    // dwell is per attack now, resolved by brawlerHitRouting from the attack's HitReactionSpec),
+    // so both must survive a correction. An append leaves every preceding field's offset intact,
+    // which is why correctionStateBuffer::kWireFormatVersion is NOT bumped here — the same
+    // reasoning tasks 11 and 50 recorded for the movement slice.
+    // ⚠ [ringout task 2, rework, 2026-09-13] STILL TRUE FOR TASK 27, BUT DO NOT GENERALISE IT.
+    // Ring-out DID bump the version (2 -> 3) on an append, because it appended a whole
+    // SUB-SIMULATION rather than growing an existing slice — see the block above and the rule at
+    // the constant in CorrectionStateBufferCodec.h. Task 27 grew a sub-sim both builds compile in,
+    // which is the case that correctly declines.
+    REQUIRE(syncSize<dAttackMachineSimulation::State>() == 21u);
+
     // [movement-sim task 29] The guard slice, both halves, at zero. This is the term
     // the -56 B came out of, and pinning it HERE — beside the total — is what makes a
     // future re-serialization of the guard read as "the guard grew" rather than as an
@@ -221,10 +340,44 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     REQUIRE(syncSize<dAttackGuardSimulation::State>() == 0u);
     REQUIRE(syncSize<dAttackGuardSimulation::InitialConditions>() == 0u);
 
+    // [ringout task 2, 2026-09-13] THE RING-OUT SLICES, 4 + 5 = the whole +9 B. Pinned here
+    // BESIDE the total, which is the point of this section: these two numbers and the 335
+    // above are the same arithmetic decomposed, so a future diff that moves the composite
+    // says whether ring-out grew or a neighbour did. The identical pair is asserted a second
+    // time at the DECLARATION in BrawlerRingoutSimulation.h — deliberately, because that is
+    // where somebody adding a field is looking, and this file is where somebody investigating
+    // a packet is looking.
+    REQUIRE(syncSize<brawlerRingout::InitialConditions>() == 4u);
+    REQUIRE(syncSize<brawlerRingout::State>() == 5u);
+
+    // [ringout task 2] AND THE OFF-WIRE HALF, PINNED AS A CONCEPT AND NOT AS A ZERO BYTE
+    // COUNT. `diedThisTick` is the death EDGE the score system reads (task 4) and it must
+    // never become serializable: an edge that can arrive on a correction is an edge that can
+    // be awarded twice.
+    // ⛔ `syncSize<brawlerRingout::DerivedState>() == 0u` IS THE WRONG SPELLING AND WAS TRIED
+    // FIRST — it does not compile at all ("use of undefined type
+    // SerializableFields<brawlerRingout::DerivedState>"), because `syncSize` sums a
+    // specialization that an off-wire type does not have. A zero there would have been
+    // indistinguishable from the guard slices' real, declared 0 B anyway. `Serializable`
+    // reads FALSE for "has no specialization" and TRUE for "declared empty", which is the
+    // distinction that matters here.
+    STATIC_REQUIRE_FALSE(Serializable<brawlerRingout::DerivedState>);
+    STATIC_REQUIRE(Serializable<brawlerRingout::State>);
+    STATIC_REQUIRE(Serializable<brawlerRingout::InitialConditions>);
+
     // 3. THE HEADROOM FENCE — the one that would have caught a silent runtime OOB.
     //    Also a compile-time fence, which is the whole point: it converts a failure
     //    mode that is otherwise a dropped correction plus a log line at runtime into
     //    a build break for whoever grows the composite.
+    //
+    //    [ringout task 2, 2026-09-13] MEASURED AFTER THIS TASK: bufferUsed = 8 + 335 = 343 of
+    //    384, so the headroom is **41 B**, down from 50. This fence is an INEQUALITY and so
+    //    it does not need re-quoting when the composite grows — which is exactly why the
+    //    number is written here in prose: the assertion cannot tell you how close it is, and
+    //    41 B is four more slices the size of ring-out's. The WARN at the end of this case
+    //    now prints the live headroom on every run for the same reason. Raising
+    //    `kBufferBytes` is wire-cheap (NetSerialize watermark-trims to usedBytes), so the
+    //    next task to run out should raise it rather than economise on state.
     static_assert(correctionStateBuffer::kHeaderBytes
                       + FCompositeWireSize<simulatableBrawler::State>::value
                   <= kStateSyncBufferBytes,
@@ -236,8 +389,11 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
 
     WARN("simulatableBrawler::State wire footprint: composite=" << kComposite
          << " B (268 B before movement-sim task 11 grew the movement slice to 309;"
-         << " +12 B more at task 50 for positionCmd), buffer used="
-         << kBufferUsed << "/" << kStateSyncBufferBytes << " B");
+         << " +12 B more at task 50 for positionCmd; +5 B more at task 27 for the machine's"
+         << " m_hitReaction and m_flinchDuration; +9 B more at ringout task 2 for the"
+         << " brawlerRingout InitialConditions and State slices), buffer used="
+         << kBufferUsed << "/" << kStateSyncBufferBytes << " B, headroom="
+         << (kStateSyncBufferBytes - kBufferUsed) << " B");
 }
 
 
@@ -525,28 +681,51 @@ TEST_CASE("DAttack.SimulatableBrawler.DerivedStateIsOffWire", "[DAttack][Simulat
     //    appending a slice that IS on the wire does not compile. This is the whole
     //    deliverable of task 23 -- if this pair ever reads TRUE/TRUE, the alias has
     //    been swapped back for an unconstrained one and D1 is a comment again.
+    //    [ringout task 2, 2026-09-13] `brawlerRingout::DerivedState` joins the list. It is the
+    //    OFF-WIRE half of this task's composite growth and the reason the concept above is
+    //    worth having: `diedThisTick` is a single-tick EDGE, and an edge that could arrive on
+    //    a correction is an edge the score system could award twice. Its absence from any
+    //    `SerializableFields` specialization is what this line pins.
     STATIC_REQUIRE(BrawlerDerivedNameable<dAttackRadialSimulation::DerivedState,
                                           dAttackGuardSimulation::DerivedState,
                                           brawlerProjectileSimulation::DerivedState,
                                           brawlerMovementSimulation::DerivedState,
-                                          brawlerInboundHit::DerivedState>);
+                                          brawlerInboundHit::DerivedState,
+                                          brawlerRingout::DerivedState>);
     STATIC_REQUIRE_FALSE(BrawlerDerivedNameable<dAttackRadialSimulation::DerivedState,
                                                 dAttackGuardSimulation::DerivedState,
                                                 brawlerProjectileSimulation::DerivedState,
                                                 brawlerMovementSimulation::DerivedState,
                                                 brawlerInboundHit::DerivedState,
+                                                brawlerRingout::DerivedState,
                                                 dAttackRadialSimulation::State>);
+    //    [ringout task 2] AND THE POISON ARM AIMED AT THIS TASK'S OWN SLICE, so the positive
+    //    arm above is not the only thing standing between ring-out and the wire. Ring-out's
+    //    `State` IS serializable; naming it here must therefore read FALSE exactly as the
+    //    radial `State` does. Without this line, a future edit that gave
+    //    `brawlerRingout::DerivedState` a `SerializableFields` specialization would flip the
+    //    positive arm to a compile error only by luck of which list it was added to.
+    STATIC_REQUIRE_FALSE(BrawlerDerivedNameable<dAttackRadialSimulation::DerivedState,
+                                                dAttackGuardSimulation::DerivedState,
+                                                brawlerProjectileSimulation::DerivedState,
+                                                brawlerMovementSimulation::DerivedState,
+                                                brawlerInboundHit::DerivedState,
+                                                brawlerRingout::State>);
 
     // 4. THE ELEMENT LIST IS PINNED. Adding or dropping a derived slice is a
     //    deliberate edit to SimulatableBrawlerTypes.h, not something a refactor
     //    does on the way past.
+    //    [ringout task 2, 2026-09-13] Sixth element: `brawlerRingout::DerivedState`, APPENDED.
+    //    DerivedState never rides the wire, so unlike the State composite this order carries
+    //    no byte offsets and appending is a convention here rather than a requirement.
     STATIC_REQUIRE(std::is_same_v<
         simulatableBrawler::DerivedState,
         SimulationDerivedComposite<dAttackRadialSimulation::DerivedState,
                                    dAttackGuardSimulation::DerivedState,
                                    brawlerProjectileSimulation::DerivedState,
                                    brawlerMovementSimulation::DerivedState,
-                                   brawlerInboundHit::DerivedState>>);
+                                   brawlerInboundHit::DerivedState,
+                                   brawlerRingout::DerivedState>>);
 
     // 5. THE COPY STILL CARRIES THE SCRATCH. AllState is copied wholesale every
     //    render step by SimmableUpdateComponent's updateVizState(), and the viz
@@ -978,6 +1157,153 @@ TEST_CASE("DAttack.SimulatableBrawler.AgreeingAnchorKeepsPushOut",
                 .isSimilarTo(authority.character.getAllState().getState()));
     REQUIRE(client.lastPushOut() == authority.lastPushOut());
     REQUIRE(glm::length(client.lastPushOut()) > brawlerMovementSimulation::kPushOutEps);
+}
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ CASE 3 -- THE HIT SIGNAL IS OFF-WIRE, AND AN ANCHOR ON THE HIT TICK THEREFORE COSTS
+// ONE EXTRA CORRECTION. PINNED, NOT FIXED. [movement-sim task 27]
+//
+// THE MECHANISM, and it PRE-DATES task 27. `wasHitThisTick` and the reaction beside it are written
+// by `brawlerHitRouting::System::postIntegrate` at tick T for consumption at T+1, and they live on
+// the DerivedState composite, which is off the wire by decision D1. A resim anchored at T restores
+// the WIRE state and replays T+1 reading whatever the FRONTIER's post-integrate last left in that
+// slice -- nothing re-fires the routing pass for the restored tick, and the radial derived hits it
+// would need are gone. So a hit that landed at T+1 is MISSED on the first replayed tick.
+//
+// ⛔ WHY THIS IS BOUNDED AND NOT A STORM, which is the whole reason it is pinned rather than
+// fixed: the CONSEQUENCE of a hit is entirely on the wire. `m_currentState`, `m_timeInCurrentState`,
+// `m_hitReaction`, `m_flinchDuration` and the movement `velocity` all ride a correction, so the
+// authority's T+1 correction disagrees ONCE, is adopted, and every tick after it is right. Task 27
+// makes the one disagreeing tick more visible (a 5 m slide instead of a 0.3 s freeze) without
+// making it longer.
+//
+// ⭐ WHAT WOULD FIX IT, recorded so the decision is not re-derived: one more byte of machine
+// `State` carrying the hit signal itself (50 B of headroom after this task). It is cheap, and it is
+// deliberately NOT taken here -- the question is whether the one-cycle pop is VISIBLE in PIE, and
+// no agent can run PIE. The 27b PIE criterion asks for exactly that observation.
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.SimulatableBrawler.ReplayAnchoredOnHitTickConvergesInOneCorrection",
+          "[DAttack][SimulatableBrawler][MovementResim]")
+{
+    using namespace movementResim;
+
+    const simulatableBrawler::PlayerInput idle = simulatableBrawler::getZeroPlayerInput();
+
+    FPeer authority;
+    FPeer client;
+
+    // SEATED CLEAR OF THE RIG'S WALL. `FPeer::engineStepAndCapture` clamps the body at
+    // `kWallX == 0` -- it is the task-50 contact fixture -- and a 5 m slide launched from the
+    // origin would be pressed into that wall on every tick, which step 6' would then correctly
+    // kill. This case is about a CORRECTION, not about contact, so the two peers start 10 m short
+    // of the wall and the whole slide happens in open space.
+    authority.movement().bodyState.position = glm::vec3(-1000.f, 0.f, 0.f);
+    client.movement().bodyState.position    = glm::vec3(-1000.f, 0.f, 0.f);
+
+    // The reaction the authority's routing pass would have resolved for the shipped right-hand
+    // swing: a knockback at the authored speed, dwelling for its own slide time. Read from the
+    // authority's OWN StaticData so the row moves with a retune.
+    const HitReactionSpec& spec =
+        authority.staticData.m_hitReactions[dAttackDirection::kRightSequenceId];
+    const float dwell = spec.knockbackSpeed / authority.staticData.m_movementStaticData.launchDecel;
+    REQUIRE(spec.kind == HitReactionKind::Knockback);
+
+    const auto deliverHit = [&](FPeer& peer)
+    {
+        auto& slice = peer.character.editAllState().editDerivedState()
+            .edit<brawlerInboundHit::DerivedState>();
+        slice.wasHitThisTick = true;
+        slice.reactionKind   = HitReactionKind::Knockback;
+        slice.knockbackSpeed = spec.knockbackSpeed;
+        slice.hitDirectionXY = glm::vec2(1.f, 0.f);
+        slice.flinchDuration = dwell;
+    };
+    const auto clearSlice = [&](FPeer& peer)
+    {
+        peer.character.editAllState().editDerivedState()
+            .edit<brawlerInboundHit::DerivedState>() = brawlerInboundHit::DerivedState{};
+    };
+
+    // ---- ticks 1..T: no hits anywhere; both peers agree.
+    for (std::uint32_t t = 1u; t <= kCorrectionTick; ++t)
+    {
+        authority.tick(t, idle);
+        client.tick(t, idle);
+        clearSlice(authority);
+        clearSlice(client);
+    }
+    const simulatableBrawler::State authoritySlotT = authority.character.getAllState().getState();
+    REQUIRE(client.character.getAllState().getState().isSimilarTo(authoritySlotT));
+
+    // ---- ANCHOR AT T. The landing AGREED, so the cache keeps the client's own prediction and
+    //      `prepareResimAll` restores it whole -- modelled as the copy-out / assign-back it is.
+    const simulatableBrawler::State cachedPrediction = client.character.getAllState().getState();
+    client.character.editAllState().editState() = cachedPrediction;
+    client.character.firstResimStep(client.phys, 0);
+
+    // ---- T+1: THE AUTHORITY IS HIT. The client replays the same tick with NO hit signal, because
+    //      nothing re-fires the routing pass for a replayed tick. That asymmetry IS the hazard.
+    deliverHit(authority);
+    authority.tick(kCorrectionTick + 1u, idle);
+    clearSlice(authority);
+    client.tick(kCorrectionTick + 1u, idle);
+
+    const auto& authorityMachine = authority.character.getAllState().getState()
+        .get<dAttackMachineSimulation::State>();
+    const auto& clientMachine = client.character.getAllState().getState()
+        .get<dAttackMachineSimulation::State>();
+    INFO("T+1 authority: state=" << int(authorityMachine.m_currentState)
+         << " reaction=" << int(authorityMachine.m_hitReaction)
+         << " v.x=" << authority.movement().velocity.x
+         << " | client: state=" << int(clientMachine.m_currentState)
+         << " v.x=" << client.movement().velocity.x);
+
+    // 1. THE DISAGREEMENT IS REAL, and it is the one the shipped comparison sees -- so production
+    //    really does correct here rather than sliding on silently.
+    REQUIRE(authorityMachine.m_currentState == DAttackState::HitFlinch);
+    REQUIRE(authorityMachine.m_hitReaction == HitReactionKind::Knockback);
+    REQUIRE(authority.movement().velocity.x
+            == Catch::Approx(spec.knockbackSpeed).margin(1e-2f));
+    REQUIRE(clientMachine.m_currentState == DAttackState::Idle);
+    REQUIRE_FALSE(client.character.getAllState().getState()
+                      .isSimilarTo(authority.character.getAllState().getState()));
+
+    // 2. ...AND IT IS ADOPTED THROUGH THE REAL CODEC. Everything the hit did is on the wire, so
+    //    the adoption alone -- with no replayed hit signal anywhere -- restores the whole slide.
+    const simulatableBrawler::State authoritySlotT1 =
+        authority.character.getAllState().getState();
+    client.character.editAllState().editState() =
+        adoptOverTheWire(authoritySlotT1, kCorrectionTick + 1u);
+    client.character.firstResimStep(client.phys, 0);
+    REQUIRE(client.character.getAllState().getState().isSimilarTo(authoritySlotT1));
+    REQUIRE(client.character.getAllState().getState()
+                .get<dAttackMachineSimulation::State>().m_hitReaction
+            == HitReactionKind::Knockback);
+    REQUIRE(client.character.getAllState().getState()
+                .get<dAttackMachineSimulation::State>().m_flinchDuration
+            == Catch::Approx(dwell).margin(1e-6f));
+    REQUIRE(client.movement().velocity.x == Catch::Approx(spec.knockbackSpeed).margin(1e-2f));
+
+    // 3. ONE CORRECTION, NOT A STORM. From the adopted tick on, the client reproduces the
+    //    authority tick for tick with NO further hit signal on either side -- the decay runs off
+    //    the wire state alone. Ten ticks is a fifth of the slide; a per-tick resim would fail on
+    //    the first of them.
+    for (std::uint32_t t = kCorrectionTick + 2u; t <= kCorrectionTick + 11u; ++t)
+    {
+        authority.tick(t, idle);
+        client.tick(t, idle);
+        INFO("replayed tick " << t << ": authority v.x=" << authority.movement().velocity.x
+             << " client v.x=" << client.movement().velocity.x);
+        REQUIRE(client.character.getAllState().getState()
+                    .isSimilarTo(authority.character.getAllState().getState()));
+        REQUIRE(client.movement().velocity.x
+                == Catch::Approx(authority.movement().velocity.x).margin(1e-4f));
+    }
+
+    // ...and the slide really was running through all of that, so row 3 is not a comparison of two
+    // stationary characters.
+    REQUIRE(authority.movement().velocity.x > 0.f);
+    REQUIRE(authority.movement().velocity.x < spec.knockbackSpeed);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

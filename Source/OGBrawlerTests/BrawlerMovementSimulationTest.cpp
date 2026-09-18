@@ -82,6 +82,8 @@
 
 #include "OGBrawler/BrawlerMovementSimulation.h"
 #include "OGBrawler/DAttackMachineSimulation.h"
+#include "OGBrawler/BrawlerInboundHit.h"
+#include "OGBrawler/HitReaction.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
@@ -260,6 +262,14 @@ struct Rig
     movement::DerivedState      derived;
     machine::State              machineState;
 
+    // ⭐ [movement-sim task 27] THE INBOUND-HIT SLICE, the second thing the movement sub-sim now
+    // reads that the rig has to stand in for. In production `brawlerHitRouting::System::
+    // postIntegrate` resolves it from the attacker's wire sequence id and the target's position;
+    // here a case writes it directly, exactly as it writes `machineState`. It is a ONE-SHOT: the
+    // routing pass clears the whole slice at the top of every tick, so `tick()` clears it after
+    // handing it to `integrate` rather than leaving a hit that fires again next tick.
+    brawlerInboundHit::DerivedState inbound;
+
     brawlerTestMocks::MockPhysicsAdapter phys{ 8u };
     QueryT                               query;
     movement::RuntimeBindings            bindings;
@@ -298,6 +308,39 @@ struct Rig
         bindings.ownBodyId      = kBodyId;
         bindings.parentBodyId   = kBodyId;
         bindings.queryVolumeIds = { kVolumeId };
+    }
+
+    // ⛔ [movement-sim task 27] `knockbackSpeed` LEFT `movement::StaticData`: it is per attack
+    // now, authored in `simulatableBrawler::StaticData::m_hitReactions`. Read from there, from
+    // the SAME production aggregate `sd` is a copy of, so R-P1 still holds — the literal is
+    // spelled once, in `SimulatableBrawlerTypes.h`.
+    float knockbackSpeed() const
+    { return game.m_hitReactions[dAttackDirection::kRightSequenceId].knockbackSpeed; }
+
+    // The closed form ruling #13 authored: v^2 / (2a). 500 cm at the shipped pair.
+    float knockbackDistance() const
+    { return knockbackSpeed() * knockbackSpeed() / (2.f * sd.launchDecel); }
+
+    // The slide's duration, and the FLOOR under a knockback's lockout: v / a. 0.5 s.
+    float knockbackSlideSeconds() const { return knockbackSpeed() / sd.launchDecel; }
+
+    // Enter `HitFlinch` with a resolved reaction, exactly as the machine's veto does from the
+    // routing system's slice. `directionXY` is the world XY unit direction away from the attacker.
+    void hit(HitReactionKind kind, glm::vec2 directionXY, float lockoutDuration)
+    {
+        const bool knockback = kind == HitReactionKind::Knockback;
+        inbound.wasHitThisTick = true;
+        inbound.reactionKind   = kind;
+        inbound.knockbackSpeed = knockback ? knockbackSpeed() : 0.f;
+        inbound.hitDirectionXY = knockback ? directionXY : glm::vec2(0.f);
+        inbound.flinchDuration = knockback
+            ? glm::max(lockoutDuration, knockbackSlideSeconds())
+            : lockoutDuration;
+
+        machineState.m_currentState      = DAttackState::HitFlinch;
+        machineState.m_timeInCurrentState = 0.f;
+        machineState.m_hitReaction       = kind;
+        machineState.m_flinchDuration    = inbound.flinchDuration;
     }
 
     float probeLength() const { return sd.rideHeight + sd.snapDistance; }
@@ -365,7 +408,8 @@ struct Rig
         movement::AllInput<brawlerTestMocks::MockPhysicsAdapter, QueryT>
             allInput{ pi, utils };
 
-        movement::integrate(kDt, allInput, mi, sd, deps, bindings, derived);
+        movement::integrate(kDt, allInput, mi, sd, deps, bindings, derived, inbound);
+        inbound = brawlerInboundHit::DerivedState{};
 
         // The composite holds COPIES (it was constructed by value), so sync back.
         ic    = composite.get<movement::InitialConditions>();
@@ -2001,9 +2045,9 @@ TEST_CASE("BrawlerMovement.UpwardLaunchIsDampedNotOverwritten", "[BrawlerMovemen
     PlaneRig rig;
     rig.state.bodyState.position =
         glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight));
-    rig.state.velocity = glm::vec3(0.f, 0.f, rig.sd.knockbackSpeed);
+    rig.state.velocity = glm::vec3(0.f, 0.f, rig.knockbackSpeed());
 
-    const float launch = rig.sd.knockbackSpeed;
+    const float launch = rig.knockbackSpeed();
     rig.tick(0u);
 
     INFO("launched at " << launch << " cm/s while supported -> " << rig.state.velocity.z
@@ -2152,38 +2196,70 @@ TEST_CASE("BrawlerMovement.LedgeFallStartsFromRest", "[BrawlerMovement]")
 }
 
 // ---------------------------------------------------------------------------
-// THE DETACH GATE, AND EXACTLY WHAT THIS CASE DOES AND DOES NOT PROVE.
+// ⭐⭐ THE DETACH GATE IS NO LONGER VACUOUS [movement-sim task 27].
 //
-// PROVES: `detachesFromSupport` exists with the signature task 21 will fill, and returns `false`
-// for every state reachable today -- so `SupportState` is decided by geometry alone in this build
-// and no case above is silently exercising a gate arm.
-// ⛔ DOES NOT PROVE that step 2 consults it. Nothing here can: the predicate is vacuous, so a
-// step 2 that never called it would read identically. That WIRING was verified by POISONING the
-// predicate to `return true` and observing `HoverHoldsRideHeight`, `HoverLiftsWhenLow`,
-// `HoverAbsorbsSmallLedge` and `WallPressKeepsTheCharacterOnTheFloor` go RED together (the
-// character stops being held up and falls); the run is recorded in `impl/impl_notes_seam_56.md`
-// §2 and the poison was reverted. ⭐ WHEN TASK 21 FILLS THE PREDICATE, DELETE THIS CASE AND WRITE
-// THE ONE THAT DRIVES BOTH ARMS -- a vacuity pin that outlives its vacuity is a false comfort.
+// `DetachGateIsVacuousUntilJumpLands` STOOD HERE and its own header said to delete it the day the
+// predicate was filled, because "a vacuity pin that outlives its vacuity is a false comfort". Task
+// 27 fills it — and NOT with the enumerator the old fence anticipated. There is no `Launched`
+// state by design (user ruling 2026-09-12); the arm is keyed on what actually matters,
+// `committed && dot(velocity, up) > 0`, so it is FALSE for every XY knockback that ships today
+// and TRUE the day a lift is authored, with no enumerator knowledge at all.
+//
+// ⛔ BOTH ARMS ARE DRIVEN HERE, which is what the old case could not do. Two of the three inputs
+// are held while the third moves, so a predicate that ignored `committed`, or that ignored the
+// sign of the vertical channel, fails a named arm rather than passing by luck.
+// ⛔ STILL DOES NOT PROVE step 2 consults it — that wiring was verified under task 56 by poisoning
+// the predicate to `return true` and watching four hover cases go red together; the run is in
+// `impl/impl_notes_seam_56.md` §2. What IS new is that the poison is no longer the only way to
+// reach the true arm.
 // ---------------------------------------------------------------------------
-TEST_CASE("BrawlerMovement.DetachGateIsVacuousUntilJumpLands", "[BrawlerMovement]")
+TEST_CASE("BrawlerMovement.XYKnockbackDoesNotDetach", "[BrawlerMovement]")
 {
     using namespace movementTests;
 
     movement::State state;
-    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp));
 
-    // Rising fast, falling fast, and with every flags bit set -- there is no reachable state that
-    // detaches, which is the statement.
+    // ARM 1 -- NOT COMMITTED. Nothing detaches, at any vertical speed, with any flags bit set.
+    // This is the whole of the old vacuity case, kept: it is the shipped answer for walking,
+    // braking, falling and flinching, and the arm every other case in this file runs under.
     for (const float vz : { 0.f, 5000.f, -5000.f })
     {
         state.velocity = glm::vec3(0.f, 0.f, vz);
         for (const std::uint8_t flags : { std::uint8_t(0u), std::uint8_t(0xFFu) })
         {
             state.flags = flags;
-            INFO("vz=" << vz << " flags=0x" << std::hex << int(flags));
-            REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp));
+            INFO("uncommitted vz=" << vz << " flags=0x" << std::hex << int(flags));
+            REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, false));
         }
     }
+
+    // ARM 2 -- COMMITTED AND PURELY HORIZONTAL: the shipped knockback. `hitDirectionXY` is an XY
+    // unit vector and the assignment writes the tangential channels only, so the vertical channel
+    // is whatever the hover servo left there. On flat ground in the steady state that is exactly
+    // zero, and `> 0.f` is STRICT, so a 5 m shove stays SUPPORTED and keeps its hover.
+    state.flags = 0u;
+    state.velocity = glm::vec3(2000.f, -2000.f, 0.f);
+    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, true));
+
+    // ...and a committed body still SETTLING downward does not detach either. Detaching on a
+    // negative vertical channel would drop a knockback out of support on any tick the servo is
+    // pulling it back to ride height.
+    state.velocity = glm::vec3(2000.f, 0.f, -1.f);
+    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, true));
+
+    // ARM 3 -- COMMITTED AND RISING: the arm the fence was written for, and the one an authored
+    // lift (a launcher, a ski jump) reaches without adding a single enumerator.
+    state.velocity = glm::vec3(0.f, 0.f, 1.f);
+    REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, true));
+    state.velocity = glm::vec3(2000.f, 0.f, 2000.f);
+    REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, true));
+
+    // ⭐ THE DISCRIMINATOR. The same rising velocity, uncommitted, does NOT detach — which is what
+    // makes arm 3 a statement about `committed` and not merely about the sign of `vz`. Without
+    // this line a predicate that read `dot(velocity, up) > 0` alone would pass every arm above,
+    // and `UpwardLaunchIsDampedNotOverwritten` — which seeds exactly this velocity while
+    // uncommitted — would have started detaching silently.
+    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, false));
 }
 
 // ===========================================================================
@@ -3909,6 +3985,384 @@ TEST_CASE("BrawlerMovement.WallContactStillKillsIntoWallComponent", "[BrawlerMov
         REQUIRE(rig.state.velocity.y == Catch::Approx(expected.y).margin(1e-3f));
         REQUIRE(rig.state.velocity.z == Catch::Approx(expected.z).margin(1e-3f));
     }
+}
+
+// ===========================================================================
+// HIT REACTIONS -- STEP 1's `committed` ARM AND STEP 3's KNOCKBACK  [movement-sim task 27]
+//
+// SUBJECT: the user's 2026-09-03 requirement -- "a significant impulse, thrown 5 metres, then
+// quickly to a stop" -- as revision 6 / ruling #14(c) settled it: a velocity ASSIGNMENT on the hit
+// tick and the Smash decay afterwards, never an impulse.
+//
+// ⭐ THERE IS NO `Launched` STATE. `HitFlinch` carries the lockout and the HIT carries the
+// reaction: `m_hitReaction` says freeze (Stun) or assign-and-decay (Knockback) and
+// `m_flinchDuration` says for how long, both resolved ONCE by `brawlerHitRouting::System` from the
+// attacking sequence's `HitReactionSpec` and both on the wire. This rig therefore drives the
+// reaction the way it drives everything else: `Rig::hit()` writes the machine state and the
+// inbound slice together, which is exactly the pair the routing pass and the machine veto produce.
+//
+// ⛔ WHAT THIS FILE MEASURES AND WHAT IT DOES NOT. The lockout's LENGTH and its retrigger are
+// the machine's, and they are pinned in `IntegrateThreeAttackSelectionTest.cpp` where the machine
+// actually runs; the reaction TABLE and the resolved dwell are the routing system's, pinned in
+// `BrawlerHitRoutingTest.cpp`. Everything below is about what the BODY does while the machine
+// holds it, which is this file's subject and the one the rig can drive without a second sub-sim.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ THE OWED CASE. Routed to task 27 from task 12 on 2026-09-06 under this exact name,
+// because task 12 had no state to drive it: step 1's `committed` was a hard
+// `const bool committed = false;` and there was no reaction on the wire to test. Both exist now.
+//
+// ⭐ THE CLOSED FORM IS ASSERTED, NOT RESTATED. `knockbackDistance()` is computed from the two
+// SHIPPED constants -- `m_hitReactions[right].knockbackSpeed` and `StaticData::launchDecel` -- and
+// the assertion is that v^2/(2a) equals FIVE METRES. Re-typing 500 would have made this case pass
+// against its own copy of the number.
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.LaunchedDecelsAtLaunchDecel", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+
+    // 1. THE USER'S NUMBER, AS AN IDENTITY OVER THE SHIPPED CONSTANTS. 2000^2 / 8000 = 500 cm.
+    INFO("knockbackSpeed=" << rig.knockbackSpeed() << " launchDecel=" << rig.sd.launchDecel
+         << " -> v^2/(2a)=" << rig.knockbackDistance() << " cm over "
+         << rig.knockbackSlideSeconds() << " s");
+    REQUIRE(rig.knockbackDistance() == Catch::Approx(500.f).margin(1e-3f));
+    REQUIRE(rig.knockbackSlideSeconds() == Catch::Approx(0.5f).margin(1e-6f));
+
+    // 2. THE ASSIGNMENT, on the hit tick and keyed on the hit -- not on the machine's timer.
+    const glm::vec3 startPosition = rig.state.bodyState.position;
+    rig.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
+    rig.tick(1u, stick(0.f, 0.f));
+    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.knockbackSpeed()).margin(1e-3f));
+    REQUIRE(rig.state.velocity.y == Catch::Approx(0.f).margin(1e-4f));
+    // Steady hover at ride height: the vertical channel is identically zero, so the whole of the
+    // velocity is the knockback. That is what makes the rows below exact rather than approximate.
+    REQUIRE(rig.state.velocity.z == Catch::Approx(0.f).margin(1e-4f));
+    rig.engineStep();
+
+    // 3. THE DECAY IS `launchDecel`, EVERY TICK, AND IT REACHES EXACTLY ZERO. `moveTowards`
+    //    returns the TARGET once the remaining distance is inside one step, so the last tick lands
+    //    on 0.000000 rather than overshooting into a backwards crawl.
+    const float perTick = rig.sd.launchDecel * kDt;
+    int zeroAtTick = -1;
+    float travelled = rig.state.velocity.x * kDt;   // the hit tick's own displacement
+    for (std::uint32_t t = 2u; t <= 40u; ++t)
+    {
+        const float before = rig.state.velocity.x;
+        rig.tick(t, stick(0.f, 0.f));
+        const float after = rig.state.velocity.x;
+        if (zeroAtTick < 0)
+        {
+            INFO("tick " << t << ": " << before << " -> " << after << " (step " << perTick << ")");
+            REQUIRE(before - after == Catch::Approx(glm::min(perTick, before)).margin(1e-3f));
+            if (after == 0.f) zeroAtTick = int(t);
+        }
+        travelled += rig.state.velocity.x * kDt;
+        rig.engineStep();
+    }
+
+    // EXACTLY zero -- and at tick 32, which is THIRTY-ONE decay ticks after the hit tick and not
+    // the thirty the real arithmetic names. ⛔ THIS IS THE FLOAT NOTE THE DESIGN ASKED TO BE
+    // PINNED RATHER THAN HAND-TUNED, and it is MEASURED: `4000 * (1/60)` is 66.666664, not
+    // 66.666667, so thirty steps remove 1999.99992 and leave 8e-5 cm/s behind -- one more tick,
+    // which `moveTowards` then takes all the way to the endpoint. A 30-or-31-step exit was
+    // anticipated (both are "lockout >= slide"); the row pins WHICH, so a future retune that
+    // changes it has to be looked at rather than absorbed.
+    INFO("reached zero at tick " << zeroAtTick << "; travelled " << travelled << " cm");
+    REQUIRE(zeroAtTick == 32);
+    REQUIRE(rig.state.velocity.x == 0.f);
+
+    // 4. ...AND IT STAYS AT ZERO: the decay does not push the character backwards once it arrives,
+    //    and nothing re-reads `knockbackSpeed` after the hit tick.
+    rig.tick(41u, stick(0.f, 0.f));
+    REQUIRE(rig.state.velocity.x == 0.f);
+
+    // 5. THE DISTANCE, MEASURED, AGAINST THE CLOSED FORM PLUS ITS OWN DISCRETISATION TERM.
+    //    Summing v*dt over the N+1 ticks of a linear ramp gives dt*(N+1)*v0/2, which is
+    //    v0^2/(2a) + v0*dt/2 exactly -- half a tick of the launch speed, 16.667 cm at the shipped
+    //    pair. ⛔ Asserting the bare 500 here would have been wrong by that term and would have
+    //    had to be absorbed into a loose margin; naming it keeps the row exact and keeps the
+    //    closed form in row 1 where it belongs.
+    const float discreteExpectation =
+        rig.knockbackDistance() + rig.knockbackSpeed() * kDt * 0.5f;
+    INFO("travelled " << travelled << " cm; closed form " << rig.knockbackDistance()
+         << " + half a tick of launch speed " << (rig.knockbackSpeed() * kDt * 0.5f)
+         << " = " << discreteExpectation);
+    REQUIRE(travelled == Catch::Approx(discreteExpectation).margin(1e-2f));
+    REQUIRE(rig.state.bodyState.position.x - startPosition.x
+            == Catch::Approx(discreteExpectation).margin(1e-2f));
+}
+
+// ---------------------------------------------------------------------------
+// The direction is the HIT's, and a second hit REPLACES it. [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.KnockbackHitLaunches", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+
+    const glm::vec2 first = glm::normalize(glm::vec2(1.f, -1.f));
+    rig.hit(HitReactionKind::Knockback, first, 0.f);
+    rig.tick(1u, stick(-1.f, 0.f));   // the stick is IGNORED: the arm is committed, not modelled
+
+    INFO("velocity=(" << rig.state.velocity.x << ", " << rig.state.velocity.y << ", "
+         << rig.state.velocity.z << ") for direction (" << first.x << ", " << first.y << ")");
+    REQUIRE(rig.state.velocity.x == Catch::Approx(first.x * rig.knockbackSpeed()).margin(1e-2f));
+    REQUIRE(rig.state.velocity.y == Catch::Approx(first.y * rig.knockbackSpeed()).margin(1e-2f));
+    // ⭐ THE SPEED IS THE SPEED, not its projection: `u` and `v` are orthonormal, so mapping the
+    // world XY direction onto them component-wise preserves the magnitude exactly.
+    REQUIRE(glm::length(glm::vec2(rig.state.velocity.x, rig.state.velocity.y))
+            == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+
+    // One tick of decay, so the re-launch below is measurably a REPLACEMENT and not an addition.
+    rig.tick(2u, stick(0.f, 0.f));
+    const float decayed = glm::length(glm::vec2(rig.state.velocity.x, rig.state.velocity.y));
+    REQUIRE(decayed == Catch::Approx(rig.knockbackSpeed() - rig.sd.launchDecel * kDt).margin(1e-2f));
+
+    // ⛔ RE-LAUNCH REPLACES. Revision 5's "consecutive hits SUM" is superseded by revision 6's
+    // assignment (architect review 2026-09-12 section 2.4): the second hit's direction and speed
+    // are the whole of the answer, and the decayed remainder of the first is discarded. A sum
+    // would read ~3933 cm/s here, and in a direction neither hit asked for.
+    const glm::vec2 second(0.f, 1.f);
+    rig.hit(HitReactionKind::Knockback, second, 0.f);
+    rig.tick(3u, stick(0.f, 0.f));
+    INFO("re-launched to (" << rig.state.velocity.x << ", " << rig.state.velocity.y << ")");
+    REQUIRE(rig.state.velocity.x == Catch::Approx(0.f).margin(1e-2f));
+    REQUIRE(rig.state.velocity.y == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+    REQUIRE(glm::length(glm::vec2(rig.state.velocity.x, rig.state.velocity.y))
+            == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+}
+
+// ---------------------------------------------------------------------------
+// The forward/overhead hit and the projectile STUN: the pre-task-27 `HitFlinch` behaviour,
+// exactly, and now reachable only through `m_hitReaction == Stun`. [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.StunHitFreezesWithoutKnockback", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+    rig.state.velocity = glm::vec3(rig.sd.maxWalkSpeed, 0.f, 0.f);
+
+    const glm::vec3 startPosition = rig.state.bodyState.position;
+    rig.hit(HitReactionKind::Stun, glm::vec2(0.f), 0.3f);
+
+    for (std::uint32_t t = 1u; t <= 18u; ++t)
+    {
+        rig.tick(t, stick(1.f, 0.f));
+        INFO("stun dwell tick " << t);
+        REQUIRE(rig.frozenBit());
+        REQUIRE(rig.state.velocity == glm::vec3(0.f));
+        rig.engineStep();
+    }
+    // NO DISPLACEMENT AT ALL -- a stun is the hitstop freeze, not a slow slide.
+    REQUIRE(rig.state.bodyState.position == startPosition);
+
+    // ⭐ THE DISCRIMINATOR, and it is the whole of this task on the movement side: the SAME
+    // machine state with the OTHER reaction byte is not frozen at all. Without this arm the case
+    // would pass on a `machineFreezesMovement` that still froze on plain `HitFlinch`.
+    ScriptedRig knocked;
+    seatOnFlatGroundAtRideHeight(knocked);
+    knocked.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
+    knocked.tick(1u, stick(0.f, 0.f));
+    REQUIRE(knocked.machineState.m_currentState == rig.machineState.m_currentState);
+    REQUIRE_FALSE(knocked.frozenBit());
+    REQUIRE(knocked.state.velocity.x == Catch::Approx(knocked.knockbackSpeed()).margin(1e-2f));
+}
+
+// ---------------------------------------------------------------------------
+// THE CROSS-KIND POLICY, section 3 of `impl/design_hit_reactions.md`, and it is the USER'S RULED
+// DEFAULT: a stun landing mid-slide KILLS the momentum. The fighting-game convention (a hit resets
+// the reaction) rather than an accident of the branch order. [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.StunDuringSlideKillsMomentum", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+    rig.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
+    rig.tick(1u, stick(0.f, 0.f));
+
+    // Mid-slide, with real momentum left: the premise that makes the kill measurable.
+    for (std::uint32_t t = 2u; t <= 10u; ++t)
+        rig.tick(t, stick(0.f, 0.f));
+    const float midSlide = rig.state.velocity.x;
+    INFO("mid-slide speed " << midSlide << " cm/s when the stun lands");
+    REQUIRE(midSlide > 0.5f * rig.knockbackSpeed());
+
+    rig.hit(HitReactionKind::Stun, glm::vec2(0.f), 0.3f);
+    rig.tick(11u, stick(0.f, 0.f));
+
+    // ⛔ DEAD, not decayed: the stun freezes, and a freeze is exact this tick (see
+    // `FrozenIsExactThisTick`). `midSlide - launchDecel*dt` would be the decay's answer.
+    REQUIRE(rig.state.velocity == glm::vec3(0.f));
+    REQUIRE(midSlide - rig.sd.launchDecel * kDt > 1.f);   // ...and the decay would NOT have been 0
+    rig.tick(12u, stick(0.f, 0.f));
+    REQUIRE(rig.state.velocity == glm::vec3(0.f));
+}
+
+// ---------------------------------------------------------------------------
+// ⛔ `committed` IS TESTED BEFORE `frozen`, and this is the case that says so. Holding guard
+// during a knockback must not freeze the slide: guard is blocked by the shape gate in
+// `DAttackGuardSimulation` (`machine != Idle`), never by freezing the body. Swap the two branches
+// in step 3 and this case reads 0 where it requires 2000. [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.HoldGuardDoesNotFreezeASlide", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+    rig.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
+
+    rig.tick(1u, stick(0.f, 0.f), movement::kInputFlagHoldGuard);
+    INFO("holdGuard held through the launch tick: v.x=" << rig.state.velocity.x);
+    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+
+    rig.tick(2u, stick(0.f, 0.f), movement::kInputFlagHoldGuard);
+    REQUIRE(rig.state.velocity.x
+            == Catch::Approx(rig.knockbackSpeed() - rig.sd.launchDecel * kDt).margin(1e-2f));
+
+    // CONTROL -- the same input with no knockback freezes, so the bit really is live in this
+    // fixture and the rows above are a statement about the ORDER, not about a dead input path.
+    ScriptedRig walking;
+    seatOnFlatGroundAtRideHeight(walking);
+    walking.state.velocity = glm::vec3(walking.sd.maxWalkSpeed, 0.f, 0.f);
+    walking.tick(1u, stick(1.f, 0.f), movement::kInputFlagHoldGuard);
+    REQUIRE(walking.state.velocity == glm::vec3(0.f));
+}
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ A SHOVE ON A SLOPE STAYS ON THE SLOPE. The hit direction is a world XY unit vector and
+// it is mapped into the tangent frame COMPONENT-WISE (`d.x -> u`, `d.y -> v`), which is exact
+// because `buildTangentFrame` makes `u`'s horizontal projection X-aligned and `v` horizontal
+// whenever the normal is walkable. The consequences, both measured here: the launched velocity is
+// PERPENDICULAR to the surface normal, and its horizontal speed is `knockbackSpeed * cos(theta)`
+// -- the character covers 5 m ALONG THE FACE, not 5 m of ground.
+//
+// ⛔ THE PLAUSIBLE WRONG EDIT this case exists to catch is
+// `glm::vec2(dot(dWorld, u), dot(dWorld, v))` -- the projection. It is the reflex spelling, it is
+// dimensionally innocent, and on a 30 degree face it launches at 1732 cm/s instead of 2000, losing
+// 13.4 % of the user's 5 m. See `docs/BrawlerMovementSimulation-rationale.md` D-06.
+// [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.SlopeKnockbackStaysOnSlope", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    const float theta = 30.f;
+    const glm::vec3 n = slopeNormal(theta);
+
+    ScriptedRig rig;
+    rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight, rig.probeLength(), n) };
+    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+
+    rig.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
+    rig.tick(1u, stick(0.f, 0.f));
+
+    const glm::vec3 velocity = rig.state.velocity;
+    const float horizontal = glm::length(glm::vec2(velocity.x, velocity.y));
+    INFO("30 deg face: v=(" << velocity.x << ", " << velocity.y << ", " << velocity.z
+         << ")  |v|=" << glm::length(velocity) << "  horizontal=" << horizontal
+         << "  expected horizontal=" << (rig.knockbackSpeed() * glm::cos(glm::radians(theta)))
+         << "  dot(v, n)=" << glm::dot(velocity, n));
+
+    REQUIRE(rig.support() == movement::SupportState::Supported);
+    // 1. ON the face: no component into or out of it.
+    REQUIRE(glm::dot(velocity, n) == Catch::Approx(0.f).margin(1e-2f));
+    // 2. AT the authored speed, along the face -- this is the row the projection spelling fails.
+    REQUIRE(glm::length(velocity) == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+    // 3. ...so the HORIZONTAL speed is knockbackSpeed * cos(theta), and the case names the number
+    //    the wrong spelling would have produced as the full speed.
+    REQUIRE(horizontal
+            == Catch::Approx(rig.knockbackSpeed() * glm::cos(glm::radians(theta))).margin(1e-2f));
+    REQUIRE(velocity.z
+            == Catch::Approx(rig.knockbackSpeed() * glm::sin(glm::radians(theta))).margin(1e-2f));
+    // ...and the two are genuinely different, so row 2 discriminates.
+    REQUIRE(glm::abs(glm::length(velocity) - horizontal) > 100.f);
+
+    // 4. THE CHANNELS, read back through the file's own independent dual basis: all of the speed
+    //    is in `u`, none in `v`, and the vertical channel is untouched by the assignment.
+    const glm::vec3 channels = channelsOf(velocity, n);
+    REQUIRE(channels.x == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+    REQUIRE(channels.y == Catch::Approx(0.f).margin(1e-2f));
+    REQUIRE(channels.z == Catch::Approx(0.f).margin(1e-2f));
+
+    // ⚠ ⚠ MEASURED AND ROUTED, NOT ASSERTED AS DESIRABLE [movement-sim task 27]. The detach
+    // arm the architect ruled is `committed && dot(velocity, up) > 0` -- WORLD z. On flat ground a
+    // knockback's world z is exactly 0 and the arm is false, which is what section 2.5(b) of
+    // `impl/review_task27_knockback_design.md` means by "false for every XY hit". ON A SLOPE IT IS
+    // NOT: `u.z == sin(theta)`, so an up-slope shove carries `knockbackSpeed * sin(theta)` of
+    // world z -- 1000 cm/s here -- and the NEXT tick's step 2 therefore detaches. The frame does
+    // not move with it (`n` is keyed on `walkable`, not on `support`), so the slide stays on the
+    // face; what is lost is the hover hold for the rest of the slide. The number is printed and
+    // the state is recorded here rather than hidden, and the finding is routed to the lead in
+    // `impl/impl_notes_seam_27.md`.
+    rig.tick(2u, stick(0.f, 0.f));
+    INFO("tick 2 on the face: support=" << int(rig.support())
+         << " (0 Unsupported, 1 Supported)  v.z=" << rig.state.velocity.z
+         << "  -- world z carries the TANGENTIAL channel on a slope; the vertical CHANNEL is "
+         << channelsOf(rig.state.velocity, n).z);
+    REQUIRE(glm::dot(velocity, movement::kWorldUp) > 0.f);
+    REQUIRE(rig.support() == movement::SupportState::Unsupported);
+}
+
+// ---------------------------------------------------------------------------
+// A KNOCKBACK INTO A WALL STOPS AT THE WALL, and the tangential remainder keeps decaying.
+// Task 54's contact rule is untouched by task 27: step 6' kills the into-wall component of
+// whatever the body is carrying, and the decay in step 3 then works on what is left.
+// [movement-sim task 27]
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.KnockbackIntoWallStopsAtWall", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    // The wall faces -X; the shove is +X into it, with a +Y component that must SURVIVE.
+    const glm::vec3 wallNormal(-1.f, 0.f, 0.f);
+
+    ScriptedRig rig;
+    rig.query.scriptedSweeps.clear();          // airborne, exactly as the task-54 wall cases
+    rig.sd.drivesBody = true;
+    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+
+    const glm::vec2 direction = glm::normalize(glm::vec2(1.f, 1.f));
+    rig.hit(HitReactionKind::Knockback, direction, 0.f);
+    rig.tick(1u, stick(0.f, 0.f));
+
+    const glm::vec3 arriving = rig.state.velocity;
+    REQUIRE(arriving.x == Catch::Approx(direction.x * rig.knockbackSpeed()).margin(1e-2f));
+    REQUIRE(arriving.y == Catch::Approx(direction.y * rig.knockbackSpeed()).margin(1e-2f));
+
+    // The solver stops the body at the wall and pushes it out along the normal.
+    rig.engineStepAndCapture(rig.state.bodyState.position + arriving * kDt + wallNormal * 2.f,
+                             glm::vec3(0.f));
+    rig.tick(2u, stick(0.f, 0.f));
+
+    INFO("into the wall at (" << arriving.x << ", " << arriving.y << ") -> ("
+         << rig.state.velocity.x << ", " << rig.state.velocity.y << "); pushOut.x="
+         << rig.derived.lastPushOut.x);
+
+    // PREMISE: step 6' really ran and really found the wall.
+    REQUIRE(glm::length(rig.derived.lastPushOut) > movement::kPushOutEps);
+
+    // 1. THE INTO-WALL COMPONENT IS GONE. Killed by step 6' before step 3 decays anything, so the
+    //    character does not keep pressing 1414 cm/s of nothing into the surface.
+    REQUIRE(rig.state.velocity.x == Catch::Approx(0.f).margin(1e-2f));
+
+    // 2. ...AND THE TANGENTIAL REMAINDER IS STILL DECAYING AT `launchDecel`, not zeroed with it.
+    //    `moveTowards` works on the 2D pair, so the step it takes is along the REMAINING
+    //    direction: with x killed, the whole of one tick's decay lands on y.
+    const float remaining = direction.y * rig.knockbackSpeed();
+    REQUIRE(rig.state.velocity.y
+            == Catch::Approx(remaining - rig.sd.launchDecel * kDt).margin(1e-2f));
+    REQUIRE(rig.state.velocity.y > 0.f);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS
