@@ -78,9 +78,6 @@ struct FPushRig
         for (unsigned int id = 0u; id < kRigCharacters; ++id)
             this->storage.add<SimulatableBrawler>(id, SimulatableBrawler(this->staticData));
 
-        // The production order: role first, then registration. See `setIsAuthority`.
-        this->system.setIsAuthority(true);
-
         if (seedRoster)
         {
             for (unsigned int id = 0u; id < kRigCharacters; ++id)

@@ -8,6 +8,13 @@
 // inspection — that a NON-AUTHORITY role awards nothing at all, and that two simultaneous
 // deaths award two points to each SURVIVOR while both diers get nothing.
 //
+// ⛔ [ringout task 19] THE ROLE GATE IS NO LONGER IN THIS SYSTEM. `ScoreSystem` declares
+// `kRoleAffinity = SystemRoleAffinity::AuthorityOnly` and `SimulationSystemsExecutor` skips it
+// off the authority. So `ANonAuthorityRoleAwardsNothing` below drives the real EXECUTOR with an
+// explicit role — the rig is `FExecRig`, not `FScoreRig` — because the gate it is about is now
+// one branch over there. Every other case still drives the system directly: they are about the
+// award's law, which did not move.
+//
 // ⛔ THESE CASES DRIVE THE SYSTEM THROUGH THE PRODUCTION VIEW, not a hand-built one.
 // `StorageView`'s constructor is private and `SimulationObjectStorage::projectTo<>` is its only
 // mint, so the rig below hands the system the SAME object the executor does — including the
@@ -43,6 +50,8 @@
 #include "OGBrawler/SimulatableBrawlerTypes.h"
 #include "OGSimulation/SimulationObjectStorage.h"
 #include "OGSimulation/StorageView.h"
+#include "OGSimulation/SystemsExecutor.h"
+#include "OGSimulation/SystemRoleAffinity.h"
 #include "OGSimulation/SimulationTimeContext.h"
 #include "OGSimulation/SimulationComposite.h"
 #include "OGSimulation/SimulationSerialization.h"
@@ -79,7 +88,7 @@ struct FScoreRig
     // `ascendingIds == false` adds the SAME four ids in the reverse order. Nothing about the
     // resulting population differs — only the order the storage's unordered_map happens to walk
     // them in, which is the whole variable `TwoIterationOrdersProduceIdenticalScores` perturbs.
-    explicit FScoreRig(bool isAuthority = true, bool ascendingIds = true)
+    explicit FScoreRig(bool ascendingIds = true)
     {
         if (ascendingIds)
         {
@@ -92,10 +101,9 @@ struct FScoreRig
                 addCharacter(kRigCharacters - 1u - i);
         }
 
-        // ⛔ SET THE ROLE FIRST, THEN REGISTER — the production order. `BeginPlay` calls
-        // `setIsAuthority` above the role branch that emplaces the manager, so no registration
-        // and no tick can reach the system before the flag is right.
-        this->system.setIsAuthority(isAuthority);
+        // ⛔ DRIVES THE SYSTEM DIRECTLY, which is the AUTHORITY's behaviour: on that role the
+        // executor forwards every hook unchanged. The off-authority behaviour is not this rig's
+        // to pose — it is the executor's, and `FExecRig` below is where it is driven.
         for (unsigned int id = 0u; id < kRigCharacters; ++id)
             this->system.onCharacterRegistered(id, view(), this->staticData);
     }
@@ -173,6 +181,70 @@ struct FScoreRig
     }
 };
 
+// ⛔ [ringout task 19] THE EXECUTOR RIG. Same four-character population as `FScoreRig`, but
+// every hook is reached through the SHIPPED `SimulationSystemsExecutor` with an explicit role.
+// That is the whole point: the gate is no longer a statement inside `ScoreSystem` that a rig
+// could bypass by calling the hook directly, it is a branch in the executor, and a rig that
+// called `system.postIntegrate` would drive straight past it and pass against an unguarded
+// build. The type alias below is the same four template arguments `SimulationManagerUImpl.h`
+// instantiates, minus the sibling systems.
+struct FExecRig
+{
+    using Exec = SimulationSystemsExecutor<SimulatableList<SimulatableBrawler>,
+                                           simulatableBrawler::StaticData,
+                                           ringout::ScoreSystem>;
+
+    simulatableBrawler::StaticData              staticData;
+    SimulationObjectStorage<SimulatableBrawler> storage;
+    Exec                                        exec;
+
+    FExecRig()
+    {
+        for (unsigned int id = 0u; id < kRigCharacters; ++id)
+            this->storage.add<SimulatableBrawler>(id, SimulatableBrawler(this->staticData));
+    }
+
+    const ringout::ScoreSystem& system() const { return this->exec.get<ringout::ScoreSystem>(); }
+
+    void registerAll(bool isAuthority)
+    {
+        for (unsigned int id = 0u; id < kRigCharacters; ++id)
+            this->exec.notifyCharacterRegistered(id, this->storage, this->staticData, isAuthority);
+    }
+
+    void unregister(unsigned int id, bool isAuthority)
+    {
+        this->exec.notifyCharacterUnregistered(id, this->storage, this->staticData, isAuthority);
+    }
+
+    // BOTH step hooks, in the manager's order. `preIntegrate` is a no-op in this system, but the
+    // role gate is in front of all four hooks and a case about the gate must drive all four.
+    void step(unsigned int tick, bool isAuthority, bool isResimulating = false,
+              StepKind kind = StepKind::Normal)
+    {
+        const SimulationTimeStep s(tick, isResimulating, kind);
+        this->exec.firePreIntegrate(s, this->storage, this->staticData, isAuthority);
+        this->exec.firePostIntegrate(s, this->storage, this->staticData, isAuthority);
+    }
+
+    void poseDeath(unsigned int id)
+    {
+        auto& all = this->storage.get<SimulatableBrawler>(id).editAllState();
+        all.editDerivedState().edit<ringout::DerivedState>().diedThisTick = true;
+        auto& state = all.editState().edit<ringout::State>();
+        state.flags = static_cast<uint8_t>(state.flags | ringout::kFlagDead);
+        state.respawnAtTick = 999u;
+    }
+
+    std::vector<uint32_t> allScores() const
+    {
+        std::vector<uint32_t> out;
+        for (unsigned int id = 0u; id < kRigCharacters; ++id)
+            out.push_back(this->system().scoreOf(id));
+        return out;
+    }
+};
+
 // ============================================================================================
 // THE CONCEPT. The executor's own requires-clause would reject a non-conforming system too —
 // but it would reject it inside `SimulationManagerUImpl.h`, a UE module file this target cannot
@@ -186,58 +258,90 @@ TEST_CASE("RingoutScore.SatisfiesTheSimulationSystemConcept", "[BrawlerRingout]"
     STATIC_REQUIRE(std::is_same_v<ringout::ScoreSystem::RequiredSimulatables,
                                   SimulatableList<SimulatableBrawler>>);
 
-    // The default is CLOSED. A system nobody configured awards nothing — see `setIsAuthority`.
+    // ⭐ [ringout task 19] THE COMPILE-TIME PIN OF "THIS SYSTEM IS AUTHORITY-ONLY", and it is
+    // the one line the retired G-02 could only assert at run time. `kRoleAffinity` is a
+    // `static constexpr` on the CLASS, so no object is needed — which is what got around the
+    // `C3615` that stopped `constexpr ScoreSystem s;` from compiling.
+    // ⚠ NOTHING CHECKS THAT THE VALUE IS RIGHT. This pins what the system SAYS; that saying
+    // `AuthorityOnly` actually leaves it inert off the authority is
+    // `ANonAuthorityRoleAwardsNothing` below, and that case is the only thing that does.
+    STATIC_REQUIRE(ringout::ScoreSystem::kRoleAffinity == SystemRoleAffinity::AuthorityOnly);
+
+    // A fresh system holds nothing. The roster is built by `onCharacterRegistered`, which off
+    // the authority the executor never calls.
     const ringout::ScoreSystem fresh;
-    REQUIRE_FALSE(fresh.getIsAuthority());
     REQUIRE(fresh.scoreEntryCount() == 0u);
     REQUIRE(fresh.scoreOf(0u) == 0u);
 }
 
 // ============================================================================================
-// ⛔⛔ THE DOUBLE-COUNT DEFECT. Systems fire on ALL THREE roles — the authority tick, a client's
-// forward PREDICTION tick, and every replayed tick of every RESIM — and `SimulationTimeStep`
-// cannot separate them: `getIsResimulating()` is FALSE on both the authority tick and a client's
-// prediction tick, and `StepKind` describes the CLOCK, not the role. Ungated, one death would be
-// scored once on the authority and then again on every client, once more per replayed tick.
+// ⛔⛔ THE DOUBLE-COUNT DEFECT, AND AFTER TASK 19 IT IS THE EXECUTOR'S GATE THAT PREVENTS IT.
+// An `AllRoles` system fires on all three roles — the authority tick, a client's forward
+// PREDICTION tick, and every replayed tick of every RESIM — and `SimulationTimeStep` cannot
+// separate them:
+// `getIsResimulating()` is FALSE on both the authority tick and a client's prediction tick, and
+// `StepKind` describes the CLOCK, not the role. Ungated, one death would be scored once on the
+// authority and then again on every client, once more per replayed tick.
+//
+// ⛔ THIS CASE DRIVES `FExecRig`, NOT `FScoreRig`, AND THAT IS THE POINT. The gate is one
+// branch in `SimulationSystemsExecutor`, in front of all four hooks, keyed off
+// `ScoreSystem::kRoleAffinity`. A rig that called `system.postIntegrate(...)` directly would
+// walk straight past it and stay green against a build with no gate at all. Stubbing
+// `SimulationSystemsExecutor::firesOnRole` to `return true` — the executor-level form of the
+// injection that retired G-01 used — turns this case red.
 //
 // ⭐ THE POSITIVE CONTROL IS THE HALF THAT MAKES THIS EVIDENCE. A rig that poses nothing also
-// awards nothing, so the case ends by flipping the SAME rig to the authority role, driving the
-// SAME posed death, and watching the points appear. Without that arm this case would pass
+// awards nothing, so the case ends by re-driving the SAME rig and the SAME posed death with
+// `isAuthority=true`, and watching the points appear. Without that arm this case would pass
 // against a `postIntegrate` whose body was deleted.
+//
+// ⚠ THE CLIENT ARM OF `UnregisterDropsTheEntryAndARejoinStartsAtZero` MOVED IN HERE (step 4).
+// It was about the same property — that nothing on the client role touches the table — and it
+// can only be driven through the executor now that the hook itself carries no role.
 // ============================================================================================
 TEST_CASE("RingoutScore.ANonAuthorityRoleAwardsNothing", "[BrawlerRingout]")
 {
-    FScoreRig rig(/*isAuthority=*/false);
+    FExecRig rig;
 
-    // A client never even builds a roster: nothing on that role writes the table, so nothing on
-    // that role can read a wrong answer out of it.
-    REQUIRE(rig.system.scoreEntryCount() == 0u);
+    // 0. THE LIFECYCLE HOOK. A client never even builds a roster — and now not because
+    //    `onCharacterRegistered` returns early, but because the executor never calls it.
+    rig.registerAll(/*isAuthority=*/false);
+    REQUIRE(rig.system().scoreEntryCount() == 0u);
 
     rig.poseDeath(1u);
 
     // 1. The client's FORWARD PREDICTION tick. isResimulating == false, exactly as on the
     //    authority — this is the pair `getIsResimulating()` provably cannot tell apart.
-    rig.step(100u, /*isResimulating=*/false);
+    rig.step(100u, /*isAuthority=*/false);
 
     // 2. Every replayed tick of a resim. The same death is replayed from the rollback anchor;
-    //    an ungated award would add a point PER REPLAYED TICK, not per death.
+    //    an ungated award would add a point PER REPLAYED TICK, not per death. ⚠ The executor's
+    //    `OG_CHECK` tripwire is NOT reached on these twelve steps: the role gate is taken first,
+    //    so an AuthorityOnly system is silent on a client replay rather than asserting.
     for (unsigned int replayTick = 100u; replayTick <= 111u; ++replayTick)
-        rig.step(replayTick, /*isResimulating=*/true);
+        rig.step(replayTick, /*isAuthority=*/false, /*isResimulating=*/true);
 
     // 3. A HardResync step, for completeness: the caches are wiped and the integrate step is
     //    treated like Normal, so it is one more shape of tick a client reaches this hook on.
-    rig.step(112u, /*isResimulating=*/false, StepKind::HardResync);
+    rig.step(112u, /*isAuthority=*/false, /*isResimulating=*/false, StepKind::HardResync);
 
     REQUIRE((rig.allScores() == std::vector<uint32_t>{ 0u, 0u, 0u, 0u }));
-    REQUIRE(rig.system.scoreEntryCount() == 0u);
+    REQUIRE(rig.system().scoreEntryCount() == 0u);
+
+    // 4. THE UNREGISTER HOOK, off the authority — moved here from
+    //    `UnregisterDropsTheEntryAndARejoinStartsAtZero`. Nothing on this role ever inserted, and
+    //    now nothing on this role is even called, so the erase cannot be reached to be wrong.
+    rig.unregister(1u, /*isAuthority=*/false);
+    REQUIRE(rig.system().scoreEntryCount() == 0u);
 
     // ---- THE POSITIVE CONTROL ----------------------------------------------------------
-    // Same rig, same posed death, role flipped. If this arm does not move, the case above is
+    // Same rig, same posed death, role flipped. If this arm does not move, everything above is
     // passing because the rig poses nothing.
-    rig.system.setIsAuthority(true);
-    rig.step(113u);
+    rig.registerAll(/*isAuthority=*/true);
+    REQUIRE(rig.system().scoreEntryCount() == kRigCharacters);   // seeded, this time, by a call that happened
+    rig.step(113u, /*isAuthority=*/true);
     REQUIRE((rig.allScores() == std::vector<uint32_t>{ 1u, 0u, 1u, 1u }));
-    REQUIRE(rig.system.scoreEntryCount() == 3u);   // inserted by the award, not by registration
+    REQUIRE(rig.system().scoreEntryCount() == kRigCharacters);
 }
 
 // ============================================================================================
@@ -355,8 +459,8 @@ TEST_CASE("RingoutScore.AFighterAwaitingRespawnDoesNotScore", "[BrawlerRingout]"
 // ============================================================================================
 TEST_CASE("RingoutScore.TwoIterationOrdersProduceIdenticalScores", "[BrawlerRingout]")
 {
-    FScoreRig ascending(/*isAuthority=*/true, /*ascendingIds=*/true);
-    FScoreRig descending(/*isAuthority=*/true, /*ascendingIds=*/false);
+    FScoreRig ascending(/*ascendingIds=*/true);
+    FScoreRig descending(/*ascendingIds=*/false);
 
     const auto orderA = ascending.walkOrder();
     const auto orderB = descending.walkOrder();
@@ -404,14 +508,9 @@ TEST_CASE("RingoutScore.UnregisterDropsTheEntryAndARejoinStartsAtZero", "[Brawle
     REQUIRE(rig.system.hasScoreEntry(2u));
     REQUIRE(rig.system.scoreOf(2u) == 0u);
 
-    // ⛔ UNGATED BY DESIGN — `notifyCharacterUnregistered` fires on both roles and nothing on a
-    // client ever inserted, so the erase is a no-op there BY CONSTRUCTION. Asserted rather than
-    // left to the comment, because a reviewer adding a role gate here would be adding a branch
-    // no test could ever make fail.
-    FScoreRig clientRig(/*isAuthority=*/false);
-    REQUIRE(clientRig.system.scoreEntryCount() == 0u);
-    clientRig.system.onCharacterUnregistered(1u, clientRig.view(), clientRig.staticData);
-    REQUIRE(clientRig.system.scoreEntryCount() == 0u);
+    // ⚠ [ringout task 19] THE CLIENT ARM MOVED to `ANonAuthorityRoleAwardsNothing` step 4. It
+    // was never about the unregister contract this case pins; it was about the role, and the role
+    // is now the executor's, so the arm has to be driven through the executor to mean anything.
 }
 
 // ============================================================================================
