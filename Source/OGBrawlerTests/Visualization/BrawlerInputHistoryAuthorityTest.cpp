@@ -80,6 +80,8 @@ using brawlerInputHistoryVisualization::kFrameMeterAuthorityStyle;
 using brawlerInputHistoryVisualization::kFrameMeterHorizonStyle;
 using brawlerInputHistoryVisualization::kFrameMeterRateMarkStyle;
 using brawlerInputHistoryVisualization::kInputDelayVerdictCount;
+using brawlerInputHistoryVisualization::kRelayReadVerdictCount;
+using brawlerInputHistoryVisualization::relayReadVerdictStyleOfOrdinal;
 using brawlerInputHistoryVisualization::kLaneElisionColor;
 using brawlerInputHistoryVisualization::kLaneResyncColor;
 using brawlerInputHistoryVisualization::kLaneElisionLedgerCapacity;
@@ -174,8 +176,9 @@ bool nearlyEqual(float left, float right)
 	return delta < 0.01f;
 }
 
-// Both palettes, the six delay verdicts, the three out-of-palette cell colours, and nothing
-// else -- these are every colour the authority rule can find itself drawn on top of.
+// Both palettes, the six delay verdicts, the seven relay-health verdicts, the three
+// out-of-palette cell colours, and nothing else -- these are every colour the authority
+// rule can find itself drawn on top of.
 std::vector<brawlerInputHistoryVisualization::LaneCellColor> everyCellColor()
 {
 	std::vector<brawlerInputHistoryVisualization::LaneCellColor> colors;
@@ -187,6 +190,8 @@ std::vector<brawlerInputHistoryVisualization::LaneCellColor> everyCellColor()
 	// Ordinal 0 is NoVerdict, the hole -- it carries no colour to sweep.
 	for (uint8_t ordinal = 1u; ordinal < kInputDelayVerdictCount; ++ordinal)
 		colors.push_back(delayVerdictStyleOfOrdinal(ordinal).color);
+	for (uint8_t ordinal = 1u; ordinal < kRelayReadVerdictCount; ++ordinal)
+		colors.push_back(relayReadVerdictStyleOfOrdinal(ordinal).color);
 
 	colors.push_back(kUnnamedLaneColor);
 	colors.push_back(kLaneElisionColor);
@@ -796,12 +801,13 @@ TEST_CASE("Authority.TheAuthorityRuleClearsThePaletteFloorAgainstEveryCellItCove
 		++checked;
 	}
 
-	// Nine provenance colours, four machine states, six delay verdicts, the unnamed
-	// sentinel and the two axis-event markers. A palette that grew without this sweep
-	// growing with it would pass vacuously.
+	// Nine provenance colours, four machine states, six delay verdicts, seven relay-health
+	// verdicts, the unnamed sentinel and the two axis-event markers. A palette that grew
+	// without this sweep growing with it would pass vacuously.
 	CHECK(checked == static_cast<uint32_t>(kRowProvenanceSummaryCount)
 		+ static_cast<uint32_t>(kMachineStateCellCount) - 1u
-		+ static_cast<uint32_t>(kInputDelayVerdictCount) - 1u + 3u);
+		+ static_cast<uint32_t>(kInputDelayVerdictCount) - 1u
+		+ static_cast<uint32_t>(kRelayReadVerdictCount) - 1u + 3u);
 }
 
 TEST_CASE("Authority.TheOffsetValueAndAnElisionCountNeverShareALine",

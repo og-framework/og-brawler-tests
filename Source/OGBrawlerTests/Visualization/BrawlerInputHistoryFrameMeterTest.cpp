@@ -82,6 +82,8 @@ using brawlerInputHistoryVisualization::delayVerdictStyleOfOrdinal;
 using brawlerInputHistoryVisualization::frameMeterAuthorityLabelTopY;
 using brawlerInputHistoryVisualization::frameMeterAuthorityMarkerOf;
 using brawlerInputHistoryVisualization::frameMeterBarDrawsRunLabels;
+using brawlerInputHistoryVisualization::FrameMeterRunLabel;
+using brawlerInputHistoryVisualization::frameMeterRunLabelOf;
 using brawlerInputHistoryVisualization::frameMeterBarTopY;
 using brawlerInputHistoryVisualization::frameMeterCellCount;
 using brawlerInputHistoryVisualization::frameMeterCellX;
@@ -557,7 +559,19 @@ TEST_CASE("FrameMeter.OnlyTheDelayBarSkipsRunLabels",
 {
 	CHECK(frameMeterBarDrawsRunLabels(FrameMeterBarKind::Provenance));
 	CHECK(frameMeterBarDrawsRunLabels(FrameMeterBarKind::CharacterState));
+	CHECK(frameMeterBarDrawsRunLabels(FrameMeterBarKind::RelayHealth));
 	CHECK_FALSE(frameMeterBarDrawsRunLabels(FrameMeterBarKind::InputDelay));
+
+	// Two bars count the run; one names its cause. ⛔ THE SECOND ANSWER IS THE FIRST ONE
+	//   RE-EXPRESSED, so a bar cannot draw a label the table says it has none for.
+	CHECK(frameMeterRunLabelOf(FrameMeterBarKind::Provenance) == FrameMeterRunLabel::RunLength);
+	CHECK(frameMeterRunLabelOf(FrameMeterBarKind::CharacterState) == FrameMeterRunLabel::RunLength);
+	CHECK(frameMeterRunLabelOf(FrameMeterBarKind::InputDelay) == FrameMeterRunLabel::None);
+	CHECK(frameMeterRunLabelOf(FrameMeterBarKind::RelayHealth) == FrameMeterRunLabel::CauseLetter);
+
+	// One PAST the count pins the count itself, not merely the table.
+	CHECK(frameMeterRunLabelOf(static_cast<FrameMeterBarKind>(kFrameMeterBarKindCount))
+		== FrameMeterRunLabel::None);
 }
 
 // ---------------------------------------------------------------------------
@@ -585,22 +599,32 @@ TEST_CASE("FrameMeter.EverySelectionSubsetCompactsToContiguousSlotsAndTheSweepCa
 		bool                     provenance;
 		bool                     inputDelay;
 		bool                     characterState;
+		bool                     relayHealth;
 		uint32_t                 count;
 		std::optional<uint32_t>  provenanceSlot;
 		std::optional<uint32_t>  inputDelaySlot;
 		std::optional<uint32_t>  characterStateSlot;
+		std::optional<uint32_t>  relayHealthSlot;
 	};
 
-	// All eight subsets of three flags, each spot named against the Backlog's own words.
+	// All SIXTEEN subsets of four flags, each spot named against the Backlog's own words.
 	const Expectation table[] = {
-		{ false, false, false, 0u, std::nullopt, std::nullopt, std::nullopt },
-		{ true,  false, false, 1u, 0u,           std::nullopt, std::nullopt },
-		{ false, true,  false, 1u, std::nullopt, 0u,           std::nullopt },
-		{ true,  true,  false, 2u, 0u,           1u,           std::nullopt },
-		{ false, false, true,  1u, std::nullopt, std::nullopt, 0u           },
-		{ true,  false, true,  2u, 0u,           std::nullopt, 1u           },
-		{ false, true,  true,  2u, std::nullopt, 0u,           1u           },
-		{ true,  true,  true,  3u, 0u,           1u,           2u           },
+		{ false, false, false, false, 0u, std::nullopt, std::nullopt, std::nullopt, std::nullopt },
+		{ true,  false, false, false, 1u, 0u,          std::nullopt, std::nullopt, std::nullopt },
+		{ false, true,  false, false, 1u, std::nullopt, 0u,          std::nullopt, std::nullopt },
+		{ true,  true,  false, false, 2u, 0u,          1u,          std::nullopt, std::nullopt },
+		{ false, false, true,  false, 1u, std::nullopt, std::nullopt, 0u,          std::nullopt },
+		{ true,  false, true,  false, 2u, 0u,          std::nullopt, 1u,          std::nullopt },
+		{ false, true,  true,  false, 2u, std::nullopt, 0u,          1u,          std::nullopt },
+		{ true,  true,  true,  false, 3u, 0u,          1u,          2u,          std::nullopt },
+		{ false, false, false, true,  1u, std::nullopt, std::nullopt, std::nullopt, 0u           },
+		{ true,  false, false, true,  2u, 0u,          std::nullopt, std::nullopt, 1u           },
+		{ false, true,  false, true,  2u, std::nullopt, 0u,          std::nullopt, 1u           },
+		{ true,  true,  false, true,  3u, 0u,          1u,          std::nullopt, 2u           },
+		{ false, false, true,  true,  2u, std::nullopt, std::nullopt, 0u,          1u           },
+		{ true,  false, true,  true,  3u, 0u,          std::nullopt, 1u,          2u           },
+		{ false, true,  true,  true,  3u, std::nullopt, 0u,          1u,          2u           },
+		{ true,  true,  true,  true,  4u, 0u,          1u,          2u,          3u           },
 	};
 
 	const uint32_t subsetCount = static_cast<uint32_t>(sizeof(table) / sizeof(table[0]));
@@ -612,13 +636,16 @@ TEST_CASE("FrameMeter.EverySelectionSubsetCompactsToContiguousSlotsAndTheSweepCa
 		selection.provenance     = row.provenance;
 		selection.inputDelay     = row.inputDelay;
 		selection.characterState = row.characterState;
+		selection.relayHealth    = row.relayHealth;
 
 		const bool matches =
 			frameMeterEnabledBarCount(selection) == row.count
 			&& frameMeterBarSlotOf(selection, FrameMeterBarKind::Provenance) == row.provenanceSlot
 			&& frameMeterBarSlotOf(selection, FrameMeterBarKind::InputDelay) == row.inputDelaySlot
 			&& frameMeterBarSlotOf(selection, FrameMeterBarKind::CharacterState)
-			       == row.characterStateSlot;
+			       == row.characterStateSlot
+			&& frameMeterBarSlotOf(selection, FrameMeterBarKind::RelayHealth)
+			       == row.relayHealthSlot;
 
 		if (matches)
 			++agreed;
