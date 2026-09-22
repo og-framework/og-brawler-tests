@@ -268,8 +268,12 @@ static dAttackRadialSimulation::InitialConditions machineTick(const glm::vec3& a
     const std::vector<DAttackRadialSequence> sequences;   // never indexed on this path
     const brawlerProjectileSimulation::StaticData projectileStaticData(1.f, 1.f, 1.f, 1.f, 1.f);
 
+    // [movement-sim task 84] The utils gained a currentTick, because integrate3 writes an
+    // ABSOLUTE end tick on every radial edge. This rig drives the LEGACY `integrate`, which has no
+    // write site and never reads the tick, so any value serves; 0 is the value the whole-brawler
+    // rigs in this suite start from.
     dAttackMachineSimulation::IntegrationUtils<MockPhysicsAdapter>
-        utils{ kDt, sequences, physics, projectileStaticData };
+        utils{ kDt, 0u, sequences, physics, projectileStaticData };
     dAttackMachineSimulation::AllInput<MockPhysicsAdapter> allInput{ pi, utils };
 
     const dAttackRadialSimulation::State attackState{};

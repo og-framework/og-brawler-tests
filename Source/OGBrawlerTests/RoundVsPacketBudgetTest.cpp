@@ -382,7 +382,22 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     // correction buffer is at 343/384 B, 41 B of headroom, down from 50 (measured —
     // `SimulatableBrawlerTest.cpp`, `DAttack.SimulatableBrawler.WireFootprint`). The
     // `static_assert` in the case body above is what prices this against the packet.
-    REQUIRE(kStateWireBytes == 346u);
+    //
+    // [movement-sim task 84, 2026-09-20] 346 -> 350 B, and the INPUT wire DOES NOT MOVE:
+    // `ringWireBytes(1u)` above is re-quoted UNCHANGED at 86 B and the entry stride at 82 B.
+    // The slice that moved is an EXISTING one growing by one field, not a new sub-simulation:
+    // `dAttackMachineSimulation::State` gained `m_attackEndTick` (4 B) -- the slice 21 -> 25 B,
+    // composite 335 -> 339 B -- the absolute tick on which the machine will next be `Idle`. It
+    // rides the wire for the same reason `respawnAtTick` does one paragraph up: a proxy that
+    // enters a swing BY ADOPTION never simulated the edge and cannot recompute the end. The
+    // attack SLIDE it drives is a pure function of that tick and the current velocity, so not one
+    // input byte moved -- which matters, because the ordinary-join table below has ~2.5 input
+    // bytes of margin left.
+    // 350 = 1 (version) + 2 (used count) + 8 (correction header) + 339 (composite).
+    //
+    // ⚠ THE ROUND STILL FITS: the correction buffer is at 347/384 B, 37 B of headroom, down
+    // from 41 (measured -- `SimulatableBrawlerTest.cpp`, `DAttack.SimulatableBrawler.WireFootprint`).
+    REQUIRE(kStateWireBytes == 350u);
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +464,15 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     // must be re-quoted on every wire change even though its verdict never moves. It is the
     // fourth state-side fence this task had to repair and the one no brief named — it turned
     // up by running the suite, not by reading the file list.
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1237u);
+    // [movement-sim task 84, 2026-09-20] 1237 -> **1241 B**, and ALL of it is the state term
+    // (353 -> 357 B batched, the +4 B of the machine's `m_attackEndTick`). The ring term is
+    // UNTOUCHED at 5 x (168+7) = 875 B and `ringWireBytes(2u) == 168u` above is RE-QUOTED
+    // UNCHANGED: the attack slide is a pure function of a STATE field and the velocity the body
+    // already has, so not one input byte moved. 1241 = 875 + 357 + 9; the conclusion -- six
+    // characters at two entries does not fit 952 B -- is unchanged and now holds by 289 B.
+    // ⭐ AND THE WARNING ABOVE REPRODUCED EXACTLY: this row turned up by running the suite,
+    // not by reading task 84's file list either. Two wire tasks in a row, same blind spot.
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1241u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will

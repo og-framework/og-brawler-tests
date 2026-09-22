@@ -43,6 +43,8 @@
 #include "OGBrawler/DAttackRadialSimulation.h"
 #include "OGBrawler/DAttackRadialSequence.h"
 #include "OGBrawler/BrawlerMovementSimulation.h"
+#include "OGBrawler/BrawlerProjectileSimulation.h"
+#include "OGBrawler/InputSequence/InputSequence.h"
 #include "OGBrawler/CollisionCategoryConstants.h"
 #include "OGSimulation/SimulationObjectStorage.h"
 #include "OGSimulation/StorageView.h"
@@ -54,6 +56,7 @@
 #include "OGSimulation/SpatialQueryResult.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -218,6 +221,16 @@ constexpr std::uint32_t kTargetRoot      = 21u;
 constexpr std::uint32_t kRadialVolume    = 7u;
 constexpr std::uint32_t kMovementVolume  = 91u;
 
+// [movement-sim task 87] THE PROJECTILE POOL'S ids, one body and one query volume per slot.
+// Distinct from every id above for the same reason the two gates in the adapter exist: ten
+// sub-simulation instances reach the adapter per tick and a shared id would hand one sim's
+// report to another. ⚠ INERT unless a case fires a Hadouken -- the projectile sim touches the
+// adapter only for slots that are ALIVE, and a slot is alive only after a spawn request.
+constexpr std::uint32_t kProjectileBody   = 31u;   // slots 0..2 -> 31, 32, 33
+constexpr std::uint32_t kProjectileVolume = 61u;   // slots 0..2 -> 61, 62, 63
+constexpr std::uint32_t kProjectileSlots  =
+    static_cast<std::uint32_t>(brawlerProjectileSimulation::kMaxProjectilePoolSize);
+
 // The capsule half height the production movement StaticData is authored against. Seating the
 // target at halfHeight + rideHeight is the steady state: the vertical channel is then
 // identically zero and the whole of the target's velocity is the knockback.
@@ -228,6 +241,23 @@ constexpr float kCapsuleHalfHeight = 96.f;
 // plane. 0.30 s into the swing is 18 ticks; the design's arithmetic is quoted against it.
 constexpr float        kTargetDistance = 150.f;
 constexpr std::uint32_t kHitTick       = 18u;
+
+// ⛔⛔ [movement-sim task 86] WHY THE RIG SCHEDULES THE OVERLAP AT ALL, and it is a real
+// limitation of this fixture rather than a convenience.
+//
+// The radial's own damaging gate reads the WEAPON'S DIRECTION off the body transform
+// (`collisionCheck` -> `getAttackSegment(currentDirection)`), NOT `attackTimer`. This rig's
+// `SwingPhysicsAdapter::getBodyTransform` returns the IDENTITY on every tick, so the weapon
+// never rotates and that gate is constant for a whole swing -- it cannot express a wind-up.
+// `weaponOverlapsTarget` is the stand-in: it opens the query `windUpTicks` after a swing
+// STARTS, which is where the weapon would have reached the target.
+//
+// ⚠ `kHitTick` IS THAT WIND-UP, and it is the rig's ONE authored number about the swing:
+// sequences 0, 1 and 4 all open their Damaging keyframe at 0.30 s, which is 18 ticks at
+// 60 Hz. ⛔ It is the offset from a swing's START, not an absolute tick -- a case that starts
+// a SECOND swing gets the same 18 ticks of wind-up measured from that swing's own first tick.
+// ⛔ Do NOT read it as a measured quantity: the fixture cannot measure it, which is exactly
+// why it is spelled once, here, next to the reason.
 
 struct SwingPhysicsAdapter
 {
@@ -254,12 +284,42 @@ struct SwingQueryAdapter
     bool               weaponOverlapsTarget = false;
     SweepHit           ground;
 
+    // ⭐⭐ [movement-sim task 87] THE PROJECTILE'S OVERLAP IS A DISTANCE TEST, NOT A SCHEDULE,
+    // and that is the one way this arm is BETTER instrumented than the melee one above.
+    // `kHitTick` has to be authored because the weapon never rotates here; the projectile has
+    // no such problem -- it publishes its own closed-form position to the query layer on every
+    // tick it is alive (`setVolumeParentTransform`, immediately before it asks for the overlap),
+    // so the fixture can answer the overlap from the REAL separation and the hit tick comes out
+    // MEASURED. `projectileContactRadius` is the rig's one authored number about it: the
+    // projectile's own collider radius plus the target capsule's, i.e. the separation at which
+    // the two shapes touch. Both are read off the shipped StaticData, never spelled here.
+    SpatialQueryReport projectileReport;
+    glm::vec2          targetXY{ 0.f };
+    float              projectileContactRadius = 0.f;
+    std::array<glm::vec3, kProjectileSlots> projectilePos{};
+
     SpatialQueryReport overlap(const std::vector<QueryVolumeId>& volumeIds) const
     {
         const bool attackerRadial =
             std::find(volumeIds.begin(), volumeIds.end(), QueryVolumeId{ kRadialVolume })
                 != volumeIds.end();
-        return (attackerRadial && weaponOverlapsTarget) ? radialReport : SpatialQueryReport{};
+        if (attackerRadial)
+            return weaponOverlapsTarget ? radialReport : SpatialQueryReport{};
+
+        // [movement-sim task 87] THE THIRD GATE. One volume per pool slot, answered from that
+        // slot's last published position -- so a slot that is not alive (and therefore never
+        // published one) cannot be answered at all, and every case written before this task
+        // sees the same empty report it always did.
+        for (std::uint32_t slot = 0u; slot < kProjectileSlots; ++slot)
+        {
+            if (std::find(volumeIds.begin(), volumeIds.end(),
+                          QueryVolumeId{ kProjectileVolume + slot }) == volumeIds.end())
+                continue;
+            const glm::vec3& p = projectilePos[slot];
+            return (glm::length(glm::vec2(p.x, p.y) - targetXY) <= projectileContactRadius)
+                 ? projectileReport : SpatialQueryReport{};
+        }
+        return SpatialQueryReport{};
     }
 
     SweepHit sweep(QueryVolumeId volumeId, const glm::mat4&, const glm::vec3&) const
@@ -267,7 +327,16 @@ struct SwingQueryAdapter
         return volumeId == QueryVolumeId{ kMovementVolume } ? ground : SweepHit{};
     }
 
-    void setVolumeParentTransform(QueryVolumeId, const glm::mat4&) {}
+    // [movement-sim task 87] WHERE THE PROJECTILE'S POSITION COMES FROM. The projectile sim
+    // derives pos(t) from its closed form and publishes it here for every alive slot right
+    // before querying that slot's overlap, so recording it is enough to answer the overlap from
+    // the real separation. Nothing else in this fixture writes `projectilePos`.
+    void setVolumeParentTransform(QueryVolumeId volumeId, const glm::mat4& transform)
+    {
+        for (std::uint32_t slot = 0u; slot < kProjectileSlots; ++slot)
+            if (volumeId == QueryVolumeId{ kProjectileVolume + slot })
+                projectilePos[slot] = glm::vec3(transform[3]);
+    }
     void enableShape(ShapeId)  {}
     void disableShape(ShapeId) {}
 };
@@ -284,9 +353,20 @@ struct TickSample
     std::size_t   hitsThisTick    = 0;   // the per-TICK signal
     bool          wasHitThisTick  = false;
     DAttackState  targetMachine   = DAttackState::Idle;
+    // [movement-sim task 86] The ATTACKER's machine state, so a case can see the swing end,
+    // the drop to Idle and the fresh swing as three separate observations rather than
+    // inferring them from the radial sequence id alone.
+    DAttackState  attackerMachine = DAttackState::Idle;
     glm::vec2     hitDirectionXY{ 0.f };
     glm::vec3     targetVelocity{ 0.f };
     glm::vec3     targetPosition{ 0.f };
+    // [movement-sim task 87] The attacker's projectile slot 0, so the shot is observable as it
+    // travels and ends rather than only through the hit it routes. Identically zero on every
+    // case that fires none.
+    glm::vec3     projectilePos{ 0.f };
+    std::uint32_t projectileSpawnTick = 0u;
+    std::uint32_t projectileEndTick   = 0u;
+    unsigned int  projectileEndReason = 0u;
 };
 
 struct FEndToEndRig
@@ -298,6 +378,20 @@ struct FEndToEndRig
     SwingQueryAdapter   query;
 
     glm::vec2 attackerStick{ 0.f, -1.f };   // (0,-1) against aim (1,0,0) -> the right swing
+
+    // [movement-sim task 86] THE FOLLOW-UP PRESS. -1 == off, which is every case written
+    // before this task, so none of them changes the input it drives.
+    int       followUpHoldFromTick = -1;
+
+    // [movement-sim task 87] THE HADOUKEN. -1 == off; a tick number makes the attacker's
+    // machine see `triggeredActionId == kHadoukenActionId` on exactly that tick, which is what
+    // the shipped input layer's motion matcher delivers when a motion completes. On that tick
+    // the attack BUTTONS are left alone, so the projectile is the only thing that fires.
+    // ⛔ IT CANNOT BE TICK 0. `ProjectileSlot::isAlive` reads `spawnTick != 0` as "this slot
+    // never spawned", so a projectile spawned on tick 0 is born free and never queries an
+    // overlap. That is a property of the shipped slot encoding, not of this fixture.
+    int       hadoukenOnTick = -1;
+    glm::vec2 followUpStick{ 0.f, -1.f };   // -> kRightSequenceId (0), a left/right swing
     std::vector<TickSample> samples;
 
     FEndToEndRig()
@@ -348,6 +442,48 @@ struct FEndToEndRig
         hit.rootBodyId       = BodyId{ kTargetRoot };
         hit.objectCategories = CollisionCategories::single(collisionCategory::body);
         query.radialReport.hits.push_back(hit);
+
+        // [movement-sim task 87] THE PROJECTILE POOL, bound for ALL THREE slots rather than
+        // just the one a Hadouken lands in: the pool picks the lowest FREE slot itself, and a
+        // fixture that bound only slot 0 would be quietly deciding that for it.
+        // ⚠ Binding is INERT on its own -- these structs are only read for an alive slot.
+        auto bindSlot = [](auto& declaration, std::uint32_t slot)
+        {
+            declaration.bindings.ownBodyId      = BodyId{ kProjectileBody + slot };
+            declaration.bindings.parentBodyId   = BodyId{ kAttackerRoot };
+            declaration.bindings.queryVolumeIds = { QueryVolumeId{ kProjectileVolume + slot } };
+        };
+        bindSlot(brawler(0u).editPhysicsComposite()
+                     .edit<brawlerProjectileSimulation::PhysicsDeclaration<0>>(), 0u);
+        bindSlot(brawler(0u).editPhysicsComposite()
+                     .edit<brawlerProjectileSimulation::PhysicsDeclaration<1>>(), 1u);
+        bindSlot(brawler(0u).editPhysicsComposite()
+                     .edit<brawlerProjectileSimulation::PhysicsDeclaration<2>>(), 2u);
+
+        // The separation at which the projectile's collider touches the target's capsule, both
+        // read off the SHIPPED static data. This is the fixture's whole model of the projectile
+        // overlap the engine would report, and it is the only authored number in the arm.
+        query.projectileContactRadius = staticData.m_projectileStaticData.colliderRadius
+                                      + staticData.m_movementStaticData.capsuleRadius;
+        SpatialQueryHit projectileHit{};
+        projectileHit.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+        projectileHit.bodyId           = BodyId{ kTargetRoot };
+        projectileHit.rootBodyId       = BodyId{ kTargetRoot };
+        projectileHit.objectCategories = CollisionCategories::single(collisionCategory::body);
+        query.projectileReport.hits.push_back(projectileHit);
+    }
+
+    // [movement-sim task 87] MOVE THE TARGET, keeping the three places that have to agree in
+    // step: its body position, the radial report's hit position (which the radial's own annulus
+    // test reads) and the projectile report's. ⛔ The annulus is EXCLUSIVE at the inner radius
+    // (`hitDistance > getInnerRadius()`), so a target seated exactly on it cannot be hit by a
+    // swing at all -- which is what bounds how point-blank a FOLLOW-UP-able range can be.
+    void setTargetDistance(float distance)
+    {
+        const float seatZ = kCapsuleHalfHeight + staticData.m_movementStaticData.rideHeight;
+        setPosition(1u, glm::vec3(distance, 0.f, seatZ));
+        query.radialReport.hits[0].objectPosition     = glm::vec3(distance, 0.f, 0.f);
+        query.projectileReport.hits[0].objectPosition = glm::vec3(distance, 0.f, 0.f);
     }
 
     StorageView<SimulatableBrawler> view()
@@ -377,21 +513,60 @@ struct FEndToEndRig
     void run(int tickCount)
     {
         const glm::vec3 aim(1.f, 0.f, 0.f);
+        // [movement-sim task 86] The swing the overlap schedule hangs off. -1 == no swing is
+        // active, so the weapon reaches nothing. For every case that starts exactly one swing on
+        // tick 0 this evaluates to `tick >= 18` on every tick -- what this rig did before.
+        int          swingStartTick = -1;
+        unsigned int lastSequence   = InvalidAttackSequenceId;
+
         for (int t = 0; t < tickCount; ++t)
         {
             const std::uint32_t tick = static_cast<std::uint32_t>(t);
-            query.weaponOverlapsTarget = tick >= kHitTick;
+            query.weaponOverlapsTarget =
+                swingStartTick >= 0 && t >= swingStartTick + int(kHitTick);
 
             // The attack is pressed on tick 0 and RELEASED afterwards: held, it would queue
             // the chained sequence at 0.3 s and a second swing would confuse the measurement.
-            const bool pressing = (t == 0);
-            const glm::vec3 moveWorld(attackerStick.x, attackerStick.y, 0.f);
-            const glm::vec2 stick = pressing ? attackerStick : glm::vec2(0.f);
+            //
+            // ⭐ [movement-sim task 86] THE ONE EXCEPTION IS THE FOLLOW-UP PRESS, and it is
+            // HELD rather than pulsed because held is what the shipped input path delivers.
+            // `UOGBrawlerInputCollectionComponent::m_leftAttack` is a LATCHED LEVEL bool (set
+            // from Enhanced Input's Triggered, cleared on Completed), `makeSimPlayerInput`
+            // forwards it verbatim, and the machine's Idle entry is a LEVEL test --
+            // `if (playerInput.attackLeft || playerInput.attackRight)`. A player who holds the
+            // button through their own recovery therefore swings on the FIRST Idle tick, and
+            // this rig must not be kinder to them than the game is.
+            const bool followUp = followUpHoldFromTick >= 0 && t >= followUpHoldFromTick;
+            // ⭐ [movement-sim task 87] THE HADOUKEN TICK PRESSES NOTHING. The machine's Idle
+            // case handles the matched motion AHEAD of the attack buttons and `break`s, so a
+            // press on that tick would be discarded anyway -- but leaving it out is what makes
+            // the projectile the only thing the arm fires, and it keeps `(t == 0)` meaning
+            // "the melee press" for every case written before this one.
+            const bool firing   = hadoukenOnTick >= 0 && t == hadoukenOnTick;
+            const bool pressing = !firing && ((t == 0 && hadoukenOnTick < 0) || followUp);
+            const glm::vec2 stick = (t == 0) ? attackerStick
+                                  : (followUp ? followUpStick : glm::vec2(0.f));
+            const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
+
+            // [movement-sim task 87] The projectile's contact test needs the target's CURRENT
+            // position and the adapter cannot see simulation state, so the rig hands it over
+            // once per tick, BEFORE the integrate that will query it.
+            {
+                const glm::vec3 targetPos = brawler(1u).getAllState().getState()
+                    .get<brawlerMovementSimulation::State>().bodyState.position;
+                query.targetXY = glm::vec2(targetPos.x, targetPos.y);
+            }
 
             const simulatableBrawler::PlayerInput attackerInput(
                 dAttackRadialSimulation::PlayerInput(aim, pressing, false),
+                // [movement-sim task 87] The 6th field is `triggeredActionId`, which the input
+                // layer's motion matcher sets on the ONE tick a motion completes. Every case
+                // before this task leaves `hadoukenOnTick` at -1 and therefore passes the 0 the
+                // 5-arg form defaulted it to.
                 dAttackMachineSimulation::PlayerInput{ aim, pressing, false, stick,
-                                                       pressing ? moveWorld : glm::vec3(0.f) },
+                                                       pressing ? moveWorld : glm::vec3(0.f),
+                                                       firing ? inputSequence::kHadoukenActionId
+                                                              : 0u },
                 dAttackGuardSimulation::PlayerInput(aim),
                 brawlerProjectileSimulation::PlayerInput{ aim },
                 brawlerMovementSimulation::PlayerInput{},
@@ -434,7 +609,19 @@ struct FEndToEndRig
             sample.hitDirectionXY = brawler(1u).getAllState().getDerivedState()
                 .get<brawlerInboundHit::DerivedState>().hitDirectionXY;
             sample.targetMachine  = targetState.get<dAttackMachineSimulation::State>().m_currentState;
+            sample.attackerMachine = brawler(0u).getAllState().getState()
+                .get<dAttackMachineSimulation::State>().m_currentState;
             sample.targetVelocity = targetState.get<brawlerMovementSimulation::State>().velocity;
+            // [movement-sim task 87] Slot 0 of the ATTACKER's pool -- the slot a single
+            // Hadouken always lands in, the pool picking the lowest free one.
+            {
+                const auto& slot = brawler(0u).getAllState().getState()
+                    .get<brawlerProjectileSimulation::State>().slots[0];
+                sample.projectilePos        = slot.bodyState.position;
+                sample.projectileSpawnTick  = slot.spawnTick;
+                sample.projectileEndTick    = slot.endTick;
+                sample.projectileEndReason  = slot.endReason;
+            }
 
             // THE ENGINE STEP. Nothing inside integrate advances a body; the generic
             // captureBodyStatesAll pass does, and an engine-free rig has to stand in for it.
@@ -442,6 +629,16 @@ struct FEndToEndRig
                 .edit<brawlerMovementSimulation::State>();
             ms.bodyState.position += ms.velocity * kDt;
             sample.targetPosition = ms.bodyState.position;
+
+            // [movement-sim task 86] A FRESH SWING re-hangs the overlap schedule, and a swing
+            // that ENDED closes it. The radial writes currenSequenceId in the same integrate the
+            // machine started the swing in, so the open fires on the swing's FIRST tick --
+            // including tick 0's, which is why the gate above starts closed.
+            if (!isRealAttackSequence(sample.radialSequence))
+                swingStartTick = -1;
+            else if (sample.radialSequence != lastSequence)
+                swingStartTick = t;
+            lastSequence = sample.radialSequence;
 
             samples.push_back(sample);
         }
@@ -539,7 +736,12 @@ TEST_CASE("HitRouting.PerAttackReactionTableIsAuthoritative",
             REQUIRE(slice.knockbackSpeed == 0.f);
             REQUIRE(slice.hitDirectionXY == glm::vec2(0.f));
             REQUIRE(slice.flinchDuration == Catch::Approx(spec.lockoutDuration).margin(1e-6f));
-            REQUIRE(slice.flinchDuration == Catch::Approx(0.3f).margin(1e-6f));
+            // ⛔ [movement-sim task 86] THE ABSOLUTE PIN, and it is deliberately NOT a
+            // computed expression. The stun is a HAND-AUTHORED tuning knob; this line is
+            // what forces a human to edit a test on purpose whenever that number moves.
+            // Raised 0.3f -> 0.65f in task 86 so a forward/overhead hit outlasts the
+            // attacker's own recovery (see impl/design_stun_followup_window.md).
+            REQUIRE(slice.flinchDuration == Catch::Approx(0.65f).margin(1e-6f));
         }
 
         // THE ATTACKER IS NOT HIT BY ITS OWN SWING (D5, pointer identity).
@@ -653,8 +855,9 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
 {
     using namespace hitRoutingTests;
 
-    // 1. AS AUTHORED: a stun, 0.3 s, no speed, no direction -- even though the two characters are
-    //    metres apart and a direction was therefore computable.
+    // 1. AS AUTHORED: a stun, 0.65 s (task 86; 0.3 s before it), no speed, no direction --
+    //    even though the two characters are metres apart and a direction was therefore
+    //    computable.
     {
         FRoutingRig rig;
         REQUIRE(rig.staticData.m_projectileHitReaction.kind == HitReactionKind::Stun);
@@ -673,6 +876,21 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
         REQUIRE(slice.flinchDuration
                 == Catch::Approx(rig.staticData.m_projectileHitReaction.lockoutDuration)
                        .margin(1e-6f));
+        // ⛔⛔ [movement-sim task 87] THE PROJECTILE'S ABSOLUTE PIN, and the line above is
+        // exactly why it is needed. Every projectile assertion in this file is RELATIONAL
+        // against `m_projectileHitReaction.lockoutDuration`, so all of them FOLLOW that literal
+        // wherever it goes -- task 86's reviewer set it back to 0.3f on its own and the whole
+        // suite stayed green. A relational assertion cannot see the number it reads move.
+        // ⛔ This is the line a human has to retype, and it is deliberately NOT a computed
+        // expression: the stun is a HAND-AUTHORED tuning knob (user ruling 2026-09-21) and must
+        // never be derived from getDuration(), swingTickCount() or a keyframe time. The
+        // BEHAVIOURAL claim the 0.65 exists to make -- that a point-blank projectile hit
+        // outlasts the shooter's own recovery -- is measured in
+        // HitRouting.ProjectilePointBlankFollowUpWindow below; this line only stops the number
+        // moving unnoticed. ⚠ The melee half has had the same pin since task 86
+        // (HitRouting.PerAttackReactionTableIsAuthoritative and HitRouting.StunHitFiresOnce).
+        REQUIRE(rig.staticData.m_projectileHitReaction.lockoutDuration
+                == Catch::Approx(0.65f).margin(1e-6f));
 
         // The endTick guard: the slot keeps endReason 2 until it recycles, so a LATER tick must
         // not re-flinch the target. This pre-dates task 27 and must survive it.
@@ -860,10 +1078,15 @@ TEST_CASE("HitRouting.KnockbackTravelThroughRoutingIsTheClosedForm",
 
 // ===========================================================================
 // [movement-sim task 83] THE SAME CAUSE, ON THE STUN SIDE. A forward hit (sequence 4) is
-// authored as a 0.3 s stun with no knockback; re-firing it every tick made the stun last for
-// the rest of the swing plus 0.3 s.
+// authored as a stun with no knockback (0.3 s when task 83 was written, 0.65 s since task 86);
+// re-firing it every tick made the stun last for the rest of the swing plus that dwell.
 //
 // RED BEFORE THE FIX.
+//
+// ⭐ [movement-sim task 86] AND IT NOW CARRIES THE FOLLOW-UP CLAIM TOO -- block 2 below. The
+// authored 0.65 s exists so that a forward/overhead hit outlasts the ATTACKER's own recovery,
+// and that is a statement about ticks in the real simulation, not about a literal. It is
+// measured here, on this rig, rather than asserted in a document.
 // ===========================================================================
 TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
 {
@@ -900,12 +1123,16 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
     REQUIRE(enteredFlinchAt > 0);
     REQUIRE(leftFlinchAt > enteredFlinchAt);
 
-    // THE OBSERVABLE: one firing, and a dwell of 0.3 s measured FROM THE HIT TICK.
+    // THE OBSERVABLE: one firing, and a dwell of 0.65 s measured FROM THE HIT TICK.
     REQUIRE(rig.hitTickCount() == 1u);
     const float stunSpan = float(leftFlinchAt - int(kHitTick)) * kDt;
     INFO("stun span from the hit tick " << stunSpan << " s against an authored "
          << spec.lockoutDuration << " s");
-    REQUIRE(spec.lockoutDuration == Catch::Approx(0.3f).margin(1e-6f));
+    // ⛔ [movement-sim task 86] THE SECOND ABSOLUTE PIN. Same reason as the one in
+    // HitRouting.ReactionTableIsAuthoritative: the stun duration is hand-authored, so the
+    // only acceptable coupling to it is a line a human has to retype. ⛔ Do NOT replace this
+    // with anything derived from getDuration(), swingTickCount() or a keyframe time.
+    REQUIRE(spec.lockoutDuration == Catch::Approx(0.65f).margin(1e-6f));
     REQUIRE(stunSpan >= spec.lockoutDuration);
     REQUIRE(stunSpan <= spec.lockoutDuration + 3.f * kDt);
 
@@ -916,6 +1143,276 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
         REQUIRE(glm::length(glm::vec2(s.targetVelocity.x, s.targetVelocity.y))
                 == Catch::Approx(0.f).margin(1e-4f));
     }
+
+    // =======================================================================
+    // ⭐⭐ [movement-sim task 86] THE FOLLOW-UP WINDOW, MEASURED IN TICKS.
+    //
+    // THE CLAIM the authored 0.65 s exists to make: *a forward/overhead hit leaves the
+    // attacker time to land a left/right before the defender recovers.*
+    //
+    // ⛔ A forward/overhead CANNOT CHAIN. The queue gate admits attackLeft only while the
+    // active sequence is 0 or 2 and attackRight only while it is 1 or 3; sequence 4 matches
+    // NEITHER. So the follow-up costs the whole recovery: finish sequence 4, drop to Idle,
+    // start a FRESH sequence 0/1, and wait out ITS wind-up. That is what this block drives,
+    // and every tick below is READ OFF THE SIMULATION -- nothing here recomputes it.
+    //
+    // ⛔⛔ AND THAT IS THE POINT. The stun duration is HAND-AUTHORED (user ruling
+    // 2026-09-21) and must never be derived from getDuration(), swingTickCount() or a
+    // keyframe time. The coupling is a TRIPWIRE, not a formula: retune any sequence and this
+    // block goes RED and tells a human to re-choose the stun by hand. It never auto-updates.
+    //
+    // ⭐⭐ THE MEASURED TIMELINE, read off THIS rig's own INFO lines (not derived):
+    //     tick 18  the hit; the defender enters HitFlinch on 19
+    //     tick 33  the attacker is back in Idle  (sequence 4 ran to completion)
+    //     tick 34  the held button starts a FRESH sequence 0
+    //     tick 52  that swing's first damaging tick -- the follow-up CONNECTS
+    //   ⇒ the window the stun must cover is 52 - 18 = 34 ticks = 0.567 s.
+    //   The authored 0.65 s ends the flinch on tick 58, so the margin is SIX ticks.
+    //
+    // ⚠ 0.55 s DOES NOT SUFFICE, and it was witnessed failing: it ends the flinch on
+    //   tick 52 exactly, i.e. on the very tick the follow-up lands, and the REQUIRE below
+    //   reads Idle instead of HitFlinch. One tick short. ⛔ That is why the number is
+    //   0.65 and not the 0.55 an earlier draft of the design proposed.
+    //
+    // ⛔ sequence 4's getDuration() is 0.52 s, NOT the 0.42 s of its last authored
+    //   keyframe: DAttackRadialSequence APPENDS a zero-velocity point at
+    //   +timeToReachZeroVelocity. An earlier hand derivation used 0.42 and came out six
+    //   ticks early (tick 46 / 0.467 s). The simulation is the authority here, not the
+    //   keyframe table.
+    // =======================================================================
+    {
+        FEndToEndRig followUpRig;
+        // A ZERO stick on tick 0 classifies FORWARD -- sequence 4, the stun row, as above.
+        followUpRig.attackerStick = glm::vec2(0.f);
+        // ...then the attacker HOLDS attack from tick 20, which is AFTER the hit at tick 18 and
+        // while sequence 4 is still swinging. The hold cannot queue anything (the gate rejects
+        // sequence 4), so the machine decides entirely on its own when the fresh swing starts.
+        followUpRig.followUpHoldFromTick = 20;
+        followUpRig.followUpStick        = glm::vec2(0.f, -1.f);   // -> kRightSequenceId
+        followUpRig.run(120);
+
+        int           idleAt        = -1;   // attacker back in Idle after sequence 4
+        int           followUpAt    = -1;   // attacker Attacking again, from that Idle
+        unsigned int  followUpSeq   = InvalidAttackSequenceId;
+        int           followUpHitAt = -1;   // the follow-up's first DAMAGING tick -- it connects
+        for (const TickSample& s : followUpRig.samples)
+        {
+            if (s.tick <= kHitTick) continue;
+            if (idleAt < 0 && s.attackerMachine == DAttackState::Idle)
+                idleAt = int(s.tick);
+            if (idleAt >= 0 && followUpAt < 0 && s.attackerMachine == DAttackState::Attacking)
+            {
+                followUpAt  = int(s.tick);
+                followUpSeq = s.radialSequence;
+            }
+            if (followUpAt >= 0 && followUpHitAt < 0 && s.wasHitThisTick)
+                followUpHitAt = int(s.tick);
+        }
+
+        INFO("follow-up trace " << followUpRig.trace(kHitTick - 1u, kHitTick + 40u));
+        INFO("sequence 4 getDuration() "
+             << followUpRig.staticData.m_attackSequences[dAttackDirection::kForwardSequenceId]
+                    .getDuration()
+             << " s (the LAST keyframe is 0.42 s; the constructor APPENDS a zero-velocity "
+                "point at +timeToReachZeroVelocity)");
+        INFO("hit at tick " << kHitTick << "; attacker Idle at " << idleAt
+             << "; fresh swing at " << followUpAt << " (sequence " << followUpSeq
+             << "); its first damaging tick " << followUpHitAt
+             << "; the stun measured above ended at tick " << leftFlinchAt);
+
+        // THE PATH: sequence 4 ran to completion, the machine dropped to Idle, and the held
+        // button started a FRESH swing there -- not a chain out of sequence 4.
+        REQUIRE(idleAt > int(kHitTick));
+        REQUIRE(followUpAt > idleAt);
+        REQUIRE(isRealAttackSequence(followUpSeq));
+        REQUIRE(followUpSeq != dAttackDirection::kForwardSequenceId);
+        REQUIRE(followUpSeq == dAttackDirection::kRightSequenceId);
+
+        // ...and the fresh swing CONNECTED, so `followUpHitAt` is its first damaging tick as
+        // the simulation produced it, not as this file computed it.
+        REQUIRE(followUpHitAt > followUpAt);
+
+        // ⭐⭐ THE ASSERTION THE WHOLE TASK EXISTS FOR: on the tick the follow-up lands, the
+        // defender is STILL STUNNED. `targetMachine` is sampled after that tick's integrate,
+        // which consumed the PREVIOUS tick's inbound slice, so this reads the dwell of the
+        // FIRST hit and cannot be contaminated by the second.
+        REQUIRE(followUpRig.samples[std::size_t(followUpHitAt)].targetMachine == DAttackState::HitFlinch);
+
+        // ...and the same statement as a NUMBER, so the margin is visible when it shrinks.
+        // `leftFlinchAt` is the tick the stun ends, measured on the rig above -- which has no
+        // follow-up, so nothing re-stuns the defender there and the span is the pure dwell.
+        INFO("slack = " << (leftFlinchAt - followUpHitAt) << " tick(s)");
+        REQUIRE(followUpHitAt < leftFlinchAt);
+    }
+}
+
+// ===========================================================================
+// ⭐⭐ [movement-sim task 87] THE PROJECTILE HALF OF TASK 86'S CLAIM, MEASURED.
+//
+// THE CLAIM the authored 0.65 s exists to make, for the projectile: *a point-blank Hadouken
+// leaves the shooter time to land a left/right before the target recovers.* Task 86 pinned
+// that claim for the MELEE stun only (HitRouting.StunHitFiresOnce), and its reviewer showed
+// what that left open: every projectile assertion in this file is RELATIONAL against
+// `m_projectileHitReaction.lockoutDuration`, so setting that literal back to 0.3f passed the
+// ENTIRE suite. This case is the behavioural half of the fix (finding N-4); the one-line
+// absolute pin is in HitRouting.ProjectileHitStunsInPlace above.
+//
+// ⛔⛔ THE STUN STAYS HAND-AUTHORED (user ruling 2026-09-21). Nothing here computes a
+// required lockout from getDuration(), swingTickCount() or a keyframe time. Like task 86's,
+// this is a TRIPWIRE: retune the Hadouken commitment, the swing wind-up or the projectile
+// speed and it goes RED and tells a human to re-choose the number by hand.
+//
+// ⭐⭐ THE MEASURED TIMELINE, read off this case's own INFO lines (60 Hz, fire on tick 1):
+//     tick  1  the Hadouken fires; the pool spawns slot 0 at x = 60 cm (spawnForwardOffset)
+//     tick  2  the shot connects -- its FIRST live tick -- and the target flinches on 3
+//     tick 19  the shooter is back in Idle (the flat 0.3 s Hadouken commitment, 18 ticks)
+//     tick 20  the held button starts a FRESH sequence 0
+//     tick 38  that swing's first damaging tick -- the follow-up CONNECTS
+//   ⇒ the window the stun must cover is 38 - 2 = 36 ticks = 0.600 s.
+//   The authored 0.65 s ends the flinch on tick 42, so the margin is FOUR ticks.
+//
+// ⛔ THAT MAKES THE POINT-BLANK PROJECTILE THE BINDING CASE, not the melee one, and it is
+//   the reverse of what impl/design_stun_followup_window.md section 2 derived by hand
+//   (0.504 s, ~8 ticks of slack). The recovery half of that derivation is CONFIRMED here to
+//   the tick -- Idle at fire+18, fresh swing at fire+19, damaging at fire+37. What it got
+//   wrong is the FLIGHT: it took the travel to be 90/800 = 0.113 s from the shooter's centre,
+//   but the shot is born 60 cm ahead (spawnForwardOffset) and its 40 cm collider touches the
+//   target's 42 cm capsule at 82 cm of separation -- so at point-blank the two are ALREADY
+//   overlapping when the slot spawns and the hit lands on the first tick it is queried.
+//   ⭐ The closer the target, the LONGER the stun must be, and this is the shortest flight
+//   the geometry admits.
+//
+// ⚠ POINT-BLANK IS BOUNDED BY THE MELEE ANNULUS, NOT BY THE SHOT. The radial's gate is
+//   `hitDistance > getAttackCircle().getInnerRadius()`, STRICTLY, so a target seated on the
+//   inner radius can be shot but never followed up, and the claim would not be expressible.
+//   One centimetre outside it is therefore the worst case that can be stated at all.
+//
+// ⚠ WHAT THIS ARM STILL CANNOT SEE, beyond the four limits listed at the harness: the
+//   overlap is a 2-D circle test against the target's CURRENT position, which is exact for
+//   this geometry (the shot flies at z = 50, the target capsule spans z 10..202) and would
+//   not be for a target on a ledge; and the shooter never moves, so nothing here says what
+//   happens if the target walks out of the annulus while the shot is in the air.
+// ===========================================================================
+TEST_CASE("HitRouting.ProjectilePointBlankFollowUpWindow", "[SimulatableBrawler][HitRouting]")
+{
+    using namespace hitRoutingTests;
+    using namespace hitRoutingTests::endToEnd;
+
+    // The Hadouken cannot be fired on tick 0: a slot's `spawnTick == 0` IS its free marker.
+    constexpr int kFireTick = 1;
+
+    // --- RIG A: the shot alone. Nothing follows it up, so the flinch it ends on is the PURE
+    //     dwell of the projectile's own stun -- the number rig B's slack is measured against.
+    FEndToEndRig shotRig;
+    const float pointBlank = shotRig.staticData.m_attackCircle.getInnerRadius() + 1.f;
+    shotRig.setTargetDistance(pointBlank);
+    shotRig.hadoukenOnTick = kFireTick;
+    shotRig.run(120);
+
+    int projectileHitAt   = -1;
+    int enteredFlinchAt   = -1;
+    int leftFlinchAt      = -1;
+    for (const TickSample& s : shotRig.samples)
+    {
+        if (projectileHitAt < 0 && s.wasHitThisTick)       projectileHitAt = int(s.tick);
+        if (projectileHitAt < 0) continue;
+        if (enteredFlinchAt < 0 && s.targetMachine == DAttackState::HitFlinch)
+            enteredFlinchAt = int(s.tick);
+        if (enteredFlinchAt >= 0 && leftFlinchAt < 0
+            && s.targetMachine != DAttackState::HitFlinch)
+            leftFlinchAt = int(s.tick);
+    }
+
+    INFO("shot: fired on tick " << kFireTick << ", spawnTick "
+         << shotRig.samples[std::size_t(kFireTick)].projectileSpawnTick
+         << ", spawn x " << shotRig.samples[std::size_t(kFireTick)].projectilePos.x
+         << " cm, target at " << pointBlank << " cm, contact radius "
+         << shotRig.query.projectileContactRadius << " cm");
+    INFO("shot: routed hit on tick " << projectileHitAt << "; HitFlinch " << enteredFlinchAt
+         << " -> " << leftFlinchAt << "; routing fired on " << shotRig.hitTickCount()
+         << " tick(s)");
+
+    // PREMISES: the shot really was a projectile hit (endReason 2, the only reason routing
+    // branch 3 admits), it landed once, and it stunned.
+    REQUIRE(projectileHitAt > kFireTick);
+    REQUIRE(shotRig.hitTickCount() == 1u);
+    REQUIRE(shotRig.samples[std::size_t(projectileHitAt)].projectileEndReason == 2u);
+    REQUIRE(shotRig.samples[std::size_t(projectileHitAt)].projectileEndTick
+            == std::uint32_t(projectileHitAt));
+    REQUIRE(enteredFlinchAt == projectileHitAt + 1);
+    REQUIRE(leftFlinchAt > enteredFlinchAt);
+    // A stun carries no speed: the body does not move, at any tick of the run.
+    for (const TickSample& s : shotRig.samples)
+    {
+        INFO("tick " << s.tick);
+        REQUIRE(glm::length(glm::vec2(s.targetVelocity.x, s.targetVelocity.y))
+                == Catch::Approx(0.f).margin(1e-4f));
+    }
+
+    // THE DWELL, measured from the hit tick, against the authored spec -- and then against the
+    // literal, which is the pin review finding N-4 asked for in behavioural form.
+    const HitReactionSpec& spec = shotRig.staticData.m_projectileHitReaction;
+    const float stunSpan = float(leftFlinchAt - projectileHitAt) * kDt;
+    INFO("stun span from the hit tick " << stunSpan << " s against an authored "
+         << spec.lockoutDuration << " s");
+    REQUIRE(spec.kind == HitReactionKind::Stun);
+    REQUIRE(stunSpan >= spec.lockoutDuration);
+    REQUIRE(stunSpan <= spec.lockoutDuration + 3.f * kDt);
+
+    // --- RIG B: the same shot, then the button HELD through the shooter's own recovery.
+    FEndToEndRig followUpRig;
+    followUpRig.setTargetDistance(pointBlank);
+    followUpRig.hadoukenOnTick       = kFireTick;
+    followUpRig.followUpHoldFromTick = kFireTick + 5;   // after the hit, during the commitment
+    followUpRig.followUpStick        = glm::vec2(0.f, -1.f);   // -> kRightSequenceId
+    followUpRig.run(120);
+
+    int          shotHitAt      = -1;
+    int          idleAt         = -1;
+    int          followUpAt     = -1;
+    unsigned int followUpSeq    = InvalidAttackSequenceId;
+    int          followUpHitAt  = -1;
+    for (const TickSample& s : followUpRig.samples)
+    {
+        if (shotHitAt < 0 && s.wasHitThisTick)        shotHitAt = int(s.tick);
+        if (shotHitAt < 0) continue;
+        if (idleAt < 0 && s.attackerMachine == DAttackState::Idle)
+            idleAt = int(s.tick);
+        if (idleAt >= 0 && followUpAt < 0 && s.attackerMachine == DAttackState::Attacking)
+        {
+            followUpAt  = int(s.tick);
+            followUpSeq = s.radialSequence;
+        }
+        if (followUpAt >= 0 && followUpHitAt < 0 && s.wasHitThisTick)
+            followUpHitAt = int(s.tick);
+    }
+
+    INFO("follow-up trace " << followUpRig.trace(std::size_t(kFireTick), 45u));
+    INFO("shot hit at tick " << shotHitAt << "; shooter Idle at " << idleAt
+         << "; fresh swing at " << followUpAt << " (sequence " << followUpSeq
+         << "); its first damaging tick " << followUpHitAt
+         << "; the stun measured above ended at tick " << leftFlinchAt);
+
+    // THE PATH: the two rigs saw the same shot, the shooter ran its Hadouken commitment out,
+    // dropped to Idle, and the held button started a FRESH left/right swing there.
+    REQUIRE(shotHitAt == projectileHitAt);
+    REQUIRE(idleAt > shotHitAt);
+    REQUIRE(followUpAt == idleAt + 1);
+    REQUIRE(isRealAttackSequence(followUpSeq));
+    REQUIRE(followUpSeq == dAttackDirection::kRightSequenceId);
+    REQUIRE(followUpHitAt > followUpAt);
+
+    // ⭐⭐ THE ASSERTION THIS CASE EXISTS FOR: on the tick the follow-up lands, the defender is
+    // STILL STUNNED by the PROJECTILE. `targetMachine` is sampled after that tick's integrate,
+    // which consumed the PREVIOUS tick's inbound slice, so this reads the first hit's dwell and
+    // cannot be contaminated by the second.
+    REQUIRE(followUpRig.samples[std::size_t(followUpHitAt)].targetMachine
+            == DAttackState::HitFlinch);
+
+    // ...and the same statement as a NUMBER, so the margin is visible when it shrinks.
+    // `leftFlinchAt` comes from rig A, which has no follow-up, so it is the pure dwell.
+    INFO("slack = " << (leftFlinchAt - followUpHitAt) << " tick(s)");
+    REQUIRE(followUpHitAt < leftFlinchAt);
 }
 
 // ===========================================================================

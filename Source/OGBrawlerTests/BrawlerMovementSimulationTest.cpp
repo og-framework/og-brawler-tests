@@ -832,15 +832,36 @@ TEST_CASE("BrawlerMovement.FrozenByHitFlinch", "[BrawlerMovement]")
     REQUIRE(rig.frozenBit());
     REQUIRE(rig.state.velocity == glm::vec3(0.f));
 
-    // CONTROL -- being mid-ATTACK is not a flinch and must not freeze locomotion.
+    // CONTROL -- being mid-ATTACK is not a flinch, and it must not FREEZE locomotion.
+    // ⭐ [movement-sim task 84, 2026-09-20] THIS ARM USED TO READ `maxWalkSpeed`, i.e. the walk
+    // law, and it cannot any more: `Attacking` now runs step 3's THIRD branch, `locked`, which
+    // ramps the tangential channels linearly to a stop on the attack's last tick. The arm keeps
+    // its subject -- a flinch freezes, an attack does not -- and states it against the law that
+    // actually runs: with nine Attacking ticks left the first one keeps 8/9 of the walk speed,
+    // which is a number neither the freeze nor a full stop could produce.
     ScriptedRig attacking;
     seatOnFlatGroundAtRideHeight(attacking);
     attacking.state.velocity = glm::vec3(attacking.sd.maxWalkSpeed, 0.f, 0.f);
-    attacking.machineState.m_currentState = DAttackState::Attacking;
+    attacking.machineState.m_currentState  = DAttackState::Attacking;
+    attacking.machineState.m_attackEndTick = 10u;      // R = 9 on tick 1
     attacking.tick(1u, stick(1.f, 0.f));
     REQUIRE_FALSE(attacking.frozenBit());
     REQUIRE(attacking.state.velocity.x
-            == Catch::Approx(attacking.sd.maxWalkSpeed).margin(1e-4f));
+            == Catch::Approx(attacking.sd.maxWalkSpeed * 8.f / 9.f).margin(1e-3f));
+
+    // ⚠ AND THE OTHER HALF, RECORDED RATHER THAN LEFT AS A SURPRISE: a DEFAULT-CONSTRUCTED
+    // machine `State` held in `Attacking` carries `m_attackEndTick == 0`, which ⛔G-24's guard
+    // saturates to `R = 1` and therefore to a full stop on the first tick. That is the designed
+    // degrade for an end tick at or before the current one -- it is NOT a freeze, the frozen bit
+    // stays clear -- and it is the reason the arm above has to set the field at all.
+    ScriptedRig noEndTick;
+    seatOnFlatGroundAtRideHeight(noEndTick);
+    noEndTick.state.velocity = glm::vec3(noEndTick.sd.maxWalkSpeed, 0.f, 0.f);
+    noEndTick.machineState.m_currentState = DAttackState::Attacking;
+    REQUIRE(noEndTick.machineState.m_attackEndTick == 0u);
+    noEndTick.tick(1u, stick(1.f, 0.f));
+    REQUIRE_FALSE(noEndTick.frozenBit());
+    REQUIRE(noEndTick.state.velocity == glm::vec3(0.f));
 }
 
 TEST_CASE("BrawlerMovement.FrozenByGuardFlinch", "[BrawlerMovement]")
@@ -4363,6 +4384,312 @@ TEST_CASE("BrawlerMovement.KnockbackIntoWallStopsAtWall", "[BrawlerMovement]")
     REQUIRE(rig.state.velocity.y
             == Catch::Approx(remaining - rig.sd.launchDecel * kDt).margin(1e-2f));
     REQUIRE(rig.state.velocity.y > 0.f);
+}
+
+// ===========================================================================
+// STEP 3 -- THE ATTACK MOVEMENT LOCK  [movement-sim task 84, 2026-09-20]
+//
+// SUBJECT: the THIRD branch of step 3's dispatch, `locked`, between `committed` and `frozen`.
+// While the machine is `Attacking`, the two tangent-plane channels are multiplied by
+// `(R-1)/R` where `R` is the number of Attacking ticks left INCLUDING this one, taken from
+// the machine's wire `m_attackEndTick` (the first tick the machine will be `Idle`). The stick
+// is never read; the vertical channel, gravity and the hover servo run unchanged.
+//
+// THE INDEXING, spelled once so every case below can be read against it. Seat the rig at
+// `tick0` with `m_attackEndTick = tick0 + N`. On the m-th Attacking tick (m = 1..N,
+// t = tick0 + m - 1) the branch sees `R = N - m + 1`, so the speed AFTER that tick is
+//     v_m = v_(m-1) * (R-1)/R = v0 * (N - m) / N
+// by telescoping -- a linear ramp, the same displacement a constant deceleration `v0/(N*dt)`
+// would give, and EXACTLY zero on m = N because the factor is `0/1` and the multiply is exact.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ THE USER'S SENTENCE, MEASURED: "comes to a full stop exactly the tick where the attack
+// ends". The ramp is checked to the digit on every tick of the swing and the last one is
+// asserted with `==`, not `Approx` -- the ratio form reaches zero by MULTIPLICATION, so there
+// is no epsilon to spend. The control arm at the end proves the fixture can still move.
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.AttackSlideStopsExactlyOnTheLastAttackingTick", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    constexpr std::uint32_t kTick0 = 1u;
+    constexpr std::uint32_t kN     = 10u;
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+    const float v0 = rig.sd.maxWalkSpeed;
+    rig.state.velocity = glm::vec3(v0, 0.f, 0.f);
+    rig.machineState.m_currentState  = DAttackState::Attacking;
+    rig.machineState.m_attackEndTick = kTick0 + kN;
+
+    for (std::uint32_t m = 1u; m <= kN; ++m)
+    {
+        // The stick is held HARD ACROSS the direction of travel on every tick. If step 3 read it
+        // at all, `velocity.y` would grow and `velocity.x` would not follow the ramp.
+        rig.tick(kTick0 + m - 1u, stick(0.f, 1.f));
+
+        const float expected = v0 * float(kN - m) / float(kN);
+        INFO("attacking tick " << m << " of " << kN << " (t=" << (kTick0 + m - 1u)
+             << ", R=" << (kN - m + 1u) << "): v=(" << rig.state.velocity.x << ", "
+             << rig.state.velocity.y << ", " << rig.state.velocity.z << ")  expected v.x="
+             << expected);
+        REQUIRE(rig.state.velocity.x == Catch::Approx(expected).margin(1e-3f));
+        REQUIRE(rig.state.velocity.y == Catch::Approx(0.f).margin(1e-4f));
+    }
+
+    // ⭐ EXACT. `float(R-1)/float(R)` is `0.f/1.f` on the last tick, and `currentUV * 0.f` is a
+    // pair of signed zeroes; `-0.f == 0.f` is true, so this reads bitwise as well as numerically.
+    REQUIRE(rig.state.velocity == glm::vec3(0.f));
+
+    // CONTROL -- the machine leaves Attacking and the walk law resumes from rest. Without this the
+    // case would pass on a rig that had simply been frozen.
+    rig.machineState.m_currentState = DAttackState::Idle;
+    rig.tick(kTick0 + kN, stick(0.f, 1.f));
+    REQUIRE(rig.state.velocity.y == Catch::Approx(rig.accelPerTick()).margin(1e-4f));
+    REQUIRE_FALSE(rig.frozenBit());
+}
+
+// ---------------------------------------------------------------------------
+// ⭐ THE DIRECTION IS LOCKED BECAUSE NOTHING CAN TURN IT. The branch multiplies `currentUV` by a
+// SCALAR, so the tangent-plane direction is preserved on every tick to rounding, whatever the
+// stick says. Here the stick is held exactly REVERSED, which is the input that would show a
+// projection or a `moveTowards`-to-the-stick spelling immediately.
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.AttackSlideDirectionIsLockedAgainstTheStick", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    constexpr std::uint32_t kTick0 = 1u;
+    constexpr std::uint32_t kN     = 12u;
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+
+    // OBLIQUE, so neither channel is zero and a component-swap would be visible too.
+    const glm::vec2 direction = glm::normalize(glm::vec2(1.f, 2.f));
+    const float     v0        = rig.sd.maxWalkSpeed;
+    rig.state.velocity = glm::vec3(direction.x * v0, direction.y * v0, 0.f);
+    rig.machineState.m_currentState  = DAttackState::Attacking;
+    rig.machineState.m_attackEndTick = kTick0 + kN;
+
+    for (std::uint32_t m = 1u; m < kN; ++m)      // ...up to but NOT including the zero tick
+    {
+        rig.tick(kTick0 + m - 1u, stick(-direction.x, -direction.y));
+
+        const glm::vec2 planar(rig.state.velocity.x, rig.state.velocity.y);
+        const float     speed = glm::length(planar);
+        INFO("tick " << m << ": v=(" << planar.x << ", " << planar.y << ")  |v|=" << speed
+             << "  expected |v|=" << (v0 * float(kN - m) / float(kN)));
+        REQUIRE(speed > 0.f);
+        REQUIRE(glm::dot(planar * (1.f / speed), direction) == Catch::Approx(1.f).margin(1e-5f));
+        REQUIRE(speed == Catch::Approx(v0 * float(kN - m) / float(kN)).margin(1e-3f));
+    }
+
+    rig.tick(kTick0 + kN - 1u, stick(-direction.x, -direction.y));
+    REQUIRE(rig.state.velocity == glm::vec3(0.f));
+}
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ A SLIDE UP A SLOPE KEEPS ITS HOVER HOLD, and this is the case the whole branch placement
+// exists for. `locked` is NOT a tenant of the `committed` arm: `committed` also feeds
+// `detachesFromSupport(state, up, committed)` -- `committed && dot(velocity, up) > 0` -- and a
+// tangential slide up a face carries world z, so folding this law into `committed` would detach
+// the character and fly it off the slope. That is exactly the behaviour ⛔G-07 records and
+// `SlopeKnockbackStaysOnSlope` measures; the control arm below reproduces it on the SAME fixture.
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.AttackSlideDoesNotDetachOnASlope", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    constexpr std::uint32_t kTick0 = 1u;
+    constexpr std::uint32_t kN     = 8u;
+
+    const float     theta = 30.f;
+    const glm::vec3 n     = slopeNormal(theta);
+
+    ScriptedRig rig;
+    rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight, rig.probeLength(), n) };
+    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+
+    // UP the face: the `u` axis of the surface frame, whose world z is `sin(theta)` > 0.
+    glm::vec3 u(1.f, 0.f, 0.f), v(0.f, 1.f, 0.f);
+    movement::buildTangentFrame(n, u, v);
+    const float v0 = rig.sd.maxWalkSpeed;
+    rig.state.velocity = u * v0;
+    REQUIRE(glm::dot(rig.state.velocity, movement::kWorldUp) > 0.f);   // PREMISE: it really is up-slope
+
+    rig.machineState.m_currentState  = DAttackState::Attacking;
+    rig.machineState.m_attackEndTick = kTick0 + kN;
+
+    for (std::uint32_t m = 1u; m <= kN; ++m)
+    {
+        rig.tick(kTick0 + m - 1u, stick(0.f, 0.f));
+
+        const glm::vec3 channels = channelsOf(rig.state.velocity, n);
+        INFO("up-slope tick " << m << ": support=" << int(rig.support())
+             << " (0 Unsupported, 1 Supported)  channels=(" << channels.x << ", " << channels.y
+             << ", " << channels.z << ")  expected u-channel="
+             << (v0 * float(kN - m) / float(kN)) << "  v.z=" << rig.state.velocity.z);
+
+        // 1. THE HOVER HOLD SURVIVES THE WHOLE SLIDE -- the row the `committed` arm would fail.
+        REQUIRE(rig.support() == movement::SupportState::Supported);
+        // 2. ...and the ramp is the same ramp, read through the file's own dual basis.
+        REQUIRE(channels.x == Catch::Approx(v0 * float(kN - m) / float(kN)).margin(1e-2f));
+        REQUIRE(channels.y == Catch::Approx(0.f).margin(1e-2f));
+        // 3. ON the face: the slide follows the surface, it does not lift off it.
+        REQUIRE(glm::dot(rig.state.velocity, n) == Catch::Approx(0.f).margin(1e-2f));
+    }
+    REQUIRE(rig.state.velocity == glm::vec3(0.f));
+
+    // ⛔ CONTROL -- the SAME fixture, the SAME up-slope velocity, under a KNOCKBACK, detaches on
+    // the second tick. This is G-07's recorded finding reproduced here so the row above is a
+    // statement about the BRANCH and not about a fixture that could never detach.
+    ScriptedRig launched;
+    launched.query.scriptedSweeps = { floorHitAt(launched.sd.rideHeight, launched.probeLength(), n) };
+    launched.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + launched.sd.rideHeight);
+    launched.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
+    launched.tick(1u, stick(0.f, 0.f));
+    REQUIRE(launched.support() == movement::SupportState::Supported);
+    launched.tick(2u, stick(0.f, 0.f));
+    INFO("control (knockback on the same face): support=" << int(launched.support())
+         << "  v.z=" << launched.state.velocity.z);
+    REQUIRE(launched.support() == movement::SupportState::Unsupported);
+}
+
+// ---------------------------------------------------------------------------
+// ⛔G-24's CASE. `m_attackEndTick` is WIRE STATE: a remote proxy can adopt a correction whose end
+// tick is at or before the tick it is replaying, and an unsigned `m_attackEndTick - tick` would
+// then wrap to ~2^32, making the factor `1 - 2^-32` -- a slide that never ends, silently, with
+// nothing logged and nothing crashed. The guarded form saturates at `R = 1`, whose factor is 0,
+// so the correct degrade is "stop now".
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.AttackSlideSaturatesWhenTheEndTickIsInThePast", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    constexpr std::uint32_t kTick = 10u;
+
+    // ARM 1 -- the end tick is five ticks in the PAST. Unguarded this reads ~v0.
+    ScriptedRig past;
+    seatOnFlatGroundAtRideHeight(past);
+    past.state.velocity = glm::vec3(past.sd.maxWalkSpeed, 0.f, 0.f);
+    past.machineState.m_currentState  = DAttackState::Attacking;
+    past.machineState.m_attackEndTick = kTick - 5u;
+    // The stick is held IN the direction of travel, so neither the walk law nor a wrapped factor
+    // could have produced the zero this case requires.
+    past.tick(kTick, stick(1.f, 0.f));
+    INFO("endTick=" << past.machineState.m_attackEndTick << " tick=" << kTick
+         << " -> v=(" << past.state.velocity.x << ", " << past.state.velocity.y << ", "
+         << past.state.velocity.z << ")");
+    REQUIRE(past.state.velocity == glm::vec3(0.f));
+
+    // ARM 2 -- the EXACT boundary. `m_attackEndTick == tick` is the first value the strict `>`
+    // rejects, and it is the one an off-by-one in the write sites would produce.
+    ScriptedRig boundary;
+    seatOnFlatGroundAtRideHeight(boundary);
+    boundary.state.velocity = glm::vec3(boundary.sd.maxWalkSpeed, 0.f, 0.f);
+    boundary.machineState.m_currentState  = DAttackState::Attacking;
+    boundary.machineState.m_attackEndTick = kTick;
+    boundary.tick(kTick, stick(1.f, 0.f));
+    REQUIRE(boundary.state.velocity == glm::vec3(0.f));
+
+    // CONTROL -- one tick further out and the SAME fixture is a half-speed slide, so the two arms
+    // above are a statement about the guard and not about a rig that always reads zero.
+    ScriptedRig live;
+    seatOnFlatGroundAtRideHeight(live);
+    live.state.velocity = glm::vec3(live.sd.maxWalkSpeed, 0.f, 0.f);
+    live.machineState.m_currentState  = DAttackState::Attacking;
+    live.machineState.m_attackEndTick = kTick + 2u;
+    live.tick(kTick, stick(1.f, 0.f));
+    REQUIRE(live.state.velocity.x == Catch::Approx(0.5f * live.sd.maxWalkSpeed).margin(1e-3f));
+}
+
+// ---------------------------------------------------------------------------
+// ⭐ RECOMPUTED EVERY TICK, NEVER CAPTURED AT ENTRY. The ramp is a pure function of
+// `(velocity, tick, m_attackEndTick)` -- all three on the wire -- so when the end tick MOVES
+// mid-slide (the chain, and task 31's dash-cancel-into-attack) the ramp re-targets and the stop
+// is still exact at the NEW end. A form that captured `v0` or a deceleration on the entry tick
+// would ramp to the old end and sit there, and it could not have been a seventh movement `State`
+// member anyway -- `StateHasExactlySixMembers` forbids it.
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.AttackSlideRetargetsWhenTheEndTickMoves", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    constexpr std::uint32_t kTick0     = 1u;
+    constexpr std::uint32_t kN         = 10u;
+    constexpr std::uint32_t kMovedEnd  = 20u;   // rewritten before tick 5
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+    const float v0 = rig.sd.maxWalkSpeed;
+    rig.state.velocity = glm::vec3(v0, 0.f, 0.f);
+    rig.machineState.m_currentState  = DAttackState::Attacking;
+    rig.machineState.m_attackEndTick = kTick0 + kN;
+
+    for (std::uint32_t m = 1u; m <= 4u; ++m)
+        rig.tick(kTick0 + m - 1u, stick(0.f, 0.f));
+
+    const float midRamp = rig.state.velocity.x;
+    INFO("mid-ramp after 4 of " << kN << " ticks: v.x=" << midRamp);
+    REQUIRE(midRamp == Catch::Approx(v0 * 6.f / float(kN)).margin(1e-3f));
+
+    rig.machineState.m_attackEndTick = kMovedEnd;
+    for (std::uint32_t t = 5u; t <= kMovedEnd - 1u; ++t)
+    {
+        rig.tick(t, stick(0.f, 0.f));
+        // From tick 5 the factors telescope to `(kMovedEnd - 1 - t) / (kMovedEnd - 5)`.
+        const float expected = midRamp * float(kMovedEnd - 1u - t) / float(kMovedEnd - 5u);
+        INFO("retargeted tick " << t << " (R=" << (kMovedEnd - t) << "): v.x="
+             << rig.state.velocity.x << " expected " << expected);
+        REQUIRE(rig.state.velocity.x == Catch::Approx(expected).margin(1e-3f));
+    }
+
+    // ...and it is still EXACTLY zero, at the NEW end.
+    REQUIRE(rig.state.velocity == glm::vec3(0.f));
+}
+
+// ---------------------------------------------------------------------------
+// ⛔ `locked` IS TESTED BEFORE `frozen`, for the reason ⛔G-23 already records for `committed`:
+// guarding during an attack is blocked by `DAttackGuardSimulation`'s shape gate
+// (`m_currentState != Idle`), which covers the whole swing, so freezing the body on the
+// `holdGuard` bit would be a second, wrong mechanism. Swap the two branches in step 3 and the
+// first row here reads 0 where it requires 90. The mirror of `HoldGuardDoesNotFreezeASlide`.
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerMovement.HoldGuardDoesNotFreezeAnAttackSlide", "[BrawlerMovement]")
+{
+    using namespace movementTests;
+
+    constexpr std::uint32_t kTick0 = 1u;
+    constexpr std::uint32_t kN     = 10u;
+
+    ScriptedRig rig;
+    seatOnFlatGroundAtRideHeight(rig);
+    const float v0 = rig.sd.maxWalkSpeed;
+    rig.state.velocity = glm::vec3(v0, 0.f, 0.f);
+    rig.machineState.m_currentState  = DAttackState::Attacking;
+    rig.machineState.m_attackEndTick = kTick0 + kN;
+
+    rig.tick(kTick0, stick(0.f, 0.f), movement::kInputFlagHoldGuard);
+    INFO("holdGuard held through the first attacking tick: v.x=" << rig.state.velocity.x);
+    REQUIRE(rig.state.velocity.x == Catch::Approx(v0 * 9.f / float(kN)).margin(1e-3f));
+
+    rig.tick(kTick0 + 1u, stick(0.f, 0.f), movement::kInputFlagHoldGuard);
+    REQUIRE(rig.state.velocity.x == Catch::Approx(v0 * 8.f / float(kN)).margin(1e-3f));
+
+    // ⚠ AND THE FROZEN BIT STILL READS FROZEN -- G-23's second paragraph, now true of a guard-held
+    // SLIDE as well as a guard-held knockback. Its only reader is the visualizer; recorded, not
+    // treated as the answer to "did the model run".
+    REQUIRE(rig.frozenBit());
+
+    // CONTROL -- the same input with the machine Idle freezes, so the bit really is live in this
+    // fixture and the rows above are a statement about the ORDER.
+    ScriptedRig walking;
+    seatOnFlatGroundAtRideHeight(walking);
+    walking.state.velocity = glm::vec3(walking.sd.maxWalkSpeed, 0.f, 0.f);
+    walking.tick(1u, stick(1.f, 0.f), movement::kInputFlagHoldGuard);
+    REQUIRE(walking.state.velocity == glm::vec3(0.f));
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

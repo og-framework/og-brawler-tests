@@ -551,15 +551,33 @@ struct FMachineRig
         slice.flinchDuration = resolvedDwell(spec);
     }
 
+    // [movement-sim task 84] THE AIM / MOVE / ACTION SEAM. These four defaults are EXACTLY what
+    // `tick` hardcoded before this task -- aim east, neutral stick, move-world equal to aim, no
+    // matcher action -- so every case written against the old rig is unchanged. Task 84's
+    // end-tick cases set them, because the sequence a press selects is
+    // `dAttackDirection::classify(aim, moveWorld, stick)` and that is the only way to enter
+    // sequences 0 and 1 rather than the neutral-stick forward swing 4.
+    glm::vec3     aim{ 1.f, 0.f, 0.f };
+    glm::vec3     moveWorld{ 1.f, 0.f, 0.f };
+    glm::vec2     moveStick{ 0.f, 0.f };
+    std::uint32_t triggeredActionId = 0u;
+
+    // The radial sub-state, read by task 84's dual-tap case to establish -- from observable state
+    // rather than from a log line -- that the machine's `attackTimer < 0.1` branch really ran.
+    const dAttackRadialSimulation::State& radial() const
+    {
+        return character.getAllState().getState().get<dAttackRadialSimulation::State>();
+    }
+
     void tick(unsigned int t, bool attackLeft, bool attackRight = false)
     {
-        const glm::vec3 aim(1.f, 0.f, 0.f);
+        const glm::vec3 aimDir = aim;
         simulatableBrawler::PlayerInput input(
-            dAttackRadialSimulation::PlayerInput(aim, attackLeft, attackRight),
-            dAttackMachineSimulation::PlayerInput{aim, attackLeft, attackRight,
-                                                 glm::vec2(0.f), aim},
-            dAttackGuardSimulation::PlayerInput(aim),
-            brawlerProjectileSimulation::PlayerInput{aim},
+            dAttackRadialSimulation::PlayerInput(aimDir, attackLeft, attackRight),
+            dAttackMachineSimulation::PlayerInput{aimDir, attackLeft, attackRight,
+                                                 moveStick, moveWorld, triggeredActionId},
+            dAttackGuardSimulation::PlayerInput(aimDir),
+            brawlerProjectileSimulation::PlayerInput{aimDir},
             brawlerMovementSimulation::PlayerInput{},
             // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
             // composite. No field, no wire cost: the input composite is still 77 B and
@@ -692,8 +710,18 @@ TEST_CASE("DAttack.Integrate3.RehitRestartsLockoutAndReplaces", "[DAttack][HitFl
     REQUIRE(rig.machine().m_hitReaction == HitReactionKind::Stun);
     REQUIRE(rig.machine().m_flinchDuration
             == Catch::Approx(stun.lockoutDuration).margin(1e-6f));
-    REQUIRE(rig.machine().m_flinchDuration < knockback.knockbackSpeed
-            / rig.staticData.m_movementStaticData.launchDecel);
+    // [movement-sim task 86] ...and it is NOT the knockback's dwell. This line used to
+    //    read `m_flinchDuration < knockbackSpeed / launchDecel`, which held only because
+    //    the authored stun happened to be 0.3 s and the knockback's resolved dwell is
+    //    0.5 s. Task 86 raised the stun to 0.65 s DELIBERATELY -- a stun is now the
+    //    LONGER reaction -- so a directional `<` would encode a design assumption this
+    //    task inverted. What the case actually needs to prove is that the replacement
+    //    installed the STUN's own dwell rather than accidentally reusing the knockback's,
+    //    so the assertion is DIFFERENCE, not direction, and it survives either ordering.
+    INFO("stun dwell " << rig.machine().m_flinchDuration << " s against the knockback's "
+         << rig.resolvedDwell(knockback) << " s");
+    REQUIRE(rig.machine().m_flinchDuration
+            != Catch::Approx(rig.resolvedDwell(knockback)).margin(1e-3f));
 
     // 3. ...and a knockback landing on a STUN replaces the other way, discarding the stun's
     //    remaining time -- the fourth row of the cross-kind table in `design_hit_reactions.md`.
@@ -772,6 +800,292 @@ TEST_CASE("DAttack.Integrate3.KnockbackLockoutCanOutlastSlideButNeverUndercutIt"
         REQUIRE(rig.resolvedDwell(stun) == Catch::Approx(0.3f).margin(1e-6f));
         REQUIRE(rig.resolvedDwell(stun) < slideSeconds);
     }
+}
+
+// ===========================================================================
+// THE ATTACK END TICK  [movement-sim task 84, 2026-09-20]
+//
+// SUBJECT: `dAttackMachineSimulation::State::m_attackEndTick` -- the absolute sim tick on which
+// the machine will next be `Idle`, written ONLY where `integrate3` produces a radial EDGE.
+// These three cases drive the WHOLE `SimulatableBrawler`, because the claim is about agreement
+// between the machine's prediction and the RADIAL's own float accumulation: `swingTickCount`
+// replicates `attackTimer = attackTimer + dt` from `0.f` against `t < getDuration()` STEP FOR
+// STEP, and nothing short of running both can show that it does.
+// ===========================================================================
+
+namespace integrate3tests
+{
+
+// What one swing looked like, observed from OUTSIDE the machine.
+struct SwingTrace
+{
+    unsigned int  entryTick     = 0u;
+    DAttackState  entryState    = DAttackState::Idle;
+    unsigned int  entrySeq      = InvalidAttackSequenceId;
+    std::uint32_t entryEndTick  = 0u;
+    // Set when `m_activeAttackSequence` changes while the machine is STILL `Attacking`, i.e. the
+    // `Attacking -> Attacking` chain.
+    bool          chained       = false;
+    unsigned int  chainTick     = 0u;
+    unsigned int  chainSeq      = InvalidAttackSequenceId;
+    std::uint32_t chainEndTick  = 0u;
+    bool          reachedIdle   = false;
+    unsigned int  firstIdleTick = 0u;
+};
+
+// Press on `t0`, keep the buttons down for `holdTicks` ticks in total (so `holdTicks == 1` means
+// the press tick alone), then release and drive until the machine reads `Idle` again.
+inline SwingTrace driveOneSwing(FMachineRig& rig, unsigned int t0, bool L, bool R,
+                                unsigned int holdTicks, std::uint32_t action,
+                                unsigned int maxTicks = 300u)
+{
+    SwingTrace tr;
+    rig.triggeredActionId = action;
+    rig.tick(t0, L, R);
+    rig.triggeredActionId = 0u;
+
+    tr.entryTick    = t0;
+    tr.entryState   = rig.machine().m_currentState;
+    tr.entrySeq     = rig.machine().m_activeAttackSequence;
+    tr.entryEndTick = rig.machine().m_attackEndTick;
+
+    unsigned int previousSeq = tr.entrySeq;
+    for (unsigned int t = t0 + 1u; t < t0 + maxTicks; ++t)
+    {
+        const bool hold = (t - t0) < holdTicks;
+        rig.tick(t, hold && L, hold && R);
+
+        const dAttackMachineSimulation::State& m = rig.machine();
+        if (m.m_currentState == DAttackState::Idle)
+        {
+            tr.reachedIdle   = true;
+            tr.firstIdleTick = t;
+            break;
+        }
+        if (m.m_activeAttackSequence != previousSeq)
+        {
+            tr.chained      = true;
+            tr.chainTick    = t;
+            tr.chainSeq     = m.m_activeAttackSequence;
+            tr.chainEndTick = m.m_attackEndTick;
+            previousSeq     = m.m_activeAttackSequence;
+        }
+    }
+    return tr;
+}
+
+} // namespace integrate3tests
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ THE EXACTNESS PROOF. For every authored sequence, and for the Hadouken, the tick the
+// machine PREDICTED on the entry tick is the tick it actually returns to `Idle` on -- not one
+// either side. It holds only because `swingTickCount` performs the radial's own float additions
+// in the radial's own order: `ceil(duration / dt)` is NOT this number, because `36 x (1/60)`
+// accumulated in float lands on a side of `0.6f` no reader can name and the helper must not
+// guess. Sequences 2 and 3 are reachable only through the chain (the classifier never selects
+// them from `Idle`), so their entry tick is the CHAIN tick and that is where the prediction is
+// read.
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.Integrate3.AttackEndTickMatchesTheFirstIdleTick", "[DAttack][AttackSlide]")
+{
+    using namespace integrate3tests;
+
+    // `classify(aim, moveWorld, stick)`: neutral stick is the forward swing 4; moving 90 deg
+    // counter-clockwise of the aim is 1, clockwise is 0. A press with the stick neutral cannot
+    // reach 0 or 1, and no press at all can reach 2 or 3.
+    struct Route
+    {
+        const char*   name;
+        glm::vec3     moveWorld;
+        glm::vec2     moveStick;
+        bool          L;
+        bool          R;
+        unsigned int  holdTicks;      // long enough to queue the chain, where one is wanted
+        std::uint32_t action;
+        unsigned int  expectSeq;
+        bool          expectChain;
+        unsigned int  expectChainSeq;
+    };
+
+    const Route routes[] = {
+        { "seq 4 (forward, neutral stick)",
+          glm::vec3(1.f, 0.f, 0.f), glm::vec2(0.f, 0.f),  true, false,  1u, 0u, 4u, false, 0u },
+        { "seq 0 (move clockwise of aim)",
+          glm::vec3(0.f, -1.f, 0.f), glm::vec2(0.f, -1.f), true, false,  1u, 0u, 0u, false, 0u },
+        { "seq 1 (move counter-clockwise of aim)",
+          glm::vec3(0.f, 1.f, 0.f), glm::vec2(0.f, 1.f), false,  true,  1u, 0u, 1u, false, 0u },
+        { "seq 2 (chained from 0, attackLeft held past 0.3 s)",
+          glm::vec3(0.f, -1.f, 0.f), glm::vec2(0.f, -1.f), true, false, 24u, 0u, 0u,  true, 2u },
+        { "seq 3 (chained from 1, attackRight held past 0.3 s)",
+          glm::vec3(0.f, 1.f, 0.f), glm::vec2(0.f, 1.f), false,  true, 24u, 0u, 1u,  true, 3u },
+    };
+
+    for (const Route& route : routes)
+    {
+        FMachineRig rig;
+        rig.moveWorld = route.moveWorld;
+        rig.moveStick = route.moveStick;
+
+        const SwingTrace tr = driveOneSwing(rig, 1u, route.L, route.R, route.holdTicks, route.action);
+
+        INFO(route.name << ": entryTick=" << tr.entryTick << " entrySeq=" << tr.entrySeq
+             << " entryEndTick=" << tr.entryEndTick << " chained=" << (tr.chained ? 1 : 0)
+             << " chainTick=" << tr.chainTick << " chainSeq=" << tr.chainSeq
+             << " chainEndTick=" << tr.chainEndTick << " firstIdleTick=" << tr.firstIdleTick);
+
+        // PREMISE: the route really selected the sequence it claims to.
+        REQUIRE(tr.entryState == DAttackState::Attacking);
+        REQUIRE(tr.entrySeq == route.expectSeq);
+        REQUIRE(tr.reachedIdle);
+
+        // 1. THE PREDICTION EXISTS AND IS IN THE FUTURE. `k >= 1` for any positive duration, so
+        //    the end tick is never the entry tick and never zero.
+        REQUIRE(tr.entryEndTick > tr.entryTick);
+
+        if (route.expectChain)
+        {
+            REQUIRE(tr.chained);
+            REQUIRE(tr.chainSeq == route.expectChainSeq);
+            // 2a. THE FIRST SWING'S PREDICTION IS THE CHAIN TICK ITSELF -- the chain fires on the
+            //     exact tick the machine would otherwise have gone Idle, which is what makes
+            //     "the first tick the machine will be Idle" the right definition of the field.
+            REQUIRE(tr.entryEndTick == tr.chainTick);
+            // 2b. ...and the rewritten prediction is the real end.
+            REQUIRE(tr.chainEndTick > tr.chainTick);
+            REQUIRE(tr.firstIdleTick == tr.chainEndTick);
+        }
+        else
+        {
+            REQUIRE_FALSE(tr.chained);
+            // 2. THE WHOLE POINT: predicted == actual, to the tick.
+            REQUIRE(tr.firstIdleTick == tr.entryEndTick);
+        }
+    }
+
+    // THE HADOUKEN -- no radial at all. The machine gates ITSELF on
+    // `m_timeInCurrentState < kHadoukenCommitmentSeconds`, accumulating `+= dt` from 0 with the
+    // same `<` predicate, and exits on the FIRST tick the sum reaches the window. So its end tick
+    // is `tick + swingTickCount(kHadoukenCommitmentSeconds, dt)` with NO `+ 1`: there is no radial
+    // whose `Invalid` the machine sees a tick late.
+    {
+        FMachineRig rig;
+        const SwingTrace tr =
+            driveOneSwing(rig, 1u, /*L*/ false, /*R*/ false, /*holdTicks*/ 1u,
+                          inputSequence::kHadoukenActionId);
+
+        INFO("hadouken: entrySeq=" << tr.entrySeq << " entryEndTick=" << tr.entryEndTick
+             << " firstIdleTick=" << tr.firstIdleTick);
+        REQUIRE(tr.entryState == DAttackState::Attacking);
+        REQUIRE(tr.entrySeq == kHadoukenSequenceSentinel);
+        REQUIRE(tr.reachedIdle);
+        REQUIRE(tr.entryEndTick > tr.entryTick);
+        REQUIRE(tr.firstIdleTick == tr.entryEndTick);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ⭐ THE CHAIN REWRITES THE PREDICTION, and it must: the second swing has its own duration, and
+// the movement slide re-reads the field every tick. `left -> left` is the authored 0 -> 2 chain.
+// The first swing's end tick is consumed as the chain tick; the second's is written on it.
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.Integrate3.ChainedSequenceRewritesTheEndTick", "[DAttack][AttackSlide]")
+{
+    using namespace integrate3tests;
+
+    FMachineRig rig;
+    rig.moveWorld = glm::vec3(0.f, -1.f, 0.f);
+    rig.moveStick = glm::vec2(0.f, -1.f);
+
+    const SwingTrace tr = driveOneSwing(rig, 1u, /*L*/ true, /*R*/ false, /*holdTicks*/ 24u, 0u);
+
+    INFO("chain: entrySeq=" << tr.entrySeq << " entryEndTick=" << tr.entryEndTick
+         << " chainTick=" << tr.chainTick << " chainSeq=" << tr.chainSeq
+         << " chainEndTick=" << tr.chainEndTick << " firstIdleTick=" << tr.firstIdleTick);
+
+    REQUIRE(tr.entrySeq == 0u);
+    REQUIRE(tr.chained);
+    REQUIRE(tr.chainSeq == 2u);
+
+    // 1. IT WAS REWRITTEN -- a chain that left the field alone would leave a slide that had
+    //    already stopped, or one that stopped in the middle of the second swing.
+    REQUIRE(tr.chainEndTick != tr.entryEndTick);
+    REQUIRE(tr.chainEndTick > tr.chainTick);
+
+    // 2. THE TWO SEQUENCES REALLY HAVE DIFFERENT DURATIONS, so row 1 discriminates. Read from the
+    //    SHIPPED table rather than restated: 0.6 s and 0.4 s at the time of writing.
+    const float duration0 = rig.staticData.m_attackSequences[0].getDuration();
+    const float duration2 = rig.staticData.m_attackSequences[2].getDuration();
+    INFO("authored durations: seq0=" << duration0 << " s, seq2=" << duration2 << " s");
+    REQUIRE(duration0 != duration2);
+
+    // 3. ...and test 7's assertion holds for the SECOND swing.
+    REQUIRE(tr.reachedIdle);
+    REQUIRE(tr.firstIdleTick == tr.chainEndTick);
+}
+
+// ---------------------------------------------------------------------------
+// ⛔⛔ THE DUAL-TAP RESTART BRANCH WRITES NO END TICK, AND THIS CASE IS WHY THAT IS DELIBERATE.
+// While both attack buttons are down inside the first 0.1 s of a swing, `integrate3` re-enters
+// `setRadialSimulationInitialConditions` on EVERY tick. With `m_activeAttackSequence` already 4
+// the radial's edge predicate (`currenSequenceId != activeAttackSequence`) is FALSE and the swing
+// does NOT restart -- a pre-existing no-op, routed as its own Backlog item and deliberately not
+// fixed here. Writing `tick + swingTickCount(...) + 1` on that branch would push the predicted end
+// LATER on every one of those held ticks while the radial ended on the original schedule: an
+// attack that never ends and a slide that never stops.
+// ---------------------------------------------------------------------------
+TEST_CASE("DAttack.Integrate3.DualTapRestartLeavesTheEndTickAlone", "[DAttack][AttackSlide]")
+{
+    using namespace integrate3tests;
+
+    FMachineRig rig;                      // neutral stick -> classify selects the forward swing 4
+
+    rig.tick(1u, /*L*/ true, /*R*/ true);
+    REQUIRE(rig.machine().m_currentState == DAttackState::Attacking);
+    REQUIRE(rig.machine().m_activeAttackSequence == 4u);
+    const std::uint32_t endTickAtEntry = rig.machine().m_attackEndTick;
+    REQUIRE(endTickAtEntry > 1u);
+
+    // Hold BOTH through the 0.1 s window. The machine runs BEFORE the radial, so the timer the
+    // branch tested on tick `t` is the one this loop read after tick `t - 1`.
+    unsigned int dualTapTicks = 0u;
+    for (unsigned int t = 2u; t <= 7u; ++t)
+    {
+        const float timerSeenByTheMachine = rig.radial().attackTimer;
+        rig.tick(t, /*L*/ true, /*R*/ true);
+
+        // PREMISE, from observable state rather than from the log line: the branch's whole
+        // condition held on this tick, so the branch RAN.
+        if (timerSeenByTheMachine < 0.1f && rig.machine().m_currentState == DAttackState::Attacking)
+        {
+            ++dualTapTicks;
+            INFO("dual-tap tick " << t << " (timer seen by the machine " << timerSeenByTheMachine
+                 << " s): endTick=" << rig.machine().m_attackEndTick);
+            // ⛔ UNCHANGED. Every one of these ticks would have pushed it later if the branch
+            //    wrote.
+            REQUIRE(rig.machine().m_attackEndTick == endTickAtEntry);
+            REQUIRE(rig.machine().m_activeAttackSequence == 4u);
+        }
+    }
+    INFO("dual-tap branch ran on " << dualTapTicks << " tick(s)");
+    REQUIRE(dualTapTicks >= 5u);          // ANTI-VACUITY: the window really was exercised
+
+    // ...AND THE MACHINE STILL IDLES ON THE TICK IT PREDICTED AT ENTRY. Buttons released from
+    // here so the `timer > 0.3` queue cannot form a chain and change the subject.
+    bool reachedIdle = false;
+    unsigned int firstIdleTick = 0u;
+    for (unsigned int t = 8u; t <= 200u; ++t)
+    {
+        rig.tick(t, false, false);
+        if (rig.machine().m_currentState == DAttackState::Idle)
+        {
+            reachedIdle = true;
+            firstIdleTick = t;
+            break;
+        }
+    }
+    INFO("endTickAtEntry=" << endTickAtEntry << " firstIdleTick=" << firstIdleTick);
+    REQUIRE(reachedIdle);
+    REQUIRE(firstIdleTick == endTickAtEntry);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

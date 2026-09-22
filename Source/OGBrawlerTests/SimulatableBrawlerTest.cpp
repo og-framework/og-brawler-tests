@@ -294,13 +294,25 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     //    reasoning lives at the constant in CorrectionStateBufferCodec.h; the cost side — a
     //    stale peer now gets a build-mismatch error instead of a silent ring-out-shaped hole —
     //    is written out in impl_notes_ringout_2.md §5/§5a.
-    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 335u,
+    //
+    //    [movement-sim task 84, 2026-09-20] 335 -> 339 B, +4 B, and the slice that moved is the
+    //    MACHINE's -- an EXISTING slice growing by one field, not a new sub-simulation. The field
+    //    is `dAttackMachineSimulation::State::m_attackEndTick`: the absolute tick on which the
+    //    machine will next be `Idle`, written only where the machine produces a radial edge and
+    //    read by the movement sub-simulation's attack-slide branch. It rides the wire because a
+    //    remote proxy that enters a swing BY ADOPTION never simulated the edge and could not have
+    //    computed the end -- the same argument ring-out records for `respawnAtTick` above.
+    //    ⛔ `correctionStateBuffer::kWireFormatVersion` is NOT bumped: this is the append that
+    //    grows an EXISTING slice, which the message below names as the one case that does not need
+    //    it (task 27's precedent, and expressly NOT ring-out's, which added a whole sub-sim).
+    //    The machine slice is re-quoted at 25 B in section 2 below.
+    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 339u,
         "The simulatableBrawler::State wire footprint moved. That is a WIRE FORMAT "
         "CHANGE: re-measure it, re-price RoundVsPacketBudgetTest.cpp, and bump "
         "correctionStateBuffer::kWireFormatVersion if the layout moved OR if a whole "
         "sub-simulation entered or left the composite - an append that only grows an "
         "EXISTING slice is the one case that does not need the bump.");
-    REQUIRE(kComposite == 335u);
+    REQUIRE(kComposite == 339u);
 
     // 2. WHICH SLICE, so a break says what moved rather than only that something did.
     //
@@ -331,7 +343,14 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     // SUB-SIMULATION rather than growing an existing slice — see the block above and the rule at
     // the constant in CorrectionStateBufferCodec.h. Task 27 grew a sub-sim both builds compile in,
     // which is the case that correctly declines.
-    REQUIRE(syncSize<dAttackMachineSimulation::State>() == 21u);
+    // ⭐ [movement-sim task 84, 2026-09-20] THE MACHINE SLICE 21 -> 25 B, composite 335 -> 339 B,
+    // +4 B, and the INPUT wire DOES NOT MOVE (ZeroInputIsTheFold below re-quotes 77 B unchanged;
+    // RoundVsPacketBudgetTest.cpp re-quotes ringWireBytes(1u) == 86u and the 82 B entry stride).
+    // `m_attackEndTick` (4 B) is APPENDED to dAttackMachineSimulation::State: the movement sub-sim
+    // needs the tick the swing ENDS on every tick of the slide, and a proxy that adopts a
+    // mid-swing correction never simulated the edge that produced it. Same append argument as
+    // task 27 immediately above, and the same declined version bump for the same reason.
+    REQUIRE(syncSize<dAttackMachineSimulation::State>() == 25u);
 
     // [movement-sim task 29] The guard slice, both halves, at zero. This is the term
     // the -56 B came out of, and pinning it HERE — beside the total — is what makes a
@@ -378,6 +397,10 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     //    now prints the live headroom on every run for the same reason. Raising
     //    `kBufferBytes` is wire-cheap (NetSerialize watermark-trims to usedBytes), so the
     //    next task to run out should raise it rather than economise on state.
+    //
+    //    [movement-sim task 84, 2026-09-20] RE-MEASURED AFTER THIS TASK: bufferUsed = 8 + 339 =
+    //    347 of 384, so the headroom is **37 B**, down from 41. Four bytes, one field, on an
+    //    existing slice. The paragraph above still holds and is not re-argued here.
     static_assert(correctionStateBuffer::kHeaderBytes
                       + FCompositeWireSize<simulatableBrawler::State>::value
                   <= kStateSyncBufferBytes,
@@ -391,7 +414,8 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
          << " B (268 B before movement-sim task 11 grew the movement slice to 309;"
          << " +12 B more at task 50 for positionCmd; +5 B more at task 27 for the machine's"
          << " m_hitReaction and m_flinchDuration; +9 B more at ringout task 2 for the"
-         << " brawlerRingout InitialConditions and State slices), buffer used="
+         << " brawlerRingout InitialConditions and State slices; +4 B more at movement-sim"
+         << " task 84 for the machine's m_attackEndTick), buffer used="
          << kBufferUsed << "/" << kStateSyncBufferBytes << " B, headroom="
          << (kStateSyncBufferBytes - kBufferUsed) << " B");
 }
