@@ -596,7 +596,8 @@ TEST_CASE("PacketBudget: the pre-diet cap is 4, and it is where join-alone cross
 
     // The cap, derived by walking the same bound rather than typed. The runtime
     // fence mirrors this value as `ASimulationManagerUImpl::kPreDietCharacterCap`;
-    // the two are pinned together by this line and by that constant's comment,
+    // the two are pinned together by this line and by that constant's derivation tag (D-01,
+    // into SimulationManagerUImpl-rationale.md's pre-diet cap section),
     // because a pure-C++ target cannot see a UCLASS.
     REQUIRE(largestFittingCharacterCountUnderJoin() == 4u);
 

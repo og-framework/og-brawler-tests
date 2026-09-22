@@ -11,8 +11,8 @@
 // PIE run. ⛔ ONE THING THE PUSH RESTS ON *IS* REACHABLE, AND IT IS THE LOAD-BEARING ONE:
 //
 //   The push reads `brawlerRingout::ScoreSystem`'s score table on the GAME thread, while
-//   `postIntegrate` writes it on the PHYSICS thread. `SimulationManagerUImpl.h`'s CROSSING
-//   table accepts that tear for exactly one structural reason — THE TABLE CANNOT BE
+//   `postIntegrate` writes it on the PHYSICS thread. The CROSSING table (the header's former
+//   banner, now `SimulationManagerUImpl-rationale.md` section 0) accepts that tear for exactly one structural reason — THE TABLE CANNOT BE
 //   RESTRUCTURED UNDER THE READER, because its only insert and erase are
 //   `onCharacterRegistered` / `onCharacterUnregistered`, both game-thread.
 //
@@ -155,7 +155,8 @@ TEST_CASE("RingoutScorePush.ASeededRosterMakesTheAwardNonInserting", "[BrawlerRi
 // what task 4 chose on purpose: the award to an unseeded id is a REAL award, not a dropped one.
 // ⛔ IF THIS CASE EVER GOES GREEN-BY-NOT-INSERTING, `postIntegrate` has been changed from
 // `operator[]` to a find-and-skip — at which point case 1 is vacuous and the CROSSING entry in
-// `SimulationManagerUImpl.h` is resting on nothing. Read them as a pair, always.
+// `SimulationManagerUImpl-rationale.md` (sections 0 and 1) is resting on nothing. Read them as a
+// pair, always.
 // ============================================================================================
 TEST_CASE("RingoutScorePush.AnUnseededRosterMakesTheAwardINSERT", "[BrawlerRingout]")
 {
