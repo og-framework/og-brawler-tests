@@ -8,6 +8,7 @@
 #include "OGBrawler/DAttackRadialSequence.h"
 #include "OGBrawler/DAttackSequenceId.h"
 #include "OGBrawler/OGBrawlerLog.h"
+#include "OGSimulation/SimulationLog.h"
 #include "OGSimulation/SimulationComposite.h"
 #include "OGSimulation/SimulationDependencies.h"
 #include "OGSimulation/PhysicsBodyAdapter.h"
@@ -52,6 +53,9 @@ namespace dattackradialaimlogtests
 {
 
 static constexpr float kDt = 1.f / 60.f;
+// [og-netcode-v2-field-defects task 16] The (id, tick) the rig's IntegrateScope carries.
+static constexpr uint32_t kLogTick = 42u;
+static constexpr unsigned int kLogCharacterId = 7u;
 
 // ---------------------------------------------------------------------------
 // Mocks -- deliberately local to this TU, matching the convention of the sibling radial
@@ -109,7 +113,13 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 //     from becoming a second source of failure.
 // ===========================================================================
 
-static std::string captureSetInitialConditionsLine(float aimAngle, const glm::vec3& aimAxis)
+// [og-netcode-v2-field-defects task 15] The rig returns EVERY captured line and takes the
+// branch-selecting fields as parameters, so the [Radial.branch] case below can drive each of
+// the six branches through the same integrate. The defaults are the setInitialConditions edge.
+static std::vector<std::string> captureRadialLines(float aimAngle, const glm::vec3& aimAxis,
+                                                   unsigned int icSequence = 0u,
+                                                   unsigned int stateSequence = InvalidAttackSequenceId,
+                                                   float attackTimer = 0.f)
 {
     using namespace dAttackRadialSimulation;
 
@@ -127,12 +137,12 @@ static std::string captureSetInitialConditionsLine(float aimAngle, const glm::ve
     InitialConditions ic{};
     ic.initialAimAngle        = aimAngle;
     ic.initialAimRotationAxis = aimAxis;
-    ic.activeAttackSequence   = 0u;
+    ic.activeAttackSequence   = icSequence;
     ic.activeRootBodyId       = 0u;
 
     State st{};
-    st.attackTimer      = 0.f;
-    st.currenSequenceId = InvalidAttackSequenceId;   // idle -> the edge fires
+    st.attackTimer      = attackTimer;
+    st.currenSequenceId = stateSequence;             // default: idle -> the edge fires
 
     SimulationComposite<InitialConditions, State> composite(ic, st);
     auto deps = makeDependencies<Dependencies>(composite);
@@ -159,11 +169,22 @@ static std::string captureSetInitialConditionsLine(float aimAngle, const glm::ve
     auto previousSink = ::ogblog::g_sink;
     ::ogblog::setGlobal([&lines](const char* msg) { lines.emplace_back(msg); });
 
-    integrate(kDt, allInput, staticData, deps, bindings, derived);
+    {
+        // [og-netcode-v2-field-defects task 16] What SimulationIntegrationExecutor::integrateAll
+        // opens around every integrate. A non-zero id and tick, so case 1 can see the emitter's
+        // `id=%u tick=%u` prefix land AHEAD of the fields this file pins, not merely somewhere.
+        simulationLog::IntegrateScope logScope(kLogCharacterId, kLogTick);
+        integrate(kDt, allInput, staticData, deps, bindings, derived);
+    }
 
     ::ogblog::setGlobal(std::move(previousSink));
 
-    for (const std::string& line : lines)
+    return lines;
+}
+
+static std::string captureSetInitialConditionsLine(float aimAngle, const glm::vec3& aimAxis)
+{
+    for (const std::string& line : captureRadialLines(aimAngle, aimAxis))
     {
         if (line.rfind("[Radial.setInitialConditions]", 0) == 0)
             return line;
@@ -193,6 +214,8 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheAimAngleAndAxis",
 
     INFO("line: " << line);
     REQUIRE_FALSE(line.empty());                                   // the edge really fired
+    // [og-netcode-v2-field-defects task 16] The emitter's attribution prefix, immediately after the tag.
+    CHECK(line.rfind("[Radial.setInitialConditions] id=7 tick=42 seq=0 aimAngle=", 0) == 0);
     CHECK(line.find("seq=0") != std::string::npos);
     CHECK(line.find("aimAngle=0.7854") != std::string::npos);
     CHECK(line.find("axis=(0.000,0.000,1.000)") != std::string::npos);
@@ -270,6 +293,70 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
 
     // A guard, clamp or normalize on the logged path would land here instead.
     CHECK(line.find("aimAngle=0.0000") == std::string::npos);
+}
+
+// ===========================================================================
+// 3. [og-netcode-v2-field-defects task 15] ALL SIX [Radial.branch] LINES ARE VERBOSE-ONLY,
+//    AND NOTHING ELSE IN THE RADIAL FAMILY IS.
+//
+// [Radial.branch] fires every tick for every character (~267 lines/s measured) and was
+// emitted at default verbosity. The UE-side ogblog sink maps a leading `[Verbose]` token to
+// UE_LOG(LogOGBrawler, Verbose, ...) and emits the string UNSTRIPPED, so the marker is the
+// whole mechanism and it is what this case pins -- one row per branch, each driven for real
+// through the public integrate. The six are the complete set in DAttackRadialSimulation.h.
+//
+// The scope fence is the other half: [Radial.integrate] and [Radial.setInitialConditions]
+// stay at default (the latter carries task 5's aim fields the PIE runbooks read), so every
+// captured line that is NOT a branch line must begin with a bare `[Radial.`.
+// ===========================================================================
+
+TEST_CASE("DAttackRadial.EveryBranchLineIsVerboseOnly", "[DAttack][RadialAimLog]")
+{
+    using namespace dattackradialaimlogtests;
+
+    struct Row { const char* name; unsigned int icSeq; unsigned int stSeq; float timer; const char* expected; };
+    const Row rows[] = {
+        { "hadouken",           kHadoukenSequenceSentinel, InvalidAttackSequenceId, 0.f,
+          "[Verbose][Radial.branch] id=7 tick=42 hadouken sentinel" },
+        { "deactivate-ic",      InvalidAttackSequenceId,   0u,                      0.f,
+          "[Verbose][Radial.branch] id=7 tick=42 deactivate (ic invalid, state active)" },
+        { "setIC",              0u,                        InvalidAttackSequenceId, 0.f,
+          "[Verbose][Radial.branch] id=7 tick=42 setInitialConditions (state.curSeq=" },
+        { "idle",               InvalidAttackSequenceId,   InvalidAttackSequenceId, 0.f,
+          "[Verbose][Radial.branch] id=7 tick=42 idle (state.curSeq invalid)" },
+        { "applyTorque",        0u,                        0u,                      0.f,
+          "[Verbose][Radial.branch] id=7 tick=42 applyTorque+tick (timer=" },
+        { "deactivate-timer",   0u,                        0u,                      100.f,
+          "[Verbose][Radial.branch] id=7 tick=42 deactivate (timer>=duration: " },
+    };
+
+    for (const Row& row : rows)
+    {
+        const std::vector<std::string> lines = captureRadialLines(
+            0.f, glm::vec3(0.f, 0.f, 1.f), row.icSeq, row.stSeq, row.timer);
+
+        std::size_t branchLines = 0, expectedHits = 0, otherRadialLines = 0;
+        for (const std::string& line : lines)
+        {
+            INFO("row: " << row.name << "  line: " << line);
+            if (line.find("[Radial.branch]") != std::string::npos)
+            {
+                ++branchLines;
+                CHECK(line.rfind("[Verbose][Radial.branch] ", 0) == 0);   // marker leads
+                expectedHits += line.rfind(row.expected, 0) == 0 ? 1 : 0;
+            }
+            else if (line.find("[Radial.") != std::string::npos)
+            {
+                ++otherRadialLines;
+                CHECK(line.rfind("[Radial.", 0) == 0);                   // scope fence: no marker
+            }
+        }
+
+        INFO("row: " << row.name);
+        CHECK(expectedHits == 1);        // THIS row's branch really fired, marked
+        CHECK(branchLines >= 1);
+        CHECK(otherRadialLines >= 1);    // [Radial.integrate] always fires: the fence was exercised
+    }
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

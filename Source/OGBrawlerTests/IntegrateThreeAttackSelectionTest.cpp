@@ -15,6 +15,15 @@
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
+// [og-netcode-v2-field-defects task 7] The log-attribution case captures the OGBLOG_G sink;
+// [task 16] and drives the real integration executor, which opens the (id, tick) log scope.
+#include "OGBrawler/OGBrawlerLog.h"
+#include "OGSimulation/SimulationIntegrationExecutor.h"
+#include "OGSimulation/SimulationObjectStorage.h"
+#include <unordered_map>
+#include <string>
+#include <utility>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Reuse the mock adapters from SimulatableBrawlerTest.cpp via local redeclaration.
@@ -1086,6 +1095,96 @@ TEST_CASE("DAttack.Integrate3.DualTapRestartLeavesTheEndTickAlone", "[DAttack][A
     INFO("endTickAtEntry=" << endTickAtEntry << " firstIdleTick=" << firstIdleTick);
     REQUIRE(reachedIdle);
     REQUIRE(firstIdleTick == endTickAtEntry);
+}
+
+// ===========================================================================
+// [og-netcode-v2-field-defects task 7] EVERY [Machine.*] AND [Radial.*] LINE NAMES ITS
+// CHARACTER AND ITS TICK.
+//
+// Inside a resim replay two characters' lines interleave and [CollectInput] is not emitted, so
+// a line that relies on adjacency for attribution cannot be attributed at all.
+// [task 16] No brawler type carries the id any more: SimulationIntegrationExecutor::integrateAll
+// opens a simulationLog::IntegrateScope(storage id, step tick) around each integrate, and
+// OGBLOG_G's emitter inserts it after the tag. So the rig registers the WHOLE SimulatableBrawler
+// in storage under a non-zero id and steps it through the REAL executor — the set site and the
+// read site together — and checks every captured line of both families for
+// `] id=<storage id> tick=<the tick being integrated> `. Ticks are deliberately not 0.
+// ===========================================================================
+
+TEST_CASE("DAttack.Integrate3.EveryMachineAndRadialLogLineCarriesIdAndTick", "[DAttack][LogAttribution]")
+{
+    using namespace integrate3tests;
+
+    constexpr unsigned int kCharacterId = 7u;
+    constexpr uint32_t kFirstTick = 42u;
+    constexpr uint32_t kTickCount = 60u;   // long enough for a swing to start AND finish
+    const glm::vec3 aim(1.f, 0.f, 0.f);
+
+    simulatableBrawler::StaticData staticData;
+    SimulatableBrawler character(staticData);
+    character.setCharacterBindings({ BodyId{1} });
+
+    MockPhysicsAdapter physAdapter;
+    MockSpatialQueryAdapter queryAdapter;
+    SimulationObjectStorage<SimulatableBrawler> storage;
+    storage.add<SimulatableBrawler>(kCharacterId, std::move(character));
+    SimulationIntegrationExecutor<simulatableBrawler::StaticData, MockPhysicsAdapter,
+                                  MockSpatialQueryAdapter, SimulatableBrawler>
+        executor(storage, staticData, physAdapter, queryAdapter);
+
+    std::vector<std::pair<uint32_t, std::string>> lines;
+    uint32_t tickBeingIntegrated = 0u;
+    auto previousSink = ::ogblog::g_sink;
+    ::ogblog::setGlobal([&](const char* msg) { lines.emplace_back(tickBeingIntegrated, msg); });
+
+    for (uint32_t tick = kFirstTick; tick < kFirstTick + kTickCount; ++tick)
+    {
+        const bool press = (tick == kFirstTick);
+        simulatableBrawler::PlayerInput input(
+            dAttackRadialSimulation::PlayerInput(aim, press, false),
+            dAttackMachineSimulation::PlayerInput{aim, press, false, glm::vec2(0.f), glm::vec3(0.f)},
+            dAttackGuardSimulation::PlayerInput(aim),
+            brawlerProjectileSimulation::PlayerInput{aim},
+            brawlerMovementSimulation::PlayerInput{},
+            brawlerRingout::PlayerInput{});
+        decltype(executor)::ResolvedInputsType inputs;
+        std::get<std::unordered_map<unsigned int, simulatableBrawler::PlayerInput>>(inputs)
+            .emplace(kCharacterId, input);
+        tickBeingIntegrated = tick;
+        executor.integrateAll(SimulationTimeStep(tick, false, false, false, 1.f / 60.f), inputs);
+    }
+
+    ::ogblog::setGlobal(std::move(previousSink));
+
+    std::size_t machineLines = 0, radialLines = 0, sawIdleToAttacking = 0, sawRadialEdge = 0, radialBranchLines = 0;
+    for (const auto& [tick, rawLine] : lines)
+    {
+        // [og-netcode-v2-field-defects task 15] [Radial.branch] is emitted `[Verbose][Radial.branch] ...`.
+        // Judge the line after that severity token, or all six branch lines drop out of this check.
+        const std::string line = rawLine.rfind("[Verbose]", 0) == 0 ? rawLine.substr(9) : rawLine;
+        radialBranchLines += line.rfind("[Radial.branch]", 0) == 0 ? 1 : 0;
+        const bool isMachine = line.rfind("[Machine.", 0) == 0;
+        const bool isRadial  = line.rfind("[Radial.", 0) == 0;
+        if (!isMachine && !isRadial)
+            continue;
+        machineLines += isMachine ? 1 : 0;
+        radialLines  += isRadial ? 1 : 0;
+        sawIdleToAttacking += line.find("Idle -> Attacking seq=") != std::string::npos ? 1 : 0;
+        sawRadialEdge      += line.rfind("[Radial.setInitialConditions]", 0) == 0 ? 1 : 0;
+
+        const std::string expected =
+            "] id=" + std::to_string(kCharacterId) + " tick=" + std::to_string(tick) + " ";
+        INFO("line: " << line);
+        CHECK(line.find(expected) == line.find(']'));
+    }
+
+    // Anti-vacuity: the loop above must have judged both families, including the transition and
+    // the radial edge the 2026-09-19 analysis could not attribute.
+    CHECK(machineLines > 0);
+    CHECK(radialLines > 0);
+    CHECK(radialBranchLines > 0);   // task 15: the Verbose-marked branch lines are still judged
+    CHECK(sawIdleToAttacking == 1);
+    CHECK(sawRadialEdge == 1);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS
