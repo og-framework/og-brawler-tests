@@ -34,6 +34,7 @@
 
 #include "catch_amalgamated.hpp"
 
+#include "OGBrawler/BrawlerHitDetectionSystem.h"
 #include "OGBrawler/BrawlerHitRoutingSystem.h"
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
@@ -124,10 +125,11 @@ struct FRoutingRig
     }
 
     // Raise a radial DAMAGING hit from `attackerId` onto `targetId`, the way
-    // `dAttackRadialSimulation::collisionCheck` does.
+    // `brawlerHitDetection::detectRadialHits` does (the radial's `collisionCheck` until
+    // og-netcode-v2-field-defects task 9 moved detection into a system).
     //
     // ⭐ [movement-sim task 83] BOTH CONTAINERS, and the default tangent is the ZERO VECTOR.
-    // `collisionCheck` now records every accepted hit twice -- in `attackHits`, the per-SWING
+    // The detector records every accepted hit twice -- in `attackHits`, the per-SWING
     // dedup ledger, and in `hitsThisTick`, the one-tick signal routing consumes -- so a rig
     // that posed only one of them would be posing a state the simulation cannot produce.
     // The zero tangent is not laziness either: it is the DEGENERATE case, and it is what
@@ -193,7 +195,8 @@ struct FRoutingRig
 // tick. Task 27's LLTs did the same, and the defect the user found at PIE is a property of
 // how long that entry LIVES -- which a rig that supplies it by hand cannot have an opinion
 // about. The rig's FIDELITY, not the assertion, bounded what the suite could catch. So this
-// harness supplies nothing: the attacker's own collisionCheck registers the hit, the
+// harness supplies nothing: the real brawlerHitDetection::System registers the attacker's hit
+// (task 9; it was the attacker's own collisionCheck), the
 // attacker's own integrate decides when the swing ends, and the routing pass is asked the
 // same question on every one of those ticks.
 //
@@ -246,7 +249,7 @@ constexpr std::uint32_t kHitTick       = 18u;
 // limitation of this fixture rather than a convenience.
 //
 // The radial's own damaging gate reads the WEAPON'S DIRECTION off the body transform
-// (`collisionCheck` -> `getAttackSegment(currentDirection)`), NOT `attackTimer`. This rig's
+// (`detectRadialHits` -> `getAttackSegment(currentDirection)`), NOT `attackTimer`. This rig's
 // `SwingPhysicsAdapter::getBodyTransform` returns the IDENTITY on every tick, so the weapon
 // never rotates and that gate is constant for a whole swing -- it cannot express a wind-up.
 // `weaponOverlapsTarget` is the stand-in: it opens the query `windUpTicks` after a swing
@@ -376,6 +379,9 @@ struct FEndToEndRig
     brawlerHitRouting::System system;
     SwingPhysicsAdapter phys;
     SwingQueryAdapter   query;
+    // [og-netcode-v2-field-defects task 9] The detector, fired before routing exactly as the
+    // manager's BrawlerSystemsExec fires it. Declared AFTER the adapters it points at.
+    brawlerHitDetection::System<SwingPhysicsAdapter, SwingQueryAdapter> detection{ phys, query };
 
     glm::vec2 attackerStick{ 0.f, -1.f };   // (0,-1) against aim (1,0,0) -> the right swing
 
@@ -592,6 +598,7 @@ struct FEndToEndRig
             const SimulationTimeStep step(tick, false, false, false, kDt);
             brawler(0u).integrate(step, attackerInput, phys, query, staticData);
             brawler(1u).integrate(step, targetInput, phys, query, staticData);
+            detection.postIntegrate(step, view(), staticData);
             system.postIntegrate(step, view(), staticData);
 
             const auto& radialDerived = brawler(0u).getAllState().getDerivedState()

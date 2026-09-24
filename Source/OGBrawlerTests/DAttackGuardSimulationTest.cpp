@@ -51,7 +51,7 @@
 // Consumers read the guard's FACING through the physics adapter, not through
 // State: BrawlerProjectileSimulation.h reads `getBodyTransform(hit.bodyId)[0]`
 // as the guard forward when a projectile overlaps the guard shape, and
-// DAttackRadialSimulation.h does the same for the radial block test. So the
+// brawlerHitDetection::detectRadialHits does the same for the radial block test. So the
 // thing worth pinning is the TRANSFORM THIS INTEGRATE WRITES — column 0 is the
 // guard's forward, column 3 its translation — and that is what every case here
 // asserts.

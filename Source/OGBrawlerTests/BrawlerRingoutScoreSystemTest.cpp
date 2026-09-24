@@ -556,15 +556,18 @@ template <typename... Ts> struct FScoreCompositeWireSize<SimulationComposite<Ts.
 
 TEST_CASE("RingoutScore.TheAwardCostsTheCompositeNothing", "[BrawlerRingout]")
 {
-    static_assert(FScoreCompositeWireSize<simulatableBrawler::State>::value == 339u,
+    static_assert(FScoreCompositeWireSize<simulatableBrawler::State>::value == 338u,
         "simulatableBrawler::State moved. Task 4 adds NO state: if this fires as part of a "
         "scoring change, a score has been put on the wire and it is now correctable, "
         "rewindable, and double-countable - which is the exact hazard ruling 1's split exists "
         "to prevent. Budget against ~14 B (F13), not the buffer's 37 B. "
         "[movement-sim task 84, 2026-09-20] 335 -> 339 B and it was NOT this file's task: "
         "dAttackMachineSimulation::State gained m_attackEndTick (4 B), an append to an EXISTING "
-        "slice, and the headroom went 41 -> 37 B with it.");
-    REQUIRE(FScoreCompositeWireSize<simulatableBrawler::State>::value == 339u);
+        "slice, and the headroom went 41 -> 37 B with it. "
+        "[og-netcode-v2-field-defects task 9, 2026-09-23] 339 -> 338 B, and not this file's task "
+        "either: dAttackRadialSimulation::State lost hasHitGuard (1 B) from the middle of the "
+        "composite, kWireFormatVersion 3 -> 4, headroom 37 -> 38 B.");
+    REQUIRE(FScoreCompositeWireSize<simulatableBrawler::State>::value == 338u);
 
     // The ring-out STATE slice is unchanged too: 5 B, the flags byte plus the respawn tick.
     REQUIRE(syncSize<ringout::State>() == 5u);

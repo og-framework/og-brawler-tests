@@ -84,19 +84,6 @@ struct MockPhysicsAdapter
 
 static_assert(PhysicsBodyAdapter<MockPhysicsAdapter>);
 
-struct MockSpatialQueryAdapter
-{
-    SpatialQueryReport report;
-
-    SpatialQueryReport overlap(const std::vector<QueryVolumeId>&) const { return report; }
-    SweepHit sweep(QueryVolumeId, const glm::mat4&, const glm::vec3&) const { return SweepHit{}; }
-    void setVolumeParentTransform(QueryVolumeId, const glm::mat4&) {}
-    void enableShape(ShapeId)  {}
-    void disableShape(ShapeId) {}
-};
-
-static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
-
 // ===========================================================================
 // RIG -- one radial integrate that TAKES the setInitialConditions branch, with the
 // OGBLOG_G sink captured.
@@ -108,9 +95,10 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 //     0 -- the Idle -> Attacking edge, which is exactly the edge the instrument fires on.
 //   * `ogblog::g_sink` is a process-global; it is saved and restored around the run so
 //     this TU cannot leak a dangling sink into any other case in the suite.
-//   * The query report is left EMPTY. These cases are about a formatted string, not about
-//     hits, and an empty report keeps collisionCheck (which runs later in the same tick)
-//     from becoming a second source of failure.
+//   * No query adapter is handed in. [og-netcode-v2-field-defects task 9] The radial no
+//     longer queries at all -- hit detection moved to brawlerHitDetection::System, which
+//     runs after integrate -- so these cases, which are about a formatted string, cannot
+//     pick up a second source of failure from hits.
 // ===========================================================================
 
 // [og-netcode-v2-field-defects task 15] The rig returns EVERY captured line and takes the
@@ -148,13 +136,12 @@ static std::vector<std::string> captureRadialLines(float aimAngle, const glm::ve
     auto deps = makeDependencies<Dependencies>(composite);
 
     MockPhysicsAdapter      physics{ 2 };            // 0 = weapon (own), 1 = capsule (parent)
-    MockSpatialQueryAdapter query{};
 
     PlayerInput pi{};
     pi.aimDirection = glm::vec3(1.f, 0.f, 0.f);
 
-    IntegrationUtils<MockPhysicsAdapter, MockSpatialQueryAdapter> utils{ kDt, physics, query };
-    AllInput<MockPhysicsAdapter, MockSpatialQueryAdapter> allInput{ pi, utils };
+    IntegrationUtils<MockPhysicsAdapter> utils{ kDt, physics };
+    AllInput<MockPhysicsAdapter> allInput{ pi, utils };
 
     RuntimeBindings bindings{};
     bindings.ownBodyId        = BodyId{ 0u };

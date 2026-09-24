@@ -306,13 +306,24 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     //    grows an EXISTING slice, which the message below names as the one case that does not need
     //    it (task 27's precedent, and expressly NOT ring-out's, which added a whole sub-sim).
     //    The machine slice is re-quoted at 25 B in section 2 below.
-    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 339u,
+    //
+    //    [og-netcode-v2-field-defects task 9, 2026-09-23] 339 -> 338 B, -1 B, and the slice that
+    //    moved is the RADIAL's: `dAttackRadialSimulation::State::hasHitGuard` LEFT THE WIRE. Hit
+    //    detection moved out of the attacker's integrate into `brawlerHitDetection::System`, and the
+    //    guard block it used to write into the radial State is now the radial DerivedState's per-tick
+    //    `guardBlockedThisTick`, routed onto the inbound slice -- derived, recomputed on every replayed
+    //    tick, never restored. ⛔ `correctionStateBuffer::kWireFormatVersion` IS BUMPED 3 -> 4, and
+    //    this is the plain case the message below exists for: the field was the THIRD of four in the
+    //    SECOND composite slice, so `bodyState` and every later slice moved one byte. A peer on 3
+    //    reading a 4 payload decodes all of them one byte out of place. The radial slice is pinned
+    //    in section 2 below so the next change here says which slice moved.
+    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 338u,
         "The simulatableBrawler::State wire footprint moved. That is a WIRE FORMAT "
         "CHANGE: re-measure it, re-price RoundVsPacketBudgetTest.cpp, and bump "
         "correctionStateBuffer::kWireFormatVersion if the layout moved OR if a whole "
         "sub-simulation entered or left the composite - an append that only grows an "
         "EXISTING slice is the one case that does not need the bump.");
-    REQUIRE(kComposite == 339u);
+    REQUIRE(kComposite == 338u);
 
     // 2. WHICH SLICE, so a break says what moved rather than only that something did.
     //
@@ -351,6 +362,11 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     // mid-swing correction never simulated the edge that produced it. Same append argument as
     // task 27 immediately above, and the same declined version bump for the same reason.
     REQUIRE(syncSize<dAttackMachineSimulation::State>() == 25u);
+
+    // [og-netcode-v2-field-defects task 9, 2026-09-23] THE RADIAL SLICE, first pinned here, one
+    // byte smaller than it was: `hasHitGuard` left it (see section 1). 61 -> 60 B, measured on the
+    // tree after the removal (a probe pin's failure expansion read `60 == 1`), not derived.
+    REQUIRE(syncSize<dAttackRadialSimulation::State>() == 60u);
 
     // [movement-sim task 29] The guard slice, both halves, at zero. This is the term
     // the -56 B came out of, and pinning it HERE — beside the total — is what makes a
@@ -401,6 +417,9 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     //    [movement-sim task 84, 2026-09-20] RE-MEASURED AFTER THIS TASK: bufferUsed = 8 + 339 =
     //    347 of 384, so the headroom is **37 B**, down from 41. Four bytes, one field, on an
     //    existing slice. The paragraph above still holds and is not re-argued here.
+    //
+    //    [og-netcode-v2-field-defects task 9, 2026-09-23] RE-MEASURED: bufferUsed = 8 + 338 = 346 of
+    //    384, headroom **38 B**, up from 37 -- the radial's `hasHitGuard` left the wire.
     static_assert(correctionStateBuffer::kHeaderBytes
                       + FCompositeWireSize<simulatableBrawler::State>::value
                   <= kStateSyncBufferBytes,
@@ -415,7 +434,8 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
          << " +12 B more at task 50 for positionCmd; +5 B more at task 27 for the machine's"
          << " m_hitReaction and m_flinchDuration; +9 B more at ringout task 2 for the"
          << " brawlerRingout InitialConditions and State slices; +4 B more at movement-sim"
-         << " task 84 for the machine's m_attackEndTick), buffer used="
+         << " task 84 for the machine's m_attackEndTick; -1 B at og-netcode-v2-field-defects"
+         << " task 9 for the radial's hasHitGuard), buffer used="
          << kBufferUsed << "/" << kStateSyncBufferBytes << " B, headroom="
          << (kStateSyncBufferBytes - kBufferUsed) << " B");
 }
@@ -782,8 +802,9 @@ TEST_CASE("DAttack.SimulatableBrawler.DerivedStateIsOffWire", "[DAttack][Simulat
     //    stated above is unchanged — capacity() is a strictly better observable for it.
     //    The ctor used to say `attackHits(4)`, which is a RESIZE, so size() happened to
     //    read 4 and was used as the proxy for "the slice ctor ran". Those four
-    //    default-constructed entries were a live bug: dAttackRadialSimulation's
-    //    collisionCheck early-returns at `attackHits.size() >= 4`, so a fresh character
+    //    default-constructed entries were a live bug: the hit detector (dAttackRadialSimulation's
+    //    collisionCheck then; brawlerHitDetection::detectRadialHits since og-netcode-v2-field-
+    //    defects task 9) early-returns at `attackHits.size() >= 4`, so a fresh character
     //    swinging on its first tick registered no hits at all (task 34). The ctor now
     //    RESERVES, which is what the comment above always claimed it did. A tuple that
     //    value-initialised past the slice ctor still shows 0 here — capacity 0 — so this

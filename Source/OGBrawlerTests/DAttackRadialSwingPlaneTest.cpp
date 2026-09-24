@@ -4,6 +4,7 @@
 #include "catch_amalgamated.hpp"
 
 #include "OGBrawler/DAttackRadialSimulation.h"
+#include "OGBrawler/BrawlerHitDetectionSystem.h"
 #include "OGBrawler/DAttackCircle.h"
 #include "OGBrawler/DAttackRadialSequence.h"
 #include "OGBrawler/DAttackSequenceId.h"
@@ -91,10 +92,12 @@ struct MockSpatialQueryAdapter
 static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 
 // ===========================================================================
-// RIG — one collisionCheck tick, reduced to "did the swing register a hit".
+// RIG — one detection tick, reduced to "did the swing register a hit".
 //
-// `collisionCheck` sits in an ANONYMOUS namespace inside the header, so the rig drives
-// it through the public `integrate` and reads the DerivedState it fills. Three fixture
+// [og-netcode-v2-field-defects task 9] Detection is no longer inside the radial (it was its
+// anonymous-namespace collisionCheck). The rig runs the radial's public `integrate`, then
+// `brawlerHitDetection::detectRadialHits` on the state integrate left -- the production
+// tick's two steps, in that order -- and reads the DerivedState the detector fills. Three fixture
 // choices hold everything except the projection constant (they are the same choices
 // task 32's radial rig makes, for the same reasons):
 //
@@ -112,7 +115,7 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 //     world position, and the numbers below are the ones in the comments.
 //
 // ⚠ `DerivedState()` seeds attackHits/guardHits with FOUR default entries and
-// collisionCheck's first line early-returns at `size() >= 4`. Without the clear below
+// the detector's cap check early-returns at `size() >= 4`. Without the clear below
 // EVERY case here would pass vacuously at 0 hits — hence the positive controls.
 // ===========================================================================
 
@@ -163,8 +166,8 @@ static std::size_t radialAttackHits(float planarX,
     PlayerInput pi{};
     pi.aimDirection = glm::vec3(1.f, 0.f, 0.f);
 
-    IntegrationUtils<MockPhysicsAdapter, MockSpatialQueryAdapter> utils{ kDt, physics, query };
-    AllInput<MockPhysicsAdapter, MockSpatialQueryAdapter> allInput{ pi, utils };
+    IntegrationUtils<MockPhysicsAdapter> utils{ kDt, physics };
+    AllInput<MockPhysicsAdapter> allInput{ pi, utils };
 
     RuntimeBindings bindings{};
     bindings.ownBodyId        = BodyId{ 0u };
@@ -178,6 +181,11 @@ static std::size_t radialAttackHits(float planarX,
     derived.editGuardHits().clear();
 
     integrate(kDt, allInput, staticData, deps, bindings, derived);
+    // [og-netcode-v2-field-defects task 9] The production tick's second step: detection runs
+    // AFTER the radial's integrate, on the state it left, exactly as
+    // brawlerHitDetection::System::postIntegrate does for every character.
+    brawlerHitDetection::detectRadialHits(kDt, staticData, composite.get<InitialConditions>(),
+        composite.get<State>(), bindings, derived, physics, query);
 
     return derived.getAttackHits().size();
 }
@@ -230,7 +238,7 @@ static float measureHitDistance(float planarX, float hitZ, float halfThickness)
 // ===========================================================================
 
 TEST_CASE("DAttackRadial.MirroredHitsAreTheSameDistanceFromTheSwingAxis",
-          "[DAttack][RadialSwingPlane]")
+          "[DAttack][HitDetection][RadialSwingPlane]")
 {
     using namespace dattackradialswingplanetests;
 
@@ -267,7 +275,7 @@ TEST_CASE("DAttackRadial.MirroredHitsAreTheSameDistanceFromTheSwingAxis",
 // ===========================================================================
 
 TEST_CASE("DAttackRadial.SwingReachIsSymmetricAboveAndBelowThePlane",
-          "[DAttack][RadialSwingPlane]")
+          "[DAttack][HitDetection][RadialSwingPlane]")
 {
     using namespace dattackradialswingplanetests;
 
@@ -324,7 +332,7 @@ TEST_CASE("DAttackRadial.SwingReachIsSymmetricAboveAndBelowThePlane",
 // ===========================================================================
 
 TEST_CASE("DAttackRadial.SwingPlaneHalfThicknessGateStaysUnsigned",
-          "[DAttack][RadialSwingPlane]")
+          "[DAttack][HitDetection][RadialSwingPlane]")
 {
     using namespace dattackradialswingplanetests;
 

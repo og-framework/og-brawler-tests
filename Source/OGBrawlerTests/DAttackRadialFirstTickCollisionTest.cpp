@@ -7,6 +7,7 @@
 #include "OGBrawler/SimulatableBrawlerTypes.h"
 #include "OGBrawler/DAttackMachineSimulation.h"
 #include "OGBrawler/DAttackRadialSimulation.h"
+#include "OGBrawler/BrawlerHitDetectionSystem.h"
 #include "OGBrawler/DAttackSequenceId.h"
 #include "OGBrawler/BrawlerMovementSimulation.h"
 #include "OGBrawler/CollisionCategoryConstants.h"
@@ -34,6 +35,10 @@
 //
 // ⚠ THIS IS A REAL BUG FIX, NOT HARDENING. Every arm marked RED BEFORE below failed on
 // the pre-fix header, with the measured pre-fix value quoted in the arm.
+//
+// [og-netcode-v2-field-defects task 9] This record names `collisionCheck` as the header stood
+// at task 34. Detection is now `brawlerHitDetection::detectRadialHits`, run after integrate by
+// brawlerHitDetection::System; the cap and the reaching path below are unchanged by the move.
 //
 // THE DEFECT. `dAttackRadialSimulation::DerivedState()` seeded `attackHits` and
 // `guardHits` with FOUR default-constructed entries — `attackHits(4)` is a RESIZE, not
@@ -158,7 +163,7 @@ struct FirstTickOutcome
 // FIXTURE NOTES (production StaticData is used verbatim — sequences, circle, all of it):
 //   * aim (1,0,0) makes setRadialSimulationInitialConditions write initialAimAngle 0
 //     about +Z, i.e. an IDENTITY initial rotation, so the sequence's own rotation axis
-//     reaches collisionCheck unrotated.
+//     reaches the detector unrotated.
 //   * The move stick selects the sequence through dAttackDirection::classify: move
 //     (0,-1,0) against aim (1,0,0) is a 90-degree SIDE case with a negative signed angle
 //     → sequence 0, which is the value `State::currenSequenceId` also defaults to. A zero
@@ -216,6 +221,9 @@ static FirstTickOutcome runFirstTicks(int tickCount, float targetX, const glm::v
     {
         const SimulationTimeStep step(static_cast<std::uint32_t>(tick), false, false, false, kDt);
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
+        // [og-netcode-v2-field-defects task 9] Detection is the tick's second step now:
+        // brawlerHitDetection::System runs it after every integrate, on the state left behind.
+        brawlerHitDetection::detectRadialHits(kDt, character, staticData, physAdapter, queryAdapter);
     }
 
     const auto& allState = character.getAllState();
@@ -279,7 +287,7 @@ struct SwingOutcome
 // therefore reads a sign of zero, and both swings come out with the same tangent. That is
 // an artefact of the never-rotating weapon in this fixture and not something production
 // can produce: there, setInitialConditions places the weapon at the sequence's initial
-// angle, which lies in a WindUp segment, so collisionCheck early-returns for the whole
+// angle, which lies in a WindUp segment, so the detector early-returns for the whole
 // wind-up. Holding the overlap back until the timer is genuinely inside the Damaging span
 // makes the sign a measurement instead of a coin toss.
 // See the implementation note for task 83 for the narrow production case this uncovered:
@@ -327,13 +335,17 @@ static SwingOutcome runSwing(int tickCount, glm::vec3 targetPosition,
         queryAdapter.report = (static_cast<std::uint32_t>(tick) >= hitFromTick)
             ? liveReport : SpatialQueryReport{};
 
-        // collisionCheck reads state.attackTimer BEFORE integrate advances it, so the timer
-        // the tangent's angular velocity was sampled at is the one standing here.
+        // The tangent's angular velocity is sampled at the PRE-advance timer -- the detector runs
+        // after integrate and reads attackTimer - dt (BrawlerHitDetectionSystem-guards.md G-04),
+        // as collisionCheck read it before integrate advanced it -- which is the one standing here.
         const float timerBefore = character.getAllState().getState()
             .get<dAttackRadialSimulation::State>().attackTimer;
 
         const SimulationTimeStep step(static_cast<std::uint32_t>(tick), false, false, false, kDt);
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
+        // [og-netcode-v2-field-defects task 9] Detection is the tick's second step now:
+        // brawlerHitDetection::System runs it after every integrate, on the state left behind.
+        brawlerHitDetection::detectRadialHits(kDt, character, staticData, physAdapter, queryAdapter);
 
         const auto& radialDerived = character.getAllState().getDerivedState()
             .get<dAttackRadialSimulation::DerivedState>();
@@ -389,7 +401,7 @@ static SwingOutcome runSwing(int tickCount, glm::vec3 targetPosition,
 // radial sub-sim really is mid-swing rather than idle or deactivated.
 // ===========================================================================
 
-TEST_CASE("DAttackRadial.FirstTickSwingRegistersHits", "[DAttack][RadialFirstTick]")
+TEST_CASE("DAttackRadial.FirstTickSwingRegistersHits", "[DAttack][HitDetection][RadialFirstTick]")
 {
     using namespace dattackradialfirstticktests;
 
@@ -429,7 +441,7 @@ TEST_CASE("DAttackRadial.FirstTickSwingRegistersHits", "[DAttack][RadialFirstTic
 // still 0 cm off the swing plane and inside the same 90..300 annulus.
 // ===========================================================================
 
-TEST_CASE("DAttackRadial.FirstTickSwingRegistersHitsForwardSequence", "[DAttack][RadialFirstTick]")
+TEST_CASE("DAttackRadial.FirstTickSwingRegistersHitsForwardSequence", "[DAttack][HitDetection][RadialFirstTick]")
 {
     using namespace dattackradialfirstticktests;
 
@@ -454,7 +466,7 @@ TEST_CASE("DAttackRadial.FirstTickSwingRegistersHitsForwardSequence", "[DAttack]
 // The failure mode the backlog describes is "silently registers NO hits FOR THAT WHOLE
 // SWING", because nothing clears the containers until `deactivate` fires at
 // attackTimer >= duration. Ten ticks (0.167 s, well inside sequence 0's 0.6 s) is the
-// span; the count stays at exactly one because collisionCheck dedupes by rootBodyId.
+// span; the count stays at exactly one because the detector dedupes by rootBodyId.
 //
 // The out-of-range arm is the control that stops the in-range arm from being vacuous: it
 // proves the rig can still report ZERO on-target hits when the geometry says it should,
@@ -463,7 +475,7 @@ TEST_CASE("DAttackRadial.FirstTickSwingRegistersHitsForwardSequence", "[DAttack]
 // terms of the TOTAL, where the two differ (0 post-fix vs 4 pre-fix).
 // ===========================================================================
 
-TEST_CASE("DAttackRadial.FirstSwingKeepsRegisteringForItsWholeDuration", "[DAttack][RadialFirstTick]")
+TEST_CASE("DAttackRadial.FirstSwingKeepsRegisteringForItsWholeDuration", "[DAttack][HitDetection][RadialFirstTick]")
 {
     using namespace dattackradialfirstticktests;
 
@@ -489,7 +501,7 @@ TEST_CASE("DAttackRadial.FirstSwingKeepsRegisteringForItsWholeDuration", "[DAtta
 //
 // This is the one case stated directly on the type rather than through the simulation,
 // and it exists to stop the defect being reintroduced by a change that looks harmless.
-// `size() == 0` is the property `collisionCheck`'s cap depends on; `capacity() >= 4` is
+// `size() == 0` is the property the detector's cap depends on; `capacity() >= 4` is
 // the property the original `attackHits(4)` was reaching for, and the one
 // SimulatableBrawlerTest's "the slice ctor really ran" case now anchors on.
 //
@@ -528,7 +540,7 @@ TEST_CASE("DAttackRadial.FreshDerivedStateIsEmptyButReserved", "[DAttack][Radial
 // the derivative the sign is read from.
 // ===========================================================================
 
-TEST_CASE("DAttackRadial.SwingTangentIsOrthogonalToTheWeapon", "[DAttack][SwingTangent]")
+TEST_CASE("DAttackRadial.SwingTangentIsOrthogonalToTheWeapon", "[DAttack][HitDetection][SwingTangent]")
 {
     using namespace dattackradialfirstticktests;
 
@@ -580,7 +592,7 @@ TEST_CASE("DAttackRadial.SwingTangentIsOrthogonalToTheWeapon", "[DAttack][SwingT
 // sign convention that were inverted would show up here as two throws in the SAME
 // direction rather than as two wrong-but-opposite ones.
 // ---------------------------------------------------------------------------
-TEST_CASE("DAttackRadial.SwingTangentFollowsTheSwingDirection", "[DAttack][SwingTangent]")
+TEST_CASE("DAttackRadial.SwingTangentFollowsTheSwingDirection", "[DAttack][HitDetection][SwingTangent]")
 {
     using namespace dattackradialfirstticktests;
 
@@ -705,7 +717,7 @@ TEST_CASE("DAttackRadial.GetAngularVelocityIsTheDerivativeOfGetAngle", "[DAttack
 // count was wrong.
 // ===========================================================================
 
-TEST_CASE("DAttackRadial.ChainedSwingCanHitTheSameTargetAgain", "[DAttack][SwingTangent]")
+TEST_CASE("DAttackRadial.ChainedSwingCanHitTheSameTargetAgain", "[DAttack][HitDetection][SwingTangent]")
 {
     using namespace dattackradialfirstticktests;
 

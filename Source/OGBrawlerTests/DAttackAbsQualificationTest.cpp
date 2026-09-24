@@ -27,6 +27,13 @@
 // site, so the machine site's overload set is the same either way.)
 #include "OGBrawler/DAttackRadialSimulation.h"
 #include "OGBrawler/DAttackMachineSimulation.h"
+// [og-netcode-v2-field-defects task 9] THE RADIAL'S abs SITE MOVED HERE, with the rest of hit
+// detection, into brawlerHitDetection::detectRadialHits. This header includes
+// SimulatableBrawler.h and therefore every sim header, so for THAT site this TU no longer
+// measures a minimal include set -- the ordering argument above now holds for the machine
+// header only. It costs nothing: the site is `glm::abs`, which cannot bind an integer
+// overload in any include set, and the radial case below still pins the behaviour.
+#include "OGBrawler/BrawlerHitDetectionSystem.h"
 
 // ⚠ DAttackCamera's three sites are in a .cpp, NOT a header — they are compiled once,
 // inside the OGBrawler module, with an include set no test TU can influence. The camera
@@ -123,11 +130,12 @@ struct MockSpatialQueryAdapter
 static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 
 // ===========================================================================
-// RADIAL RIG — one collisionCheck tick, reduced to "did the swing register a hit".
+// RADIAL RIG — one detection tick, reduced to "did the swing register a hit".
 //
-// `collisionCheck` lives in an ANONYMOUS namespace inside the header, so it cannot
-// be called directly; the rig drives it through the public `integrate` and reads
-// the DerivedState it fills.
+// [og-netcode-v2-field-defects task 9] Detection is no longer inside the radial (it was its
+// anonymous-namespace collisionCheck). The rig runs the radial's public `integrate`, then
+// `brawlerHitDetection::detectRadialHits` on the state integrate left -- the two steps the
+// production tick runs, in that order -- and reads the DerivedState the detector fills.
 //
 // The fixture is chosen so that everything except `lengthAlongRotationAxis` is held
 // constant between the two overloads:
@@ -143,8 +151,8 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 //     BOOLEAN. The probe reads 1 hit vs 0 hits — the widest margin available.
 //
 // ⚠ `DerivedState`'s default constructor seeds attackHits/guardHits with FOUR
-// default-constructed entries, and collisionCheck's first line early-returns at
-// `size() >= 4`. The rig clears both, which is what the live sim's deactivate()
+// default-constructed entries (true until movement-sim task 34, which made it a reserve), and
+// the detector's cap check early-returns at `size() >= 4`. The rig clears both, which is what the live sim's deactivate()
 // path does before the first damaging tick. Without the clear every case here would
 // pass vacuously (0 hits under BOTH overloads) — see the positive control below.
 // ===========================================================================
@@ -199,8 +207,8 @@ static RadialTickResult radialTick(float hitZ, float halfThickness)
     PlayerInput pi{};
     pi.aimDirection = glm::vec3(1.f, 0.f, 0.f);
 
-    IntegrationUtils<MockPhysicsAdapter, MockSpatialQueryAdapter> utils{ kDt, physics, query };
-    AllInput<MockPhysicsAdapter, MockSpatialQueryAdapter> allInput{ pi, utils };
+    IntegrationUtils<MockPhysicsAdapter> utils{ kDt, physics };
+    AllInput<MockPhysicsAdapter> allInput{ pi, utils };
 
     RuntimeBindings bindings{};
     bindings.ownBodyId        = BodyId{ 0u };
@@ -214,6 +222,11 @@ static RadialTickResult radialTick(float hitZ, float halfThickness)
     derived.editGuardHits().clear();
 
     integrate(kDt, allInput, staticData, deps, bindings, derived);
+    // [og-netcode-v2-field-defects task 9] The production tick's second step: detection runs
+    // AFTER the radial's integrate, on the state it left, exactly as
+    // brawlerHitDetection::System::postIntegrate does for every character.
+    brawlerHitDetection::detectRadialHits(kDt, staticData, composite.get<InitialConditions>(),
+        composite.get<State>(), bindings, derived, physics, query);
 
     return RadialTickResult{ derived.getAttackHits().size(), derived.getGuardHits().size() };
 }
@@ -308,7 +321,7 @@ static dAttackRadialSimulation::InitialConditions machineTick(const glm::vec3& a
 // Margin: the observable is a HIT COUNT, 0 vs 1 — categorical, not a tolerance.
 // ===========================================================================
 
-TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][AbsQualification]")
+TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetection][AbsQualification]")
 {
     using namespace dattackabstests;
 
@@ -454,7 +467,7 @@ TEST_CASE("DAttackAbs.CameraBoomLengthTracksFractionalPitch", "[DAttack][AbsQual
 }
 
 // ===========================================================================
-// 5. DAttackMachineSimulation.h:167 — `abs(abs(aimDot) - 1.f) < 0.0001f`
+// 5. DAttackMachineSimulation.h, setRadialSimulationInitialConditions — `abs(abs(aimDot) - 1.f) < 0.0001f`
 //
 // BYTE-IDENTICAL to the guard site task 29 fixed, and it feeds the same near-pole
 // epsilon band: inside the band the initial aim rotation axis is forced to +Z instead

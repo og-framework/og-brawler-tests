@@ -944,15 +944,18 @@ template <typename... Ts> struct FRingoutSpawnPointsCompositeWireSize<Simulation
 
 TEST_CASE("Ringout.SpawnPoints.ReadingTheLevelCostsTheCompositeNothing", "[BrawlerRingout]")
 {
-    static_assert(FRingoutSpawnPointsCompositeWireSize<simulatableBrawler::State>::value == 339u,
+    static_assert(FRingoutSpawnPointsCompositeWireSize<simulatableBrawler::State>::value == 338u,
         "simulatableBrawler::State moved. Task 9 adds NO state - it replaces a compiled-in "
         "spawn table with one read off the level's APlayerStart actors, and StaticData has "
         "never been on the wire. If this fires, something else added a field: re-price the "
         "fences in SimulatableBrawlerTest.cpp and RoundVsPacketBudgetTest.cpp. "
         "[movement-sim task 84, 2026-09-20] That is exactly what happened: 335 -> 339 B, "
         "dAttackMachineSimulation::State gained m_attackEndTick (4 B), an append to an EXISTING "
-        "slice, and both named files were re-priced in the same diff.");
-    REQUIRE(FRingoutSpawnPointsCompositeWireSize<simulatableBrawler::State>::value == 339u);
+        "slice, and both named files were re-priced in the same diff. "
+        "[og-netcode-v2-field-defects task 9, 2026-09-23] 339 -> 338 B, and not this file's task "
+        "either: dAttackRadialSimulation::State lost hasHitGuard (1 B) from the middle of the "
+        "composite, kWireFormatVersion 3 -> 4, headroom 37 -> 38 B.");
+    REQUIRE(FRingoutSpawnPointsCompositeWireSize<simulatableBrawler::State>::value == 338u);
 
     // And the slice that DOES ride the wire is untouched at 4 B: the point is level data, the
     // index is network data, and task 9 moved only the first of those.
@@ -1672,15 +1675,18 @@ template <typename... Ts> struct FRingoutResimCompositeWireSize<SimulationCompos
 
 TEST_CASE("Ringout.Resim.TheResimTestsCostTheCompositeNothing", "[BrawlerRingout]")
 {
-    static_assert(FRingoutResimCompositeWireSize<simulatableBrawler::State>::value == 339u,
+    static_assert(FRingoutResimCompositeWireSize<simulatableBrawler::State>::value == 338u,
         "simulatableBrawler::State moved. Task 7 adds NO state - it is a test task. If this "
         "fires as part of a resim change, a field has been added to the composite; re-price the "
         "wire fences in SimulatableBrawlerTest.cpp and RoundVsPacketBudgetTest.cpp, and budget "
         "against ~14 B (ArchitectureFindings F13), not the buffer's 37 B of headroom. "
         "[movement-sim task 84, 2026-09-20] That is exactly what happened: 335 -> 339 B, "
         "dAttackMachineSimulation::State gained m_attackEndTick (4 B), an append to an EXISTING "
-        "slice; both named files were re-priced and the headroom went 41 -> 37 B.");
-    REQUIRE(FRingoutResimCompositeWireSize<simulatableBrawler::State>::value == 339u);
+        "slice; both named files were re-priced and the headroom went 41 -> 37 B. "
+        "[og-netcode-v2-field-defects task 9, 2026-09-23] 339 -> 338 B, and not this file's task "
+        "either: dAttackRadialSimulation::State lost hasHitGuard (1 B) from the middle of the "
+        "composite, kWireFormatVersion 3 -> 4, headroom 37 -> 38 B.");
+    REQUIRE(FRingoutResimCompositeWireSize<simulatableBrawler::State>::value == 338u);
 
     // ⭐ AND THE FIVE BYTES CASE 3 IS ABOUT ARE STILL ON THE WIRE. This is what makes the
     // mid-countdown case's premise machine-checked rather than assumed: `respawnAtTick` and the

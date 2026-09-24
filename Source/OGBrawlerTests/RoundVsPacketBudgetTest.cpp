@@ -397,7 +397,15 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     //
     // ⚠ THE ROUND STILL FITS: the correction buffer is at 347/384 B, 37 B of headroom, down
     // from 41 (measured -- `SimulatableBrawlerTest.cpp`, `DAttack.SimulatableBrawler.WireFootprint`).
-    REQUIRE(kStateWireBytes == 350u);
+    //
+    // [og-netcode-v2-field-defects task 9, 2026-09-23] 350 -> 349 B, and the INPUT wire DOES NOT
+    // MOVE (`ringWireBytes(1u)` re-quoted UNCHANGED at 86 B above). The radial State slice lost
+    // `hasHitGuard` (1 B): hit detection became a post-integrate system and the guard block became
+    // a derived, per-tick signal. A removal from the middle of the composite, so
+    // `correctionStateBuffer::kWireFormatVersion` went 3 -> 4.
+    // 349 = 1 (version) + 2 (used count) + 8 (correction header) + 338 (composite).
+    // The correction buffer is at 346/384 B, 38 B of headroom.
+    REQUIRE(kStateWireBytes == 349u);
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +480,11 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     // characters at two entries does not fit 952 B -- is unchanged and now holds by 289 B.
     // ⭐ AND THE WARNING ABOVE REPRODUCED EXACTLY: this row turned up by running the suite,
     // not by reading task 84's file list either. Two wire tasks in a row, same blind spot.
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1241u);
+    // [og-netcode-v2-field-defects task 9, 2026-09-23] 1241 -> **1240 B**, all of it the state term
+    // (357 -> 356 B batched, the -1 B of the radial's `hasHitGuard`). The ring term is UNTOUCHED at
+    // 5 x (168+7) = 875 B. 1240 = 875 + 356 + 9; the conclusion is unchanged and holds by 288 B.
+    // Named in advance this time, from the warning above, rather than found by the suite.
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1240u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will
