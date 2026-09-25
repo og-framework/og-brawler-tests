@@ -33,6 +33,13 @@
 // never rotates, so the tick the blade reaches the target is a fixture choice, placed on the
 // target's first Idle tick -- which is MEASURED by a dry run, never authored.
 //
+// [og-netcode-v2-field-defects task 20] THE RIG'S TICK BOUNDARY. Detection and routing run in
+// preIntegrate of T+1, over the state tick T left. `tick(t)` is therefore integrate(t), the
+// post-integrate phase of t, then the NEXT step's pre-integrate phase (t+1): production call
+// order, cut after the reduction over t. A sample taken after tick(t) sees exactly what t+1's
+// integrate reads -- the same observation point this file had when both systems were
+// post-integrate, which is why the expectations below did not move.
+//
 // TAGS: `[SimulatableBrawler]` is in the `[@og]` whitelist (OgTagAliases.cpp); `[HitDetection]`
 // is NOT, and a case carrying only it would pass on a direct call and never run under `[@og]`.
 // ============================================================================
@@ -185,7 +192,7 @@ struct Scenario
 
 using Detection = brawlerHitDetection::System<OrderSwapPhysics, OrderSwapQuery>;
 
-// The production post-integrate phase for these two systems: the SAME executor type the manager
+// The production systems phases for these two systems: the SAME executor type the manager
 // instantiates, with detection handed THIS rig's fakes through the piecewise constructor, exactly
 // as SimulationManagerUImpl hands it the Chaos adapters. Firing order is template order.
 struct FOrderSwapRig
@@ -221,6 +228,7 @@ struct FOrderSwapRig
 
         exec.notifyCharacterRegistered(0u, storage, staticData, /*isAuthority*/ true);
         exec.notifyCharacterRegistered(1u, storage, staticData, /*isAuthority*/ true);
+        firePreIntegrate(0u);   // tick 0's own pre-integrate phase
     }
 
     SimulatableBrawler& brawler(unsigned int id) { return storage.get<SimulatableBrawler>(id); }
@@ -255,19 +263,27 @@ struct FOrderSwapRig
         }
     }
 
-    void firePostIntegrate(std::uint32_t t)
+    void firePostIntegrate(std::uint32_t t, bool resim = false)
     {
-        exec.firePostIntegrate(SimulationTimeStep(t, false, false, false, kDt),
-                               storage, staticData, /*isAuthority*/ true);
+        exec.firePostIntegrate(SimulationTimeStep(t, resim, false, false, kDt),
+                               storage, staticData, /*isAuthority*/ !resim);
     }
 
-    // One tick: both integrates in `order`, then the executor's post-integrate phase.
+    void firePreIntegrate(std::uint32_t t, bool resim = false)
+    {
+        exec.firePreIntegrate(SimulationTimeStep(t, resim, false, false, kDt),
+                              storage, staticData, /*isAuthority*/ !resim);
+    }
+
+    // One tick: both integrates in `order`, the post-integrate phase of t, then the
+    // pre-integrate phase of t+1 -- where detection and routing reduce tick t (task 20).
     void tick(std::uint32_t t, Order order,
               const simulatableBrawler::PlayerInput& attackerInput,
               const simulatableBrawler::PlayerInput& targetInput)
     {
         integrateBoth(t, order, attackerInput, targetInput);
         firePostIntegrate(t);
+        firePreIntegrate(t + 1u);
     }
 
     Sample sample()
@@ -451,7 +467,10 @@ TEST_CASE("HitDetection.DetectionSeesThisTicksGuardTransform",
 // radial DerivedState's per-tick guardBlockedThisTick, copied by routing onto the attacker's
 // inbound slice as wasGuardBlockedThisTick, and the machine recoils on T+1. Then the REPLAY:
 // wire State restored to the end of T-1 (what an adopted correction does), T and T+1
-// re-integrated. The bit is RECOMPUTED on the replayed T -- no wire field carries it any more.
+// re-integrated. The bit is RECOMPUTED on the replay -- no wire field carries it any more.
+// [task 20] It is recomputed by the replay's preIntegrate(T+1), over the replayed end of T.
+// The anchor-AT-T replay (the one task 9 could not recover) is
+// HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheBlockTickRecoils.
 // ---------------------------------------------------------------------------
 namespace hitDetectionTests
 {
@@ -539,10 +558,14 @@ TEST_CASE("HitDetection.GuardBlockRoutesThroughTheInboundSlice",
     // One tick wide: routing's whole-slice reset clears it on T+1 (no block is detected there).
     CHECK_FALSE(live.sliceBlockedAtT1);
 
-    // THE REPLAY anchored on T. The radial's per-swing ledgers are NOT restored (they are
-    // derived); the swing's deactivate on T+1 already cleared them, as it would in production.
+    // THE REPLAY anchored at the end of T-1. The radial's per-swing ledgers are NOT restored
+    // (they are derived); the swing's deactivate on T+1 already cleared them, as it would in
+    // production. The world is rewound to the end of T-1, where the blade has not arrived, and
+    // the replay opens with its own preIntegrate(T) over that state.
     rig.brawler(0u).editAllState().editState() = savedAttacker;
     rig.brawler(1u).editAllState().editState() = savedTarget;
+    rig.query.weaponOverlapsTarget = false;
+    rig.firePreIntegrate(static_cast<std::uint32_t>(T), /*resim*/ true);
     Observed replay;
     for (int t = T; t <= T + 1; ++t)
     {
@@ -550,7 +573,8 @@ TEST_CASE("HitDetection.GuardBlockRoutesThroughTheInboundSlice",
         const SimulationTimeStep step(static_cast<std::uint32_t>(t), true, false, false, kDt);
         rig.brawler(1u).integrate(step, targetInput, rig.phys, rig.query, rig.staticData);
         rig.brawler(0u).integrate(step, attackerInput(t), rig.phys, rig.query, rig.staticData);
-        rig.exec.firePostIntegrate(step, rig.storage, rig.staticData, /*isAuthority*/ false);
+        rig.firePostIntegrate(static_cast<std::uint32_t>(t), /*resim*/ true);
+        rig.firePreIntegrate(static_cast<std::uint32_t>(t + 1), /*resim*/ true);
         observeTick(t, replay);
     }
     INFO("replay: radialBlocked@T=" << replay.radialBlockedAtT << " slice@T=" << replay.sliceBlockedAtT
@@ -565,7 +589,8 @@ TEST_CASE("HitDetection.GuardBlockRoutesThroughTheInboundSlice",
 // The executor runs detection with the adapters it was CONSTRUCTED with (task 9 AC: "a fixture
 // proving postIntegrate runs with the same adapters the executor uses"), and integrate no
 // longer queries at all. Measured on a Damaging tick: the radial overlap count moves only
-// inside firePostIntegrate, by exactly one (one attacker mid-swing), on this rig's own query.
+// inside the systems executor, by exactly one (one attacker mid-swing), on this rig's own query.
+// [task 20] ...and inside the NEXT step's firePreIntegrate, never inside firePostIntegrate.
 // ---------------------------------------------------------------------------
 TEST_CASE("HitDetection.ExecutorFiresDetectionWithTheAdaptersItWasConstructedWith",
           "[SimulatableBrawler][HitDetection]")
@@ -590,11 +615,15 @@ TEST_CASE("HitDetection.ExecutorFiresDetectionWithTheAdaptersItWasConstructedWit
         .get<dAttackRadialSimulation::DerivedState>().getHitsThisTick().empty());
     rig.firePostIntegrate(1u);
     const int afterPost = rig.query.radialOverlapCalls;
+    rig.firePreIntegrate(2u);
+    const int afterPre = rig.query.radialOverlapCalls;
 
     INFO("overlap calls: integrate " << (afterIntegrate - beforeIntegrate)
-         << ", post-integrate " << (afterPost - afterIntegrate));
+         << ", post-integrate " << (afterPost - afterIntegrate)
+         << ", next pre-integrate " << (afterPre - afterPost));
     CHECK(afterIntegrate - beforeIntegrate == 0);
-    CHECK(afterPost - afterIntegrate == 1);
+    CHECK(afterPost - afterIntegrate == 0);
+    CHECK(afterPre - afterPost == 1);
     CHECK(rig.brawler(0u).getAllState().getDerivedState()
         .get<dAttackRadialSimulation::DerivedState>().getHitsThisTick().size() == 1u);
     CHECK(rig.sample().targetWasHit);

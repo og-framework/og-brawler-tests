@@ -4,7 +4,8 @@
 // ============================================================================
 // THE HIT-ROUTING SYSTEM IS THE SINGLE RESOLVER  [movement-sim task 27]
 //
-// SUBJECT: `brawlerHitRouting::System::postIntegrate` -- specifically the part task 27 added. The
+// SUBJECT: `brawlerHitRouting::System::preIntegrate` (postIntegrate until og-netcode-v2-field-
+// defects task 20 moved the pass into the consuming tick) -- specifically the part task 27 added. The
 // routing pass already turned a radial overlap or a projectile impact into
 // `wasHitThisTick` on the struck character's off-wire slice; it now turns it into the WHOLE
 // reaction: kind, speed, direction and the lockout dwell.
@@ -16,7 +17,8 @@
 // cvar reads, so a typed constant beside `kHitFlinchDuration` would be right on the day it shipped
 // and silently wrong the day a cvar moved. The movement sim cannot compute it either: it never
 // sees the attack table. The routing system is the ONE actor that already holds both, because
-// `postIntegrate` receives the composite `simulatableBrawler::StaticData`. Resolving it here means
+// the routing pass (`preIntegrate` since og-netcode-v2-field-defects task 20) receives the
+// composite `simulatableBrawler::StaticData`. Resolving it here means
 // NEITHER sub-simulation learns the other's constants.
 //
 // ⛔ THESE CASES DRIVE THE SYSTEM, NOT A COPY OF ITS ARITHMETIC. `resolveHitReaction` is a
@@ -157,23 +159,48 @@ struct FRoutingRig
         derived.editHitsThisTick().clear();
     }
 
-    // End a projectile slot on `tick` with endReason 2 (hit), the way the projectile sim does.
-    void raiseProjectileHit(unsigned int attackerId, unsigned int targetId,
-                            std::uint32_t tick, glm::vec3 spawnDir)
+    // Pose a projectile HIT the way brawlerHitDetection's projectile pass reports one: the slot is
+    // in flight on the wire, and the pass's per-slot outcome (detectedThisTick) names the struck
+    // character. [og-netcode-v2-field-defects task 17] Until task 17 this ended the wire slot
+    // (endTick = a tick, endReason 2, hitRootBodyId) and routing matched that endTick against the
+    // tick integrated last; routing now reads the outcome, and the pass is what resets it.
+    void raiseProjectileHit(unsigned int attackerId, unsigned int targetId, glm::vec3 spawnDir)
     {
         auto& slot = brawler(attackerId).editAllState().editState()
             .edit<brawlerProjectileSimulation::State>().slots[0];
         slot.spawnTick = 1u;
         slot.spawnDir  = spawnDir;
-        slot.endTick   = tick;
-        slot.endReason = 2;
-        slot.hitRootBodyId = rootBodyId(targetId);
+        auto& detected = brawler(attackerId).editAllState().editDerivedState()
+            .edit<brawlerProjectileSimulation::DerivedState>().detectedThisTick[0];
+        detected.outcome          = brawlerProjectileSimulation::SlotOutcome::Hit;
+        detected.struckRootBodyId = rootBodyId(targetId);
     }
 
+    // [og-netcode-v2-field-defects task 20] The routing pass is preIntegrate of the step whose
+    // integrate reads the slice. The tick is incidental to every branch since task 17.
     void route(std::uint32_t tick)
     {
-        system.postIntegrate(SimulationTimeStep(tick, false, false, false, kDt),
-                             view(), staticData);
+        system.preIntegrate(SimulationTimeStep(tick, false, false, false, kDt),
+                            view(), staticData);
+    }
+
+    // The same pass for an explicit step (a Skip, a Stall, a resim step).
+    void routeStep(const SimulationTimeStep& step)
+    {
+        system.preIntegrate(step, view(), staticData);
+    }
+
+    // Pose the shooter's projectile slot 1 BLOCKED by a guard, the way the detector's projectile
+    // pass reports it (task 17; it used to end the wire slot with endReason 4).
+    void raiseProjectileBlock(unsigned int shooterId)
+    {
+        auto& slot = brawler(shooterId).editAllState().editState()
+            .edit<brawlerProjectileSimulation::State>().slots[1];
+        slot.spawnTick = 1u;
+        slot.spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+        brawler(shooterId).editAllState().editDerivedState()
+            .edit<brawlerProjectileSimulation::DerivedState>().detectedThisTick[1].outcome =
+                brawlerProjectileSimulation::SlotOutcome::BlockedByGuard;
     }
 
     const brawlerInboundHit::DerivedState& inbound(unsigned int id)
@@ -290,8 +317,9 @@ struct SwingQueryAdapter
     // ⭐⭐ [movement-sim task 87] THE PROJECTILE'S OVERLAP IS A DISTANCE TEST, NOT A SCHEDULE,
     // and that is the one way this arm is BETTER instrumented than the melee one above.
     // `kHitTick` has to be authored because the weapon never rotates here; the projectile has
-    // no such problem -- it publishes its own closed-form position to the query layer on every
-    // tick it is alive (`setVolumeParentTransform`, immediately before it asks for the overlap),
+    // no such problem -- its closed-form position is published to the query layer on every
+    // tick it is alive (`setVolumeParentTransform`, immediately before the overlap is asked;
+    // by brawlerHitDetection's projectile pass since og-netcode-v2-field-defects task 17),
     // so the fixture can answer the overlap from the REAL separation and the hit tick comes out
     // MEASURED. `projectileContactRadius` is the rig's one authored number about it: the
     // projectile's own collider radius plus the target capsule's, i.e. the separation at which
@@ -330,8 +358,9 @@ struct SwingQueryAdapter
         return volumeId == QueryVolumeId{ kMovementVolume } ? ground : SweepHit{};
     }
 
-    // [movement-sim task 87] WHERE THE PROJECTILE'S POSITION COMES FROM. The projectile sim
-    // derives pos(t) from its closed form and publishes it here for every alive slot right
+    // [movement-sim task 87] WHERE THE PROJECTILE'S POSITION COMES FROM. The detector's
+    // projectile pass (the projectile sim's integrate until og-netcode-v2-field-defects task 17)
+    // derives pos(t) from the closed form and publishes it here for every alive slot right
     // before querying that slot's overlap, so recording it is enough to answer the overlap from
     // the real separation. Nothing else in this fixture writes `projectilePos`.
     void setVolumeParentTransform(QueryVolumeId volumeId, const glm::mat4& transform)
@@ -348,6 +377,10 @@ static_assert(SpatialQueryAdapter<SwingQueryAdapter>);
 
 // One tick's observation, recorded AFTER the routing pass -- which is where a reader of the
 // slice stands, because routing owns the reset/set lifecycle.
+// [og-netcode-v2-field-defects task 20] The routing pass over tick t is preIntegrate of t+1, after
+// the engine step. `run` below calls it at the END of its tick-t iteration, so sample t still
+// stands between the reduction over t and integrate(t+1) -- the observation point every case in
+// this file was written against. Nothing below moved index because of it.
 struct TickSample
 {
     std::uint32_t tick            = 0u;
@@ -380,7 +413,8 @@ struct FEndToEndRig
     SwingPhysicsAdapter phys;
     SwingQueryAdapter   query;
     // [og-netcode-v2-field-defects task 9] The detector, fired before routing exactly as the
-    // manager's BrawlerSystemsExec fires it. Declared AFTER the adapters it points at.
+    // manager's BrawlerSystemsExec fires it (both in preIntegrate since task 20). Declared AFTER
+    // the adapters it points at.
     brawlerHitDetection::System<SwingPhysicsAdapter, SwingQueryAdapter> detection{ phys, query };
 
     glm::vec2 attackerStick{ 0.f, -1.f };   // (0,-1) against aim (1,0,0) -> the right swing
@@ -525,6 +559,24 @@ struct FEndToEndRig
         int          swingStartTick = -1;
         unsigned int lastSequence   = InvalidAttackSequenceId;
 
+        // [task 20] The systems' pre-integrate phase, over the end state of the previous tick.
+        auto reduce = [this](std::uint32_t reducingTick)
+        {
+            // [movement-sim task 87; og-netcode-v2-field-defects task 17] The projectile's
+            // contact test needs the target's CURRENT position and the adapter cannot see
+            // simulation state, so the rig hands it over here, right before the pass that asks
+            // the projectile overlap (it was handed over before integrate, which asked it until
+            // task 17).
+            const glm::vec3 targetPos = brawler(1u).getAllState().getState()
+                .get<brawlerMovementSimulation::State>().bodyState.position;
+            query.targetXY = glm::vec2(targetPos.x, targetPos.y);
+
+            const SimulationTimeStep pre(reducingTick, false, false, false, kDt);
+            detection.preIntegrate(pre, view(), staticData);
+            system.preIntegrate(pre, view(), staticData);
+        };
+        reduce(0u);   // tick 0's own pre-integrate phase
+
         for (int t = 0; t < tickCount; ++t)
         {
             const std::uint32_t tick = static_cast<std::uint32_t>(t);
@@ -553,15 +605,6 @@ struct FEndToEndRig
             const glm::vec2 stick = (t == 0) ? attackerStick
                                   : (followUp ? followUpStick : glm::vec2(0.f));
             const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
-
-            // [movement-sim task 87] The projectile's contact test needs the target's CURRENT
-            // position and the adapter cannot see simulation state, so the rig hands it over
-            // once per tick, BEFORE the integrate that will query it.
-            {
-                const glm::vec3 targetPos = brawler(1u).getAllState().getState()
-                    .get<brawlerMovementSimulation::State>().bodyState.position;
-                query.targetXY = glm::vec2(targetPos.x, targetPos.y);
-            }
 
             const simulatableBrawler::PlayerInput attackerInput(
                 dAttackRadialSimulation::PlayerInput(aim, pressing, false),
@@ -601,6 +644,21 @@ struct FEndToEndRig
             detection.postIntegrate(step, view(), staticData);
             system.postIntegrate(step, view(), staticData);
 
+            // THE ENGINE STEP. Nothing inside integrate advances a body; the generic
+            // captureBodyStatesAll pass does, and an engine-free rig has to stand in for it.
+            // [task 20] It runs BEFORE the reduction over this tick, as physics step t runs
+            // before preIntegrate(t+1) in production.
+            glm::vec3 targetPositionAfterStep(0.f);
+            {
+                auto& ms = brawler(1u).editAllState().editState()
+                    .edit<brawlerMovementSimulation::State>();
+                ms.bodyState.position += ms.velocity * kDt;
+                targetPositionAfterStep = ms.bodyState.position;
+            }
+
+            // The reduction over tick t: detection + routing in preIntegrate(t+1).
+            reduce(tick + 1u);
+
             const auto& radialDerived = brawler(0u).getAllState().getDerivedState()
                 .get<dAttackRadialSimulation::DerivedState>();
             const auto& targetState = brawler(1u).getAllState().getState();
@@ -630,12 +688,7 @@ struct FEndToEndRig
                 sample.projectileEndReason  = slot.endReason;
             }
 
-            // THE ENGINE STEP. Nothing inside integrate advances a body; the generic
-            // captureBodyStatesAll pass does, and an engine-free rig has to stand in for it.
-            auto& ms = brawler(1u).editAllState().editState()
-                .edit<brawlerMovementSimulation::State>();
-            ms.bodyState.position += ms.velocity * kDt;
-            sample.targetPosition = ms.bodyState.position;
+            sample.targetPosition = targetPositionAfterStep;
 
             // [movement-sim task 86] A FRESH SWING re-hangs the overlap schedule, and a swing
             // that ENDED closes it. The radial writes currenSequenceId in the same integrate the
@@ -870,8 +923,8 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
         REQUIRE(rig.staticData.m_projectileHitReaction.kind == HitReactionKind::Stun);
         rig.setPosition(0u, glm::vec3(0.f));
         rig.setPosition(1u, glm::vec3(300.f, 0.f, 0.f));
-        rig.raiseProjectileHit(0u, 1u, 12u, glm::vec3(0.f, 1.f, 0.f));
-        rig.route(12u);
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 1.f, 0.f));
+        rig.route(13u);
 
         const brawlerInboundHit::DerivedState& slice = rig.inbound(1u);
         INFO("projectile: kind=" << int(slice.reactionKind) << " speed=" << slice.knockbackSpeed
@@ -899,10 +952,14 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
         REQUIRE(rig.staticData.m_projectileHitReaction.lockoutDuration
                 == Catch::Approx(0.65f).margin(1e-6f));
 
-        // The endTick guard: the slot keeps endReason 2 until it recycles, so a LATER tick must
-        // not re-flinch the target. This pre-dates task 27 and must survive it.
-        rig.route(13u);
-        REQUIRE_FALSE(rig.inbound(1u).wasHitThisTick);
+        // ⚠ [og-netcode-v2-field-defects task 17] "A LATER tick must not re-flinch the target"
+        // stood here as `rig.route(14u); REQUIRE_FALSE(...wasHitThisTick)`, and it pinned
+        // routing's endTick guard. That guard is gone: routing reads the detector's per-pass
+        // outcome, and it is the DETECTOR that resets it on every pass (its guards doc G-01)
+        // while the shooter's integrate ends the slot in the same step. This rig has no
+        // detector, so the property cannot be stated here; it is pinned end to end by
+        // HitRouting.ProjectilePointBlankFollowUpWindow (`hitTickCount() == 1`) and by
+        // HitDetection.Projectile.AShotEndingOnThePreJumpTickIsRoutedOnceAcrossAHardResync.
     }
 
     // 2. WITH THE SPEC FLIPPED TO KNOCKBACK IN THE FIXTURE, the direction is the projectile's
@@ -915,8 +972,8 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
             HitReactionSpec{ HitReactionKind::Knockback, 1200.f, 0.f };
         rig.setPosition(0u, glm::vec3(0.f));
         rig.setPosition(1u, glm::vec3(300.f, 0.f, 0.f));   // +X apart...
-        rig.raiseProjectileHit(0u, 1u, 12u, glm::vec3(0.f, 1.f, 0.f));  // ...but fired along +Y
-        rig.route(12u);
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 1.f, 0.f));  // ...but fired along +Y
+        rig.route(13u);
 
         const brawlerInboundHit::DerivedState& slice = rig.inbound(1u);
         INFO("flipped spec: dir=(" << slice.hitDirectionXY.x << ", " << slice.hitDirectionXY.y
@@ -928,6 +985,64 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
         // ...and the dwell is derived from the flipped speed, not from the shipped 2000.
         REQUIRE(slice.flinchDuration
                 == Catch::Approx(1200.f / rig.launchDecel()).margin(1e-6f));
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// [og-netcode-v2-field-defects task 17] BRANCHES 3 AND 4 ROUTE THIS PASS'S PROJECTILE OUTCOME, ON
+// EVERY STEP KIND, WITH NO TICK ARITHMETIC.
+// ⚠ RETIRED HERE: `HitRouting.ProjectileEndsAreRoutedFromTheLastIntegratedTickOnEveryStepKind`
+// (task 20 Rework (1)). It pinned a per-step-kind table of how far back routing had to look for
+// a projectile slot's endTick (Normal/resim/Stall 1, Skip 2, tick 0 and a Skip to 1 nothing).
+// Task 17 removed that lookup at the user's ruling ("a system must not need to know which tick
+// ran last"): the detector produces the outcome in this same pass and routing reads it, so the
+// table has no subject. Its Skip section is re-homed below and its other rows become the same
+// one-line statement: whatever the step kind, the outcome of this pass is routed.
+// ---------------------------------------------------------------------------
+TEST_CASE("HitRouting.ProjectileOutcomeIsRoutedWhateverTheStepKind",
+          "[SimulatableBrawler][HitRouting]")
+{
+    using namespace hitRoutingTests;
+    constexpr std::uint32_t L = 12u;
+
+    struct Routed { bool hit; bool blocked; };
+    // Character 0 shoots character 1 (branch 3); character 1's own shot is blocked (branch 4).
+    auto routeOnce = [](const SimulationTimeStep& step)
+    {
+        FRoutingRig rig;
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
+        rig.raiseProjectileBlock(1u);
+        rig.routeStep(step);
+        return Routed{ rig.inbound(1u).wasHitThisTick, rig.inbound(1u).wasProjectileBlockedThisTick };
+    };
+
+    struct Kind { const char* name; SimulationTimeStep step; };
+    const Kind kinds[] = {
+        { "Normal",                         SimulationTimeStep(L + 1u, false, StepKind::Normal, kDt) },
+        { "first resim step",               SimulationTimeStep(L + 1u, true,  StepKind::Normal, kDt) },
+        { "Skip (re-homed from task 20)",   SimulationTimeStep(L + 2u, false, StepKind::Skip,   kDt) },
+        { "Stall",                          SimulationTimeStep(L,      false, StepKind::Stall,  kDt) },
+        { "HardResync, built as Normal",    SimulationTimeStep(L + 9u, false, StepKind::Normal, kDt) },
+        { "tick 0",                         SimulationTimeStep(0u,     false, StepKind::Normal, kDt) },
+        { "Skip to tick 1",                 SimulationTimeStep(1u,     false, StepKind::Skip,   kDt) },
+    };
+    for (const Kind& kind : kinds)
+    {
+        const Routed on = routeOnce(kind.step);
+        INFO(kind.name << ": hit=" << on.hit << " blocked=" << on.blocked);
+        CHECK(on.hit);
+        CHECK(on.blocked);
+    }
+
+    // And nothing is routed from a slot the pass found nothing for, on any of them.
+    for (const Kind& kind : kinds)
+    {
+        FRoutingRig rig;
+        rig.routeStep(kind.step);
+        INFO(kind.name << " with no outcome");
+        CHECK_FALSE(rig.inbound(1u).wasHitThisTick);
+        CHECK_FALSE(rig.inbound(1u).wasProjectileBlockedThisTick);
     }
 }
 
@@ -1271,12 +1386,20 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
 //
 // ⭐⭐ THE MEASURED TIMELINE, read off this case's own INFO lines (60 Hz, fire on tick 1):
 //     tick  1  the Hadouken fires; the pool spawns slot 0 at x = 60 cm (spawnForwardOffset)
-//     tick  2  the shot connects -- its FIRST live tick -- and the target flinches on 3
+//     tick  2  the shot connects -- its FIRST live tick -- and the target flinches on 2
 //     tick 19  the shooter is back in Idle (the flat 0.3 s Hadouken commitment, 18 ticks)
 //     tick 20  the held button starts a FRESH sequence 0
 //     tick 38  that swing's first damaging tick -- the follow-up CONNECTS
 //   ⇒ the window the stun must cover is 38 - 2 = 36 ticks = 0.600 s.
-//   The authored 0.65 s ends the flinch on tick 42, so the margin is FOUR ticks.
+//   The authored 0.65 s ends the flinch on tick 41, so the margin is THREE ticks.
+// ⚠ [og-netcode-v2-field-defects task 17, user ruling 2026-09-24] THE FLINCH MOVED ONE TICK
+//   EARLIER: 3 -> 2, and the flinch now ends on 41, not 42, so the slack went 4 -> 3. The contact
+//   tick (2) and the slot's endTick (2) did not move. brawlerHitDetection's projectile pass checks
+//   the slot at its closed-form position on the step's OWN tick, in that step's pre-integrate
+//   pass, and routes the hit in the same pass, so the target reacts in integrate(2). Before, the
+//   shooter's integrate(2) detected it and the reaction waited for the next step's routing. The
+//   routed sample moved from 2 to 1 as well: this rig's sample t holds the pass run at the end of
+//   tick t, which is pre(t+1).
 //
 // ⛔ THAT MAKES THE POINT-BLANK PROJECTILE THE BINDING CASE, not the melee one, and it is
 //   the reverse of what impl/design_stun_followup_window.md section 2 derived by hand
@@ -1339,14 +1462,21 @@ TEST_CASE("HitRouting.ProjectilePointBlankFollowUpWindow", "[SimulatableBrawler]
          << " -> " << leftFlinchAt << "; routing fired on " << shotRig.hitTickCount()
          << " tick(s)");
 
-    // PREMISES: the shot really was a projectile hit (endReason 2, the only reason routing
+    // PREMISES: the shot really was a projectile hit (endReason 2, the hit outcome routing
     // branch 3 admits), it landed once, and it stunned.
-    REQUIRE(projectileHitAt > kFireTick);
+    // [og-netcode-v2-field-defects task 17] Sample t holds the pass run at the end of tick t,
+    // pre(t+1), and that pass checks the shot at its tick-(t+1) position: so the CONTACT tick is
+    // the routed sample + 1. It was the routed sample itself while the shooter's integrate
+    // detected. Three pins moved with that and are re-quoted here: `projectileHitAt > kFireTick`
+    // (now contactTick > kFireTick), and the slot's endReason/endTick read at the contact tick.
+    const int contactTick = projectileHitAt + 1;
+    REQUIRE(contactTick > kFireTick);
     REQUIRE(shotRig.hitTickCount() == 1u);
-    REQUIRE(shotRig.samples[std::size_t(projectileHitAt)].projectileEndReason == 2u);
-    REQUIRE(shotRig.samples[std::size_t(projectileHitAt)].projectileEndTick
-            == std::uint32_t(projectileHitAt));
+    REQUIRE(shotRig.samples[std::size_t(contactTick)].projectileEndReason == 2u);
+    REQUIRE(shotRig.samples[std::size_t(contactTick)].projectileEndTick
+            == std::uint32_t(contactTick));
     REQUIRE(enteredFlinchAt == projectileHitAt + 1);
+    REQUIRE(enteredFlinchAt == contactTick);   // [task 17] the reaction lands on the contact tick
     REQUIRE(leftFlinchAt > enteredFlinchAt);
     // A stun carries no speed: the body does not move, at any tick of the run.
     for (const TickSample& s : shotRig.samples)

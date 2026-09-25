@@ -317,13 +317,26 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     //    SECOND composite slice, so `bodyState` and every later slice moved one byte. A peer on 3
     //    reading a 4 payload decodes all of them one byte out of place. The radial slice is pinned
     //    in section 2 below so the next change here says which slice moved.
-    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 338u,
+    //
+    //    [og-netcode-v2-field-defects task 17, 2026-09-24] 338 -> 326 B, -12 B, and the slice that
+    //    moved is the PROJECTILE's: `brawlerProjectileSimulation::ProjectileSlot::hitRootBodyId`
+    //    (a 4 B BodyId) LEFT THE WIRE, once per pool slot, and the pool's SIM_VECTOR is priced at
+    //    its capacity of 3 (115 -> 103 B). Projectile detection moved out of the shooter's
+    //    integrate into `brawlerHitDetection::System`; the struck character now travels in the
+    //    projectile DerivedState's per-pass `detectedThisTick`, read by routing in the same pass.
+    //    `endReason` stays: the shooter's integrate still ends the slot with it, and it is what the
+    //    correction gate compares when two peers disagree about a shot's outcome.
+    //    ⛔ `correctionStateBuffer::kWireFormatVersion` IS BUMPED 4 -> 5: the field was the LAST of
+    //    each slot, but the slots are an array inside the composite's third slice, so slot 1, slot
+    //    2 and every later slice moved. Measured: this static_assert compiled at 326 on the tree
+    //    after the removal (it fired at 338). The projectile slice is pinned in section 2 below.
+    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 326u,
         "The simulatableBrawler::State wire footprint moved. That is a WIRE FORMAT "
         "CHANGE: re-measure it, re-price RoundVsPacketBudgetTest.cpp, and bump "
         "correctionStateBuffer::kWireFormatVersion if the layout moved OR if a whole "
         "sub-simulation entered or left the composite - an append that only grows an "
         "EXISTING slice is the one case that does not need the bump.");
-    REQUIRE(kComposite == 338u);
+    REQUIRE(kComposite == 326u);
 
     // 2. WHICH SLICE, so a break says what moved rather than only that something did.
     //
@@ -367,6 +380,12 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     // byte smaller than it was: `hasHitGuard` left it (see section 1). 61 -> 60 B, measured on the
     // tree after the removal (a probe pin's failure expansion read `60 == 1`), not derived.
     REQUIRE(syncSize<dAttackRadialSimulation::State>() == 60u);
+
+    // [og-netcode-v2-field-defects task 17, 2026-09-24] THE PROJECTILE SLICE, first pinned here:
+    // 4 (SIM_VECTOR count) + 3 slots x 33 B = 103 B, down from 115 B (3 x 37) when each slot
+    // still carried hitRootBodyId. The per-slot footprint is pinned beside the type, in
+    // BrawlerProjectileSimulationTest.cpp "BrawlerProjectile.WireFootprint".
+    REQUIRE(syncSize<brawlerProjectileSimulation::State>() == 103u);
 
     // [movement-sim task 29] The guard slice, both halves, at zero. This is the term
     // the -56 B came out of, and pinning it HERE — beside the total — is what makes a
@@ -1227,6 +1246,15 @@ TEST_CASE("DAttack.SimulatableBrawler.AgreeingAnchorKeepsPushOut",
 // deliberately NOT taken here -- the question is whether the one-cycle pop is VISIBLE in PIE, and
 // no agent can run PIE. The 27b PIE criterion asks for exactly that observation.
 // ---------------------------------------------------------------------------
+//
+// ⭐ [og-netcode-v2-field-defects task 20] THE MECHANISM ABOVE IS NARROWED, NOT GONE. Routing now
+// runs in preIntegrate of the CONSUMING tick, so a replay anchored at T re-routes T's hit on its
+// first step -- when detection can re-find it. It cannot while the attacker's per-swing
+// `attackHits` ledger (derived, never restored) still holds the target, i.e. whenever the
+// correction lands mid-swing. That remaining case is exactly what this rig models (no routing
+// runs here; the slice is delivered by hand) and is pinned end to end in
+// BrawlerHitDetectionBehaviourTest.cpp, `...BodyHitTickFlinchesTheTarget`, section "frontier
+// mid-swing"; Backlog task 21 closes it.
 TEST_CASE("DAttack.SimulatableBrawler.ReplayAnchoredOnHitTickConvergesInOneCorrection",
           "[DAttack][SimulatableBrawler][MovementResim]")
 {

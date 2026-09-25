@@ -345,6 +345,28 @@ TEST_CASE("RingoutScore.ANonAuthorityRoleAwardsNothing", "[BrawlerRingout]")
 }
 
 // ============================================================================================
+// [og-netcode-v2-field-defects task 20] THE AWARD STAYS IN postIntegrate. Task 20 moved hit
+// detection and routing to preIntegrate of T+1; ring-out's award did NOT move, because it
+// consumes `diedThisTick`, which ring-out's integrate writes on the SAME tick T. Driven through
+// the shipped executor on the authority: the pre-integrate phase alone awards nothing, the
+// post-integrate phase of the same step awards the survivors. A score system moved to
+// preIntegrate turns the first REQUIRE red.
+// ============================================================================================
+TEST_CASE("RingoutScore.TheAwardIsMadeInPostIntegrateNotPreIntegrate", "[BrawlerRingout]")
+{
+    FExecRig rig;
+    rig.registerAll(/*isAuthority=*/true);
+    rig.poseDeath(1u);
+
+    const SimulationTimeStep s(300u, false, StepKind::Normal);
+    rig.exec.firePreIntegrate(s, rig.storage, rig.staticData, /*isAuthority=*/true);
+    REQUIRE((rig.allScores() == std::vector<uint32_t>{ 0u, 0u, 0u, 0u }));
+
+    rig.exec.firePostIntegrate(s, rig.storage, rig.staticData, /*isAuthority=*/true);
+    REQUIRE((rig.allScores() == std::vector<uint32_t>{ 1u, 0u, 1u, 1u }));
+}
+
+// ============================================================================================
 // ⛔ RULING 3, THE SIMULTANEOUS CASE — and it is the one an award that mutates as it walks gets
 // WRONG in an order-dependent way. Two die on one tick with two others alive: each SURVIVOR
 // takes TWO points (one per death), and each DIER takes NONE — neither its own, nor its twin's.
@@ -556,7 +578,7 @@ template <typename... Ts> struct FScoreCompositeWireSize<SimulationComposite<Ts.
 
 TEST_CASE("RingoutScore.TheAwardCostsTheCompositeNothing", "[BrawlerRingout]")
 {
-    static_assert(FScoreCompositeWireSize<simulatableBrawler::State>::value == 338u,
+    static_assert(FScoreCompositeWireSize<simulatableBrawler::State>::value == 326u,
         "simulatableBrawler::State moved. Task 4 adds NO state: if this fires as part of a "
         "scoring change, a score has been put on the wire and it is now correctable, "
         "rewindable, and double-countable - which is the exact hazard ruling 1's split exists "
@@ -566,8 +588,11 @@ TEST_CASE("RingoutScore.TheAwardCostsTheCompositeNothing", "[BrawlerRingout]")
         "slice, and the headroom went 41 -> 37 B with it. "
         "[og-netcode-v2-field-defects task 9, 2026-09-23] 339 -> 338 B, and not this file's task "
         "either: dAttackRadialSimulation::State lost hasHitGuard (1 B) from the middle of the "
-        "composite, kWireFormatVersion 3 -> 4, headroom 37 -> 38 B.");
-    REQUIRE(FScoreCompositeWireSize<simulatableBrawler::State>::value == 338u);
+        "composite, kWireFormatVersion 3 -> 4, headroom 37 -> 38 B. "
+        "[og-netcode-v2-field-defects task 17, 2026-09-24] 338 -> 326 B, and not this file's task "
+        "either: brawlerProjectileSimulation::ProjectileSlot lost hitRootBodyId (4 B x 3 slots), "
+        "kWireFormatVersion 4 -> 5, headroom 38 -> 50 B.");
+    REQUIRE(FScoreCompositeWireSize<simulatableBrawler::State>::value == 326u);
 
     // The ring-out STATE slice is unchanged too: 5 B, the flags byte plus the respawn tick.
     REQUIRE(syncSize<ringout::State>() == 5u);

@@ -183,7 +183,7 @@ static std::size_t radialAttackHits(float planarX,
     integrate(kDt, allInput, staticData, deps, bindings, derived);
     // [og-netcode-v2-field-defects task 9] The production tick's second step: detection runs
     // AFTER the radial's integrate, on the state it left, exactly as
-    // brawlerHitDetection::System::postIntegrate does for every character.
+    // brawlerHitDetection::System::preIntegrate does for every character on the next tick (task 20).
     brawlerHitDetection::detectRadialHits(kDt, staticData, composite.get<InitialConditions>(),
         composite.get<State>(), bindings, derived, physics, query);
 

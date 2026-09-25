@@ -405,7 +405,15 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     // `correctionStateBuffer::kWireFormatVersion` went 3 -> 4.
     // 349 = 1 (version) + 2 (used count) + 8 (correction header) + 338 (composite).
     // The correction buffer is at 346/384 B, 38 B of headroom.
-    REQUIRE(kStateWireBytes == 349u);
+    //
+    // [og-netcode-v2-field-defects task 17, 2026-09-24] 349 -> 337 B, and the INPUT wire DOES NOT
+    // MOVE (`ringWireBytes(1u)` re-quoted UNCHANGED at 86 B above). Each of the 3 projectile pool
+    // slots lost `hitRootBodyId` (4 B): projectile detection became part of the pre-integrate
+    // detection system and the struck character a derived, per-pass signal. The slots sit in the
+    // middle of the composite, so `correctionStateBuffer::kWireFormatVersion` went 4 -> 5.
+    // 337 = 1 (version) + 2 (used count) + 8 (correction header) + 326 (composite).
+    // The correction buffer is at 334/384 B, 50 B of headroom.
+    REQUIRE(kStateWireBytes == 337u);
 }
 
 // ---------------------------------------------------------------------------
@@ -484,7 +492,13 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     // (357 -> 356 B batched, the -1 B of the radial's `hasHitGuard`). The ring term is UNTOUCHED at
     // 5 x (168+7) = 875 B. 1240 = 875 + 356 + 9; the conclusion is unchanged and holds by 288 B.
     // Named in advance this time, from the warning above, rather than found by the suite.
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1240u);
+    // [og-netcode-v2-field-defects task 17, 2026-09-24] 1240 -> **1228 B**, all of it the state
+    // term (356 -> 344 B batched, the -12 B of three projectile slots' `hitRootBodyId`). The ring
+    // term is UNTOUCHED at 5 x (168+7) = 875 B. 1228 = 875 + 344 + 9; the conclusion is unchanged
+    // and holds by 276 B. ⚠ Found by running the suite again, not named in advance: the brief
+    // listed "the ring/round budgets" and the kStateWireBytes row was re-quoted, but this
+    // equality was missed until it fired (1228 == 1240).
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1228u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will

@@ -3,6 +3,7 @@
 
 #include "catch_amalgamated.hpp"
 #include "OGBrawler/BrawlerProjectileSimulation.h"
+#include "OGBrawler/BrawlerProjectileHitDetection.h"
 #include "OGSimulation/SimulationComposite.h"
 #include "OGSimulation/SimulationDependencies.h"
 #include "OGSimulation/SimulationSerialization.h"
@@ -18,7 +19,7 @@
 // Closed-form projectile (Task 13).
 //
 // The projectile slot stores ONLY launch parameters
-// { spawnTick, spawnPos, spawnDir, endTick, endReason, hitRootBodyId }; the
+// { spawnTick, spawnPos, spawnDir, endTick, endReason }; the
 // per-tick world position is DERIVED from
 //   pos(t) = spawnPos + spawnDir * projectileSpeed * dt * (currentTick - spawnTick)
 // and snapped onto the physics body each tick. "Alive" is the predicate
@@ -85,7 +86,12 @@ makeBindings()
     return b;
 }
 
-// Run one integrate tick at the given simulation tick.
+// Run one tick at the given simulation tick: the detector's projectile pass, then integrate.
+// [og-netcode-v2-field-defects task 17] Detection left integrate for
+// brawlerHitDetection::System's pre-integrate pass, which runs BEFORE every integrate of the
+// step. This helper runs that pass for this one shooter first, in that order, so every case
+// below still drives the whole per-tick path and its assertions are unchanged; the scripted
+// overlap report now reaches the detector's query instead of integrate's.
 // ic and state are modified in-place (deps holds references into the composite).
 static void callIntegrate(
     brawlerProjectileSimulation::InitialConditions& ic,
@@ -98,15 +104,17 @@ static void callIntegrate(
 {
     using namespace brawlerProjectileSimulation;
 
+    auto bindings = makeBindings();
+    brawlerHitDetection::detectProjectileHits(kDt, currentTick, sd, state, bindings, derived, physics, query);
+
     // Build a composite holding references to the caller's IC and State.
     SimulationComposite<InitialConditions, State> composite(ic, state);
     auto deps = makeDependencies<Dependencies>(composite);
 
     PlayerInput pi{};
-    IntegrationUtils<MockPhysicsAdapter, MockSpatialQueryAdapter> utils{ kDt, currentTick, physics, query };
-    AllInput<MockPhysicsAdapter, MockSpatialQueryAdapter> allInput{ pi, utils };
+    IntegrationUtils<MockPhysicsAdapter> utils{ kDt, currentTick, physics };
+    AllInput<MockPhysicsAdapter> allInput{ pi, utils };
 
-    auto bindings = makeBindings();
     integrate(kDt, allInput, sd, deps, bindings, derived);
 
     // Sync back: composite owns copies (the composite was constructed by value).
@@ -145,7 +153,9 @@ TEST_CASE("BrawlerProjectile.SpawnIntoEmptyPool", "[BrawlerProjectile]")
     REQUIRE(state.slots[0].spawnTick == spawnTick);
     REQUIRE(state.slots[0].endTick == 0u);
     REQUIRE(state.slots[0].endReason == 0u);
-    REQUIRE(state.slots[0].hitRootBodyId == BodyId{});
+    // [task 17] `REQUIRE(state.slots[0].hitRootBodyId == BodyId{});` stood here: the field left
+    // the wire. Its replacement is the pass's per-slot outcome, empty for a slot that hit nothing.
+    REQUIRE(derived.detectedThisTick[0].outcome == SlotOutcome::None);
     REQUIRE(state.slots[0].isAlive(spawnTick));
 
     // Body transform must reflect spawnPos (elapsed == 0 ⇒ derivedPos == spawnPos).
@@ -327,9 +337,51 @@ TEST_CASE("BrawlerProjectile.LifetimeExpiryKillsSlot", "[BrawlerProjectile]")
 }
 
 // ---------------------------------------------------------------------------
+// [og-netcode-v2-field-defects task 17] Test: a slot in CONTACT on the very tick its lifetime runs
+// out EXPIRES (endReason 1); it does not hit. Inside integrate this was the order of two branches
+// (lifetime before the overlap). Detection now runs in a separate pass before integrate, so the
+// pass must skip a slot integrate is about to expire, or it would route a hit for a shot the wire
+// records as expired. Pinned here because nothing else scripted contact on an expiry tick.
+// ---------------------------------------------------------------------------
+TEST_CASE("BrawlerProjectile.LifetimeExpiryWinsOverContactOnTheSameTick", "[BrawlerProjectile]")
+{
+    using namespace projectiletests;
+    using namespace brawlerProjectileSimulation;
+
+    const float maxLifetime = 1.f;
+    auto sd = makeStaticData(500.f, maxLifetime);
+    const uint32_t spawnTick   = 100u;
+    const uint32_t currentTick = spawnTick + 60u;   // elapsed 1.0 s >= maxLifetime
+
+    State state;
+    state.slots[0].spawnTick = spawnTick;
+    state.slots[0].spawnPos  = glm::vec3(0.f);
+    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].endTick   = 0u;
+
+    InitialConditions ic;
+    MockPhysicsAdapter physics{ kMaxProjectilePoolSize + 1 };
+    MockSpatialQueryAdapter query;
+    SpatialQueryHit hit{};
+    hit.rootBodyId       = BodyId{ 42 };
+    hit.objectPosition   = glm::vec3(5.f, 5.f, 0.f);
+    hit.bodyId           = BodyId{ 99 };
+    hit.objectCategories = CollisionCategories::single(collisionCategory::body);
+    query.nextReport.hits.push_back(hit);
+
+    DerivedState derived;
+    callIntegrate(ic, state, derived, physics, query, sd, currentTick);
+
+    REQUIRE(state.slots[0].endReason == 1u);
+    REQUIRE(state.slots[0].endTick == currentTick);
+    REQUIRE(derived.detectedThisTick[0].outcome == SlotOutcome::None);
+    REQUIRE(derived.hits.empty());
+}
+
+// ---------------------------------------------------------------------------
 // Test: overlap query reports a hit on a non-parent body — slot ends with
-// endReason == 2 (hit), hitRootBodyId recorded, body parked, derived.hits
-// populated.
+// endReason == 2 (hit), the struck root recorded (the detector's outcome since task 17),
+// body parked, derived.hits populated.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
 {
@@ -366,7 +418,10 @@ TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
 
     REQUIRE(state.slots[0].endReason == 2u);
     REQUIRE(state.slots[0].endTick == currentTick);
-    REQUIRE(state.slots[0].hitRootBodyId == BodyId{ 42 });
+    // [task 17] Was `state.slots[0].hitRootBodyId == BodyId{ 42 }`: the struck root now lives in
+    // the detector's per-slot outcome, the value routing branch 3 reads.
+    REQUIRE(derived.detectedThisTick[0].outcome == SlotOutcome::Hit);
+    REQUIRE(derived.detectedThisTick[0].struckRootBodyId == BodyId{ 42 });
     REQUIRE_FALSE(state.slots[0].isAlive(currentTick));
 
     const glm::vec3 parkPos = glm::vec3(physics.bodies[0].transform[3]);
@@ -471,7 +526,7 @@ TEST_CASE("BrawlerProjectile.BlockOnGuardFront", "[BrawlerProjectile]")
     // plain-hit reason (endReason==2). The distinction is load-bearing: T3 routing
     // filters on endReason==2 to fire HitFlinch, so a block must present as ==4 to
     // avoid routing HitFlinch onto a target whose guard absorbed the projectile —
-    // see BrawlerProjectileSimulation.h:506-515 for the full T11+T14 rationale.
+    // see the T14 note in brawlerProjectileSimulation::integrate for the rationale.
     REQUIRE(state.slots[0].endReason == 4u);
     REQUIRE(state.slots[0].endTick == currentTick);
     REQUIRE_FALSE(state.slots[0].isAlive(currentTick));
@@ -825,25 +880,26 @@ TEST_CASE("BrawlerProjectile.MultipleIndicatorsAccumulate", "[BrawlerProjectile]
 
 // ---------------------------------------------------------------------------
 // Test: wire footprint of the closed-form representation. The transient
-// bodyState is excluded from the wire, so each slot is 37 B and the SIM_VECTOR
-// State capacity is 4 + kMaxProjectilePoolSize * 37 B. T14 sizes the state sync
+// bodyState is excluded from the wire, so each slot is 33 B and the SIM_VECTOR
+// State capacity is 4 + kMaxProjectilePoolSize * 33 B. T14 sizes the state sync
 // buffer off this number.
+// [og-netcode-v2-field-defects task 17] 37 -> 33 B: hitRootBodyId left the slot.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerProjectile.WireFootprint", "[BrawlerProjectile]")
 {
     using namespace brawlerProjectileSimulation;
 
     // Per-slot: 4 (spawnTick) + 12 (spawnPos) + 12 (spawnDir)
-    //         + 4 (endTick) + 1 (endReason) + 4 (hitRootBodyId, BodyId=uint32) = 37.
+    //         + 4 (endTick) + 1 (endReason) = 33.
     constexpr std::uint32_t slotSize  = syncSize<ProjectileSlot>();
     constexpr std::uint32_t stateSize = syncSize<State>();
 
-    static_assert(slotSize == 37u, "closed-form ProjectileSlot wire size drifted");
-    static_assert(stateSize == sizeof(std::uint32_t) + kMaxProjectilePoolSize * 37u,
+    static_assert(slotSize == 33u, "closed-form ProjectileSlot wire size drifted");
+    static_assert(stateSize == sizeof(std::uint32_t) + kMaxProjectilePoolSize * 33u,
                   "State SIM_VECTOR capacity drifted");
 
-    REQUIRE(slotSize == 37u);
-    REQUIRE(stateSize == 4u + kMaxProjectilePoolSize * 37u);   // 115 B at capacity 3
+    REQUIRE(slotSize == 33u);
+    REQUIRE(stateSize == 4u + kMaxProjectilePoolSize * 33u);   // 103 B at capacity 3
 
     WARN("brawlerProjectileSimulation wire footprint: slot=" << slotSize
          << " B, State(SIM_VECTOR cap " << kMaxProjectilePoolSize << ")=" << stateSize << " B");
