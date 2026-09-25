@@ -203,6 +203,16 @@ struct FRoutingRig
                 brawlerProjectileSimulation::SlotOutcome::BlockedByGuard;
     }
 
+    // [movement-sim task 88] Pose a character's machine state as integrate would have left it at the
+    // end of the previous tick -- what routing reads to choose a projectile's spec.
+    void setMachineState(unsigned int id, DAttackState state, HitReactionKind reaction)
+    {
+        auto& machine = brawler(id).editAllState().editState()
+            .edit<dAttackMachineSimulation::State>();
+        machine.m_currentState = state;
+        machine.m_hitReaction  = reaction;
+    }
+
     const brawlerInboundHit::DerivedState& inbound(unsigned int id)
     {
         return brawler(id).getAllState().getDerivedState()
@@ -403,6 +413,10 @@ struct TickSample
     std::uint32_t projectileSpawnTick = 0u;
     std::uint32_t projectileEndTick   = 0u;
     unsigned int  projectileEndReason = 0u;
+    // [movement-sim task 88] The routed reaction on the target's slice, so a case can tell a
+    // projectile Stun from a projectile Knockback at the pass that routed it.
+    HitReactionKind reactionKind   = HitReactionKind::Stun;
+    float           knockbackSpeed = 0.f;
 };
 
 struct FEndToEndRig
@@ -431,6 +445,10 @@ struct FEndToEndRig
     // never spawned", so a projectile spawned on tick 0 is born free and never queries an
     // overlap. That is a property of the shipped slot encoding, not of this fixture.
     int       hadoukenOnTick = -1;
+    // [movement-sim task 88] Keep the tick-0 melee press EVEN WHEN a Hadouken is scheduled, so a
+    // case can swing first and shoot later. Off by default: every earlier case that sets
+    // `hadoukenOnTick` still presses nothing on tick 0.
+    bool      meleeOnTickZeroWithHadouken = false;
     glm::vec2 followUpStick{ 0.f, -1.f };   // -> kRightSequenceId (0), a left/right swing
     std::vector<TickSample> samples;
 
@@ -601,7 +619,8 @@ struct FEndToEndRig
             // the projectile the only thing the arm fires, and it keeps `(t == 0)` meaning
             // "the melee press" for every case written before this one.
             const bool firing   = hadoukenOnTick >= 0 && t == hadoukenOnTick;
-            const bool pressing = !firing && ((t == 0 && hadoukenOnTick < 0) || followUp);
+            const bool pressing = !firing
+                && ((t == 0 && (hadoukenOnTick < 0 || meleeOnTickZeroWithHadouken)) || followUp);
             const glm::vec2 stick = (t == 0) ? attackerStick
                                   : (followUp ? followUpStick : glm::vec2(0.f));
             const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
@@ -673,6 +692,10 @@ struct FEndToEndRig
                 .get<brawlerInboundHit::DerivedState>().wasHitThisTick;
             sample.hitDirectionXY = brawler(1u).getAllState().getDerivedState()
                 .get<brawlerInboundHit::DerivedState>().hitDirectionXY;
+            sample.reactionKind   = brawler(1u).getAllState().getDerivedState()
+                .get<brawlerInboundHit::DerivedState>().reactionKind;
+            sample.knockbackSpeed = brawler(1u).getAllState().getDerivedState()
+                .get<brawlerInboundHit::DerivedState>().knockbackSpeed;
             sample.targetMachine  = targetState.get<dAttackMachineSimulation::State>().m_currentState;
             sample.attackerMachine = brawler(0u).getAllState().getState()
                 .get<dAttackMachineSimulation::State>().m_currentState;
@@ -1616,6 +1639,253 @@ TEST_CASE("HitRouting.KnockbackDirectionIsTheSwingTangentWithFallback",
         REQUIRE(actual.x == actual.x);
         REQUIRE(actual.y == actual.y);
     }
+}
+
+// ===========================================================================
+// ⭐⭐ [movement-sim task 88] A PROJECTILE THAT HITS A FLINCHING TARGET LAUNCHES IT.
+//
+// Routing branch 3 selects the projectile's spec from the TARGET's machine state as the previous
+// tick left it: `m_currentState == HitFlinch` (either reaction kind -- user ruling 2026-09-21)
+// selects `m_projectileHitOnFlinchReaction` (Knockback, 2000), anything else the authored Stun.
+// The launch direction is the projectile's own travel direction (`spawnDir`), which branch 3
+// already passed and a Stun discards.
+//
+// ⛔ AC 3: THE ABSOLUTE PIN. Every other assertion here could be written relationally against the
+// spec, and a relational assertion FOLLOWS the literal wherever it moves (task 87 finding N-4).
+// The literal lines below are the ones a human has to retype; they were seen to go red when the
+// spec's kind and, separately, its speed were mutated (impl/impl_notes_projhit_88.md).
+// ===========================================================================
+TEST_CASE("HitRouting.ProjectileOnFlinchLaunchesElseStuns", "[SimulatableBrawler][HitRouting]")
+{
+    using namespace hitRoutingTests;
+
+    // 1. THE ABSOLUTE PIN on the hand-authored spec. NOT a computed expression.
+    {
+        FRoutingRig rig;
+        const HitReactionSpec& onFlinch = rig.staticData.m_projectileHitOnFlinchReaction;
+        INFO("m_projectileHitOnFlinchReaction: kind=" << int(onFlinch.kind)
+             << " speed=" << onFlinch.knockbackSpeed << " lockout=" << onFlinch.lockoutDuration);
+        REQUIRE(onFlinch.kind == HitReactionKind::Knockback);
+        REQUIRE(onFlinch.knockbackSpeed == Catch::Approx(2000.f).margin(1e-4f));
+        REQUIRE(onFlinch.lockoutDuration == Catch::Approx(0.f).margin(1e-6f));
+    }
+
+    // 2. ALL FIVE TARGET STATES through the real routing pass. The shooter and target are +X
+    //    apart and the shot travels +Y, so a Knockback direction of +Y can only be `spawnDir`,
+    //    never the position difference.
+    struct Row
+    {
+        const char*     what;
+        DAttackState    state;
+        HitReactionKind priorReaction;   // the machine's m_hitReaction -- must NOT matter
+        HitReactionKind expected;
+    };
+    const Row rows[] = {
+        { "Idle",                  DAttackState::Idle,        HitReactionKind::Stun,      HitReactionKind::Stun      },
+        { "Attacking",             DAttackState::Attacking,   HitReactionKind::Stun,      HitReactionKind::Stun      },
+        { "GuardFlinch",           DAttackState::GuardFlinch, HitReactionKind::Stun,      HitReactionKind::Stun      },
+        { "GuardFlinch, prior KB", DAttackState::GuardFlinch, HitReactionKind::Knockback, HitReactionKind::Stun      },
+        { "HitFlinch (stunned)",   DAttackState::HitFlinch,   HitReactionKind::Stun,      HitReactionKind::Knockback },
+        { "HitFlinch (sliding)",   DAttackState::HitFlinch,   HitReactionKind::Knockback, HitReactionKind::Knockback },
+    };
+    for (const Row& row : rows)
+    {
+        FRoutingRig rig;
+        rig.setPosition(0u, glm::vec3(0.f));
+        rig.setPosition(1u, glm::vec3(300.f, 0.f, 0.f));
+        rig.setMachineState(1u, row.state, row.priorReaction);
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 1.f, 0.f));
+        rig.route(13u);
+
+        const brawlerInboundHit::DerivedState& slice = rig.inbound(1u);
+        INFO(row.what << ": kind=" << int(slice.reactionKind) << " speed=" << slice.knockbackSpeed
+             << " dwell=" << slice.flinchDuration << " dir=(" << slice.hitDirectionXY.x << ", "
+             << slice.hitDirectionXY.y << ")");
+        REQUIRE(slice.wasHitThisTick);
+        REQUIRE(slice.reactionKind == row.expected);
+        if (row.expected == HitReactionKind::Knockback)
+        {
+            REQUIRE(slice.knockbackSpeed == Catch::Approx(2000.f).margin(1e-4f));
+            REQUIRE(slice.hitDirectionXY.x == Catch::Approx(0.f).margin(1e-5f));
+            REQUIRE(slice.hitDirectionXY.y == Catch::Approx(1.f).margin(1e-5f));
+            // The dwell is the melee knockback's: 2000 / launchDecel = 0.5 s at the shipped pair.
+            REQUIRE(slice.flinchDuration
+                    == Catch::Approx(2000.f / rig.launchDecel()).margin(1e-6f));
+            REQUIRE(slice.flinchDuration == Catch::Approx(0.5f).margin(1e-6f));
+        }
+        else
+        {
+            REQUIRE(slice.knockbackSpeed == 0.f);
+            REQUIRE(slice.hitDirectionXY == glm::vec2(0.f));
+            REQUIRE(slice.flinchDuration == Catch::Approx(0.65f).margin(1e-6f));
+        }
+        // The choice reads the TARGET, never the shooter: the shooter's slice is untouched.
+        REQUIRE_FALSE(rig.inbound(0u).wasHitThisTick);
+    }
+
+    // 3. The SHOOTER's state does not select anything: a flinching shooter's shot still stuns an
+    //    idle target.
+    {
+        FRoutingRig rig;
+        rig.setMachineState(0u, DAttackState::HitFlinch, HitReactionKind::Knockback);
+        rig.setMachineState(1u, DAttackState::Idle, HitReactionKind::Stun);
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
+        rig.route(13u);
+        REQUIRE(rig.inbound(1u).reactionKind == HitReactionKind::Stun);
+    }
+}
+
+// ===========================================================================
+// ⭐⭐ [movement-sim task 88] AC 2 -- THE SAME-TICK CASE, RE-DERIVED ON THE PRE-INTEGRATE TREE.
+//
+// Detection and routing both run in preIntegrate(t) over the end state of t-1
+// (og-netcode-v2-field-defects tasks 9, 17, 20). The target's machine enters HitFlinch only in
+// integrate(t), which consumes that pass's slice. So:
+//   * a melee hit and a projectile hit detected in the SAME pass are routed before either reaches
+//     the machine -> the projectile reads a non-flinching target and STAYS A STUN;
+//   * a projectile detected in the NEXT pass reads HitFlinch and converts.
+// ⛔ Do not "fix" the first bullet. It is the deterministic consequence of the reduction's
+// position, and this case exists so nobody changes it by accident.
+// ===========================================================================
+TEST_CASE("HitRouting.ProjectileOnFlinchSameTickStaysAStun", "[SimulatableBrawler][HitRouting]")
+{
+    using namespace hitRoutingTests;
+    using namespace hitRoutingTests::endToEnd;
+
+    // 1. THE TIMING PREMISE, MEASURED END TO END. `samples[t]` is recorded after the pass
+    //    pre(t+1) and before integrate(t+1), and neither detection nor routing writes the machine
+    //    state, so `samples[t].targetMachine` IS what that pass's branch 3 reads.
+    {
+        FEndToEndRig rig;   // the right swing: a knockback
+        rig.run(24);
+        int meleeRoutedAt = -1;
+        for (const TickSample& s : rig.samples)
+            if (meleeRoutedAt < 0 && s.wasHitThisTick) meleeRoutedAt = int(s.tick);
+        INFO("melee routed in the pass of sample " << meleeRoutedAt << "; machine there "
+             << int(rig.samples[std::size_t(meleeRoutedAt)].targetMachine) << ", next "
+             << int(rig.samples[std::size_t(meleeRoutedAt + 1)].targetMachine));
+        REQUIRE(meleeRoutedAt >= 0);
+        REQUIRE(rig.samples[std::size_t(meleeRoutedAt)].reactionKind == HitReactionKind::Knockback);
+        // The pass that routes the melee reads a target that is NOT flinching...
+        REQUIRE(rig.samples[std::size_t(meleeRoutedAt)].targetMachine != DAttackState::HitFlinch);
+        // ...and the very next pass reads one that is.
+        REQUIRE(rig.samples[std::size_t(meleeRoutedAt + 1)].targetMachine == DAttackState::HitFlinch);
+    }
+
+    // 2. THE SAME PASS: a melee knockback and a projectile hit on the same idle target, routed
+    //    together. The projectile stays a Stun.
+    //    ⚠ MEASURED SIDE EFFECT (pre-existing, not introduced by task 88): branch 3 runs after
+    //    branch 2 and resolveHitReaction OVERWRITES the slice, so the melee's knockback is
+    //    replaced by the projectile's stun -- last writer wins. Pinned here as observed; not
+    //    changed.
+    {
+        FRoutingRig rig;
+        rig.setPosition(0u, glm::vec3(0.f));
+        rig.setPosition(1u, glm::vec3(100.f, 0.f, 0.f));
+        rig.setMachineState(1u, DAttackState::Idle, HitReactionKind::Stun);
+        rig.setSequence(0u, dAttackDirection::kRightSequenceId);
+        rig.raiseRadialHit(0u, 1u);
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
+        rig.route(19u);
+
+        const brawlerInboundHit::DerivedState& slice = rig.inbound(1u);
+        INFO("same pass: kind=" << int(slice.reactionKind) << " speed=" << slice.knockbackSpeed
+             << " dwell=" << slice.flinchDuration);
+        REQUIRE(slice.wasHitThisTick);
+        REQUIRE(slice.reactionKind == HitReactionKind::Stun);
+        REQUIRE(slice.knockbackSpeed == 0.f);
+        REQUIRE(slice.flinchDuration == Catch::Approx(0.65f).margin(1e-6f));
+    }
+
+    // 3. THE NEXT PASS: the machine has now entered HitFlinch (as step 1 measured), so the
+    //    projectile converts.
+    {
+        FRoutingRig rig;
+        rig.setPosition(0u, glm::vec3(0.f));
+        rig.setPosition(1u, glm::vec3(100.f, 0.f, 0.f));
+        rig.setMachineState(1u, DAttackState::HitFlinch, HitReactionKind::Knockback);
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
+        rig.route(20u);
+        REQUIRE(rig.inbound(1u).reactionKind == HitReactionKind::Knockback);
+        REQUIRE(rig.inbound(1u).knockbackSpeed == Catch::Approx(2000.f).margin(1e-4f));
+    }
+}
+
+// ===========================================================================
+// ⭐ [movement-sim task 88] END TO END: a forward/overhead STUN, then a Hadouken while the target is
+// still stunned. The second hit must LAUNCH the target along the shot's travel direction (+X).
+// The control arm fires the same Hadouken at an IDLE target and must still stun it.
+// ⚠ Only the STUNNED half of "either kind" is reachable here: a knockback moves the target off
+// the shot's line in this rig, so the sliding half is pinned on the posed rig above.
+// ===========================================================================
+TEST_CASE("HitRouting.ProjectileOnStunnedTargetLaunchesEndToEnd", "[SimulatableBrawler][HitRouting]")
+{
+    using namespace hitRoutingTests;
+    using namespace hitRoutingTests::endToEnd;
+
+    // After sequence 4 the attacker is Idle from tick 33 (HitRouting.StunHitFiresOnce) and the
+    // stun holds the target in HitFlinch to tick 58 -- 40 sits inside both with margin, and both
+    // premises are re-measured below rather than trusted.
+    constexpr int kFireTick = 40;
+
+    auto firstHitFrom = [](const FEndToEndRig& rig, int fromTick)
+    {
+        for (const TickSample& s : rig.samples)
+            if (int(s.tick) >= fromTick && s.wasHitThisTick) return int(s.tick);
+        return -1;
+    };
+
+    // --- CONTROL: the shot alone, target Idle -> the authored Stun.
+    {
+        FEndToEndRig rig;
+        rig.hadoukenOnTick = kFireTick;
+        rig.run(kFireTick + 20);
+        const int shotAt = firstHitFrom(rig, 0);
+        INFO("control: shot routed at sample " << shotAt);
+        REQUIRE(shotAt > kFireTick - 1);
+        REQUIRE(rig.hitTickCount() == 1u);
+        REQUIRE(rig.samples[std::size_t(shotAt)].targetMachine == DAttackState::Idle);
+        REQUIRE(rig.samples[std::size_t(shotAt)].reactionKind == HitReactionKind::Stun);
+        REQUIRE(rig.samples[std::size_t(shotAt)].knockbackSpeed == 0.f);
+    }
+
+    // --- THE CASE: stun first, then the shot.
+    FEndToEndRig rig;
+    rig.attackerStick = glm::vec2(0.f);         // forward -> sequence 4, the stun row
+    rig.hadoukenOnTick = kFireTick;
+    rig.meleeOnTickZeroWithHadouken = true;
+    rig.run(kFireTick + 30);
+
+    const int meleeAt = firstHitFrom(rig, 0);
+    const int shotAt  = firstHitFrom(rig, meleeAt + 1);
+    INFO("melee routed at sample " << meleeAt << ", shot routed at sample " << shotAt
+         << "; attacker at fire-1 " << int(rig.samples[std::size_t(kFireTick - 1)].attackerMachine));
+    REQUIRE(meleeAt >= 0);
+    REQUIRE(rig.samples[std::size_t(meleeAt)].reactionKind == HitReactionKind::Stun);
+    // PREMISE: the attacker is Idle on the tick before the fire tick, so the Hadouken fires.
+    REQUIRE(rig.samples[std::size_t(kFireTick - 1)].attackerMachine == DAttackState::Idle);
+    REQUIRE(shotAt > kFireTick - 1);
+    REQUIRE(rig.hitTickCount() == 2u);
+
+    const TickSample& shot = rig.samples[std::size_t(shotAt)];
+    INFO("shot pass: target machine " << int(shot.targetMachine) << " kind "
+         << int(shot.reactionKind) << " speed " << shot.knockbackSpeed << " dir ("
+         << shot.hitDirectionXY.x << ", " << shot.hitDirectionXY.y << ")");
+    // PREMISE: the pass read a STUNNED target.
+    REQUIRE(shot.targetMachine == DAttackState::HitFlinch);
+    // THE CLAIM: launched, at 2000, along the shot's travel (+X, away from the shooter).
+    REQUIRE(shot.reactionKind == HitReactionKind::Knockback);
+    REQUIRE(shot.knockbackSpeed == Catch::Approx(2000.f).margin(1e-4f));
+    REQUIRE(shot.hitDirectionXY.x == Catch::Approx(1.f).margin(1e-5f));
+    REQUIRE(shot.hitDirectionXY.y == Catch::Approx(0.f).margin(1e-5f));
+
+    // ...and the target's movement sim carries it out on the next integrate: it moves +X.
+    const TickSample& after = rig.samples[std::size_t(shotAt + 1)];
+    INFO("after: velocity (" << after.targetVelocity.x << ", " << after.targetVelocity.y
+         << ") machine " << int(after.targetMachine));
+    REQUIRE(after.targetMachine == DAttackState::HitFlinch);
+    REQUIRE(after.targetVelocity.x == Catch::Approx(2000.f).margin(1.f));   // measured (2000, 0)
+    REQUIRE(after.targetVelocity.y == Catch::Approx(0.f).margin(1e-3f));
 }
 
 #endif // WITH_LOW_LEVEL_TESTS
