@@ -114,12 +114,14 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 //     to parentPosition + attachmentOffset, both zero — so `hitDirection` IS the hit's
 //     world position, and the numbers below are the ones in the comments.
 //
-// ⚠ `DerivedState()` seeds attackHits/guardHits with FOUR default entries and
-// the detector's cap check early-returns at `size() >= 4`. Without the clear below
-// EVERY case here would pass vacuously at 0 hits — hence the positive controls.
+// ⚠ `DerivedState()` used to seed its hit vectors with FOUR default entries (until
+// movement-sim task 34) and the detector's cap check early-returned on them. The per-swing
+// ledger is the synced `State::hitTargets` since og-netcode-v2-field-defects task 27 and
+// starts empty here; the positive controls still prove a 0 is the geometry. One pass
+// registers into `hitsThisTick`, and that count is what `radialBodyHits` returns.
 // ===========================================================================
 
-static std::size_t radialAttackHits(float planarX,
+static std::size_t radialBodyHits(float planarX,
                                     float hitZ,
                                     float halfThickness,
                                     float innerRadius,
@@ -143,7 +145,6 @@ static std::size_t radialAttackHits(float planarX,
     ic.initialAimAngle        = 0.f;
     ic.initialAimRotationAxis = glm::vec3(0.f, 0.f, 1.f);
     ic.activeAttackSequence   = 0u;
-    ic.activeRootBodyId       = 0u;
 
     State st{};
     st.attackTimer      = 0.f;
@@ -177,17 +178,16 @@ static std::size_t radialAttackHits(float planarX,
     bindings.queryVolumeIds   = { QueryVolumeId{ 1u } };
 
     DerivedState derived{};
-    derived.editAttackHits().clear();
-    derived.editGuardHits().clear();
 
     integrate(kDt, allInput, staticData, deps, bindings, derived);
     // [og-netcode-v2-field-defects task 9] The production tick's second step: detection runs
     // AFTER the radial's integrate, on the state it left, exactly as
     // brawlerHitDetection::System::preIntegrate does for every character on the next tick (task 20).
     brawlerHitDetection::detectRadialHits(kDt, staticData, composite.get<InitialConditions>(),
-        composite.get<State>(), bindings, derived, physics, query);
+        composite.get<State>(), bindings, derived, physics, query,
+        [](BodyId root) { return root == BodyId{ 5u } ? SimCharacterId{ 5u } : SimCharacterId::None; });
 
-    return derived.getAttackHits().size();
+    return derived.getHitsThisTick().size();
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ static float measureHitDistance(float planarX, float hitZ, float halfThickness)
     for (int i = 0; i < 40; ++i)
     {
         const float mid = 0.5f * (lo + hi);
-        if (radialAttackHits(planarX, hitZ, halfThickness, /*innerRadius*/ 0.5f, mid) == 1u)
+        if (radialBodyHits(planarX, hitZ, halfThickness, /*innerRadius*/ 0.5f, mid) == 1u)
             hi = mid;
         else
             lo = mid;
@@ -284,31 +284,31 @@ TEST_CASE("DAttackRadial.SwingReachIsSymmetricAboveAndBelowThePlane",
         // Not discriminating, and not meant to be: it exists so that a 0 below cannot be
         // read as a rig that never records anything (which is what an un-cleared
         // DerivedState gives — see the header note).
-        REQUIRE(radialAttackHits(75.f, 0.f, 40.f, 50.f, 100.f) == 1u);
+        REQUIRE(radialBodyHits(75.f, 0.f, 40.f, 50.f, 100.f) == 1u);
     }
 
     SECTION("OUTWARD REACH — 35 cm ABOVE the plane, 75 cm out: hit")
     {
         // Green before AND after. Paired with the arm below, it localises the defect to
         // the below-plane case rather than to the fixture.
-        REQUIRE(radialAttackHits(75.f, +35.f, 40.f, 50.f, 100.f) == 1u);
+        REQUIRE(radialBodyHits(75.f, +35.f, 40.f, 50.f, 100.f) == 1u);
     }
 
     SECTION("OUTWARD REACH — 35 cm BELOW the plane, 75 cm out: hit (was a MISS)")
     {
         INFO("pre-fix: 0 hits — hitDistance read 102.59 against a 100 cm outer radius");
-        REQUIRE(radialAttackHits(75.f, -35.f, 40.f, 50.f, 100.f) == 1u);
+        REQUIRE(radialBodyHits(75.f, -35.f, 40.f, 50.f, 100.f) == 1u);
     }
 
     SECTION("INWARD HOLE — 20 cm ABOVE the plane, 45 cm out: no hit")
     {
-        REQUIRE(radialAttackHits(45.f, +20.f, 40.f, 50.f, 100.f) == 0u);
+        REQUIRE(radialBodyHits(45.f, +20.f, 40.f, 50.f, 100.f) == 0u);
     }
 
     SECTION("INWARD HOLE — 20 cm BELOW the plane, 45 cm out: no hit (was a PHANTOM hit)")
     {
         INFO("pre-fix: 1 hit — hitDistance read 60.21, inside the 50..100 annulus");
-        REQUIRE(radialAttackHits(45.f, -20.f, 40.f, 50.f, 100.f) == 0u);
+        REQUIRE(radialBodyHits(45.f, -20.f, 40.f, 50.f, 100.f) == 0u);
     }
 }
 
@@ -337,13 +337,13 @@ TEST_CASE("DAttackRadial.SwingPlaneHalfThicknessGateStaysUnsigned",
     using namespace dattackradialswingplanetests;
 
     // 5.3 cm from the plane, half-thickness 5.5 — inside the disc on both sides.
-    REQUIRE(radialAttackHits(75.f, +5.3f, 5.5f, 50.f, 100.f) == 1u);
-    REQUIRE(radialAttackHits(75.f, -5.3f, 5.5f, 50.f, 100.f) == 1u);
+    REQUIRE(radialBodyHits(75.f, +5.3f, 5.5f, 50.f, 100.f) == 1u);
+    REQUIRE(radialBodyHits(75.f, -5.3f, 5.5f, 50.f, 100.f) == 1u);
 
     // 5.7 cm from the plane — outside the disc on both sides. The negative arm is the
     // one that goes red if the gate is ever handed the signed value.
-    REQUIRE(radialAttackHits(75.f, +5.7f, 5.5f, 50.f, 100.f) == 0u);
-    REQUIRE(radialAttackHits(75.f, -5.7f, 5.5f, 50.f, 100.f) == 0u);
+    REQUIRE(radialBodyHits(75.f, +5.7f, 5.5f, 50.f, 100.f) == 0u);
+    REQUIRE(radialBodyHits(75.f, -5.7f, 5.5f, 50.f, 100.f) == 0u);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

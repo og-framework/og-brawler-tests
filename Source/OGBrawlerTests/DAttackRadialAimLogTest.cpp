@@ -126,7 +126,6 @@ static std::vector<std::string> captureRadialLines(float aimAngle, const glm::ve
     ic.initialAimAngle        = aimAngle;
     ic.initialAimRotationAxis = aimAxis;
     ic.activeAttackSequence   = icSequence;
-    ic.activeRootBodyId       = 0u;
 
     State st{};
     st.attackTimer      = attackTimer;

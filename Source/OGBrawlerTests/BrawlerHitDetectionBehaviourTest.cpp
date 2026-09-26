@@ -384,13 +384,14 @@ TEST_CASE("HitDetection.Behaviour.ReplayWithoutItsOwnPreIntegrateLosesTheRecoil"
 // PRE-TASK-20 (RED): wasHitThisTick was written by post-integrate routing of T and never re-run
 // by the replay -> the target stays Idle on the replayed T+1 (the older hole, since T3).
 //
-// ⚠ THE LEDGER. Detection skips a target already in the attacker's per-SWING `attackHits`
-// ledger, and that ledger is DerivedState: a restore does not roll it back. So the replay
-// re-detects the hit only if the ledger no longer holds the target at the frontier, i.e. the
-// swing ended (deactivate cleared it) before the correction landed:
-//   * section "frontier after the swing ended": GREEN with task 20;
-//   * section "frontier mid-swing": the stale ledger still suppresses the hit. Pinned as the
-//     CURRENT behaviour; Backlog task 21 (`attackHits` on the wire) is what flips it.
+// ⚠ THE LEDGER. Detection skips a target already in the attacker's per-SWING ledger. Until
+// og-netcode-v2-field-defects task 27 that ledger was DerivedState, which a restore does not roll
+// back, so the replay re-detected the hit only if the swing had ended before the correction
+// landed; section "frontier mid-swing" pinned the replay's target as Idle. Task 27 moved the
+// ledger onto the wire (`State::hitTargets`, appended by the radial's integrate the tick AFTER
+// the detection), so the restore brings back end-of-T's EMPTY ledger and the replayed T+1
+// re-detects. That section was the task-27 positive control: RED (`Idle`) on the tree before
+// it, GREEN (`HitFlinch`, == live) after.
 // ---------------------------------------------------------------------------
 TEST_CASE("HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheBodyHitTickFlinchesTheTarget",
           "[SimulatableBrawler][HitDetection]")
@@ -426,29 +427,30 @@ TEST_CASE("HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheBodyHitTickFlinches
         DAttackState live = DAttackState::Idle;
         runLiveTo(rig, T + 30, endOfT, live);
         REQUIRE(live == DAttackState::HitFlinch);
-        const auto& ledger = rig.brawler(0u).getAllState().getDerivedState()
-            .get<dAttackRadialSimulation::DerivedState>().getAttackHits();
-        REQUIRE(ledger.empty());   // premise: the swing's deactivate cleared it
+        const auto& ledger = rig.brawler(0u).getAllState().getState()
+            .get<dAttackRadialSimulation::State>().hitTargets;
+        REQUIRE(ledger[0] == SimCharacterId::None);   // premise: the swing's deactivate cleared it
         const DAttackState replay = replayT1(rig, endOfT);
         INFO("live target T+1=" << name(live) << " replay target T+1=" << name(replay));
         CHECK(replay == DAttackState::HitFlinch);
         CHECK(replay == live);
     }
 
-    SECTION("frontier mid-swing: the un-restored ledger still suppresses the hit (task 21)")
+    SECTION("frontier mid-swing: the restored synced ledger lets the replay re-detect (task 27)")
     {
         Rig rig;
         Rig::Snapshot endOfT;
         DAttackState live = DAttackState::Idle;
         runLiveTo(rig, T + 4, endOfT, live);
         REQUIRE(live == DAttackState::HitFlinch);
-        const auto& ledger = rig.brawler(0u).getAllState().getDerivedState()
-            .get<dAttackRadialSimulation::DerivedState>().getAttackHits();
-        REQUIRE(ledger.size() == 1u);   // premise: the target is still ledgered
+        const auto& ledger = rig.brawler(0u).getAllState().getState()
+            .get<dAttackRadialSimulation::State>().hitTargets;
+        REQUIRE(ledger[0] == SimCharacterId{ 1u });   // premise: the frontier's ledger holds the target
+        REQUIRE(endOfT.a.get<dAttackRadialSimulation::State>().hitTargets[0] == SimCharacterId::None);
         const DAttackState replay = replayT1(rig, endOfT);
-        INFO("live target T+1=" << name(live) << " replay target T+1=" << name(replay)
-             << " -- flips to HitFlinch when the ledger rides the wire (Backlog task 21)");
-        CHECK(replay == DAttackState::Idle);
+        INFO("live target T+1=" << name(live) << " replay target T+1=" << name(replay));
+        CHECK(replay == DAttackState::HitFlinch);
+        CHECK(replay == live);
     }
 }
 
@@ -639,7 +641,7 @@ TEST_CASE("HitDetection.Behaviour.NeverIntegratedBrawlerIsSkippedByTheDetector",
     const auto& derived = rig.brawler(2u).getAllState().getDerivedState();
     const auto& radialDerived = derived.get<dAttackRadialSimulation::DerivedState>();
     CHECK(radialDerived.getHitsThisTick().empty());
-    CHECK(radialDerived.getAttackHits().empty());
+    CHECK(radial.hitTargets[0] == SimCharacterId::None);
     CHECK_FALSE(radialDerived.getGuardBlockedThisTick());
     CHECK_FALSE(derived.get<brawlerInboundHit::DerivedState>().wasGuardBlockedThisTick);
 
@@ -680,7 +682,7 @@ TEST_CASE("HitDetection.Behaviour.FreshCharacterMeetsTheDetectorBeforeItsFirstIn
         const auto& radialDerived = rig.brawler(2u).getAllState().getDerivedState()
             .get<dAttackRadialSimulation::DerivedState>();
         CHECK(radialDerived.getHitsThisTick().empty());
-        CHECK(radialDerived.getAttackHits().empty());
+        CHECK(radial.hitTargets[0] == SimCharacterId::None);
         CHECK_FALSE(radialDerived.getGuardBlockedThisTick());
         CHECK_FALSE(rig.inbound(2u).wasHitThisTick);
     }
@@ -693,7 +695,12 @@ TEST_CASE("HitDetection.Behaviour.FreshCharacterMeetsTheDetectorBeforeItsFirstIn
 //     after T+1's physics step. The swing's deactivate on T+1 used to clear it, which after the
 //     move would have erased it before any snapshot saw it.
 //   * An attacker the replay does NOT integrate (the NoSlot row) keeps last pass's hitsThisTick;
-//     without the detector's own clear the next pass would route that hit a second time.
+//     without the detector's own clear the next pass would carry that entry beside its own.
+//     [og-netcode-v2-field-defects task 27, user ruling 2026-09-26] Since the per-swing ledger is
+//     the synced State::hitTargets, recorded only by the attacker's OWN integrate, a mid-swing
+//     attacker the replay skips never records the target, so the next pass RE-DETECTS it and
+//     routes it again (the derived ledger used to suppress that). Accepted and pinned as the
+//     measured behaviour: one registration per skipped pass, never two (the detector's clear).
 TEST_CASE("HitDetection.Behaviour.TheDetectorOwnsThePerTickSignalsItWrites",
           "[SimulatableBrawler][HitDetection]")
 {
@@ -725,7 +732,7 @@ TEST_CASE("HitDetection.Behaviour.TheDetectorOwnsThePerTickSignalsItWrites",
         CHECK(guardHits() == 0u);        // one tick wide, not sticky
     }
 
-    SECTION("an attacker left un-integrated does not re-route last pass's hit")
+    SECTION("an attacker left un-integrated re-detects once per pass and never doubles the entry")
     {
         Rig rig;
         for (int t = 0; t <= T; ++t)
@@ -739,8 +746,18 @@ TEST_CASE("HitDetection.Behaviour.TheDetectorOwnsThePerTickSignalsItWrites",
         ResolvedInputs<SimulatableBrawler> targetOnly;
         std::get<0>(targetOnly).emplace(1u, Rig::targetInput(false));
         rig.step(static_cast<std::uint32_t>(T + 1), true, targetOnly);
-        INFO("target slice after the reduction over T+1: wasHit=" << rig.inbound(1u).wasHitThisTick);
-        CHECK_FALSE(rig.inbound(1u).wasHitThisTick);
+        const auto& attackerRadial = rig.brawler(0u).getAllState().getState()
+            .get<dAttackRadialSimulation::State>();
+        const std::size_t entries = rig.brawler(0u).getAllState().getDerivedState()
+            .get<dAttackRadialSimulation::DerivedState>().getHitsThisTick().size();
+        INFO("target slice after the reduction over T+1: wasHit=" << rig.inbound(1u).wasHitThisTick
+             << " attacker hitsThisTick=" << entries);
+        // The skipped integrate recorded nothing: the synced ledger is frozen empty.
+        CHECK(attackerRadial.hitTargets[0] == SimCharacterId::None);
+        // Re-detected and routed again (task 27 ruling) ...
+        CHECK(rig.inbound(1u).wasHitThisTick);
+        // ... but as ONE entry: the detector's own clear (G-13) dropped last pass's.
+        CHECK(entries == 1u);
     }
 }
 

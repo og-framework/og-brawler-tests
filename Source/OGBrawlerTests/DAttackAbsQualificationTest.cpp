@@ -150,16 +150,17 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 //   * the surviving gate is `lengthAlongRotationAxis < halfThickness`, which is a
 //     BOOLEAN. The probe reads 1 hit vs 0 hits — the widest margin available.
 //
-// ⚠ `DerivedState`'s default constructor seeds attackHits/guardHits with FOUR
-// default-constructed entries (true until movement-sim task 34, which made it a reserve), and
-// the detector's cap check early-returns at `size() >= 4`. The rig clears both, which is what the live sim's deactivate()
-// path does before the first damaging tick. Without the clear every case here would
-// pass vacuously (0 hits under BOTH overloads) — see the positive control below.
+// ⚠ `DerivedState`'s default constructor used to seed its hit vectors with FOUR
+// default-constructed entries (until movement-sim task 34, which made it a reserve), and
+// the detector's cap check early-returned on them. The per-swing ledger is the synced
+// `State::hitTargets` since og-netcode-v2-field-defects task 27 and starts empty here, so a
+// case can only pass vacuously if the geometry rejects the hit -- see the positive control below.
+// One pass registers into `hitsThisTick`; that count is the observable (`bodyHits`).
 // ===========================================================================
 
 struct RadialTickResult
 {
-    std::size_t attackHits = 0;
+    std::size_t bodyHits   = 0;
     std::size_t guardHits  = 0;
 };
 
@@ -183,7 +184,6 @@ static RadialTickResult radialTick(float hitZ, float halfThickness)
     ic.initialAimAngle        = 0.f;
     ic.initialAimRotationAxis = glm::vec3(0.f, 0.f, 1.f);
     ic.activeAttackSequence   = 0u;
-    ic.activeRootBodyId       = 0u;
 
     State st{};
     st.attackTimer      = 0.f;
@@ -218,17 +218,16 @@ static RadialTickResult radialTick(float hitZ, float halfThickness)
     bindings.queryVolumeIds   = { QueryVolumeId{ 1u } };
 
     DerivedState derived{};
-    derived.editAttackHits().clear();
-    derived.editGuardHits().clear();
 
     integrate(kDt, allInput, staticData, deps, bindings, derived);
     // [og-netcode-v2-field-defects task 9] The production tick's second step: detection runs
     // AFTER the radial's integrate, on the state it left, exactly as
     // brawlerHitDetection::System::preIntegrate does for every character on the next tick (task 20).
     brawlerHitDetection::detectRadialHits(kDt, staticData, composite.get<InitialConditions>(),
-        composite.get<State>(), bindings, derived, physics, query);
+        composite.get<State>(), bindings, derived, physics, query,
+        [](BodyId root) { return root == BodyId{ 5u } ? SimCharacterId{ 5u } : SimCharacterId::None; });
 
-    return RadialTickResult{ derived.getAttackHits().size(), derived.getGuardHits().size() };
+    return RadialTickResult{ derived.getHitsThisTick().size(), derived.getGuardHits().size() };
 }
 
 // ===========================================================================
@@ -332,8 +331,8 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
         // that the "0 hits" in the arms below cannot be read as a rig that never
         // records anything (which is exactly what an un-cleared DerivedState gives).
         const RadialTickResult r = radialTick(/*hitZ*/ 0.3f, /*halfThickness*/ 0.5f);
-        INFO("attackHits = " << r.attackHits << " (expected 1 under BOTH overloads)");
-        REQUIRE(r.attackHits == 1u);
+        INFO("bodyHits = " << r.bodyHits << " (expected 1 under BOTH overloads)");
+        REQUIRE(r.bodyHits == 1u);
         REQUIRE(r.guardHits  == 0u);
     }
 
@@ -343,8 +342,8 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
         // int overload:   abs((int)0.6) = 0, and 0 < 0.5 is TRUE -> a phantom hit on a
         //                 body the swing passes cleanly under.
         const RadialTickResult r = radialTick(/*hitZ*/ 0.6f, /*halfThickness*/ 0.5f);
-        INFO("attackHits = " << r.attackHits << " (float overload: 0, int overload: 1)");
-        REQUIRE(r.attackHits == 0u);
+        INFO("bodyHits = " << r.bodyHits << " (float overload: 0, int overload: 1)");
+        REQUIRE(r.bodyHits == 0u);
     }
 
     SECTION("0.6 cm BELOW the plane — the same, and it pins the sign handling too")
@@ -354,8 +353,8 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
         // hand-rolled `v < 0 ? -v : v` on the WRONG type is the realistic way this
         // regresses, and only a negative operand distinguishes that from a no-op.
         const RadialTickResult r = radialTick(/*hitZ*/ -0.6f, /*halfThickness*/ 0.5f);
-        INFO("attackHits = " << r.attackHits << " (float overload: 0, int overload: 1)");
-        REQUIRE(r.attackHits == 0u);
+        INFO("bodyHits = " << r.bodyHits << " (float overload: 0, int overload: 1)");
+        REQUIRE(r.bodyHits == 0u);
     }
 
     SECTION("5.7 cm above the plane, half-thickness 5.5 cm — truncation at REAL scale")
@@ -365,8 +364,8 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
         // int: abs((int)5.7) = 5, and 5 < 5.5 is TRUE -> a phantom hit. Every swing in
         // the game works at this scale; the census's "(-1,1)" framing understates it.
         const RadialTickResult r = radialTick(/*hitZ*/ 5.7f, /*halfThickness*/ 5.5f);
-        INFO("attackHits = " << r.attackHits << " (float overload: 0, int overload: 1)");
-        REQUIRE(r.attackHits == 0u);
+        INFO("bodyHits = " << r.bodyHits << " (float overload: 0, int overload: 1)");
+        REQUIRE(r.bodyHits == 0u);
     }
 }
 

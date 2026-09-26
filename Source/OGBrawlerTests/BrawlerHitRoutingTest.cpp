@@ -71,7 +71,7 @@ namespace hitRoutingTests
 constexpr float kDt = 1.f / 60.f;
 
 // Two registered characters, the routing system, and the two handles a case needs to pose a hit:
-// the attacker's radial DerivedState (where `attackHits[]` lives) and the target's inbound slice.
+// the attacker's radial DerivedState (where `hitsThisTick[]` lives) and the target's inbound slice.
 //
 // ⚠ THE STORAGE IS THE PRODUCTION ONE. `brawlerHitRouting::System` takes a
 // `StorageView<SimulatableBrawler>` and sorts its own snapshot by ascending id (D4), so a rig that
@@ -130,10 +130,12 @@ struct FRoutingRig
     // `brawlerHitDetection::detectRadialHits` does (the radial's `collisionCheck` until
     // og-netcode-v2-field-defects task 9 moved detection into a system).
     //
-    // ⭐ [movement-sim task 83] BOTH CONTAINERS, and the default tangent is the ZERO VECTOR.
-    // The detector records every accepted hit twice -- in `attackHits`, the per-SWING
-    // dedup ledger, and in `hitsThisTick`, the one-tick signal routing consumes -- so a rig
-    // that posed only one of them would be posing a state the simulation cannot produce.
+    // ⭐ [movement-sim task 83] The default tangent is the ZERO VECTOR.
+    // [og-netcode-v2-field-defects task 27] The detector registers a hit in `hitsThisTick`
+    // only, with the struck character's peer-stable id; the attacker's own integrate records
+    // that id in the synced `State::hitTargets` ledger on the next integrate. Routing reads
+    // neither the ledger nor the id, so this rig poses the signal alone (until task 27 it also
+    // pushed the same hit into the derived per-SWING ledger, which no longer exists).
     // The zero tangent is not laziness either: it is the DEGENERATE case, and it is what
     // keeps the two pre-task-83 direction cases below meaningful. They assert the
     // away-from-attacker rule, which is now the FALLBACK rather than the primary rule, and
@@ -145,9 +147,9 @@ struct FRoutingRig
         hit.position = glm::vec3(0.f);
         hit.hitRootBodyId = rootBodyId(targetId);
         hit.swingTangent = swingTangent;
+        hit.targetId = static_cast<SimCharacterId>(targetId);
         auto& derived = brawler(attackerId).editAllState().editDerivedState()
             .edit<dAttackRadialSimulation::DerivedState>();
-        derived.editAttackHits().push_back(hit);
         derived.editHitsThisTick().push_back(hit);
     }
 
@@ -155,7 +157,6 @@ struct FRoutingRig
     {
         auto& derived = brawler(attackerId).editAllState().editDerivedState()
             .edit<dAttackRadialSimulation::DerivedState>();
-        derived.editAttackHits().clear();
         derived.editHitsThisTick().clear();
     }
 
@@ -242,8 +243,10 @@ struct FRoutingRig
 //     deterministic attacker walk order (D4), or two attackers hitting one target on the
 //     same tick.
 //   * NO ROLLBACK. Every tick is a fresh forward tick. The replay-dedup hazard (design
-//     section 4) -- attackHits is derived, is not restored on a resim, and a replay anchored
-//     before the hit tick registers nothing -- is INVISIBLE here and stays carried, not fixed.
+//     section 4) -- the per-swing ledger was derived, was not restored on a resim, and a replay
+//     anchored before the hit tick registered nothing -- is INVISIBLE here. It was closed by
+//     og-netcode-v2-field-defects task 27 (the ledger is synced) and is pinned in
+//     BrawlerHitDetectionBehaviourTest.cpp and BrawlerHitDedupPinsTest.cpp, not here.
 //   * THE WEAPON NEVER ROTATES. The physics mock returns the identity for every body, so the
 //     swing's segment never advances. That is what makes the hit tick a fixture choice
 //     instead of a geometry, and it means this harness cannot say anything about a hit that
@@ -395,7 +398,7 @@ struct TickSample
 {
     std::uint32_t tick            = 0u;
     unsigned int  radialSequence  = InvalidAttackSequenceId;
-    std::size_t   attackHits      = 0;   // the per-SWING ledger
+    std::size_t   ledgerTargets   = 0;   // the per-SWING ledger: synced State::hitTargets in use
     std::size_t   hitsThisTick    = 0;   // the per-TICK signal
     bool          wasHitThisTick  = false;
     DAttackState  targetMachine   = DAttackState::Idle;
@@ -478,6 +481,10 @@ struct FEndToEndRig
 
         system.onCharacterRegistered(0u, view(), staticData);
         system.onCharacterRegistered(1u, view(), staticData);
+        // [og-netcode-v2-field-defects task 27] The detector resolves a hit's root body to the
+        // struck character's SimCharacterId through its own registration map.
+        detection.onCharacterRegistered(0u, view(), staticData);
+        detection.onCharacterRegistered(1u, view(), staticData);
 
         // FLAT GROUND AT EXACTLY RIDE HEIGHT, scripted rather than swept: an infinite flat
         // floor gives a clearance that does not depend on where the capsule slid to, so a
@@ -686,7 +693,12 @@ struct FEndToEndRig
             sample.tick           = tick;
             sample.radialSequence = brawler(0u).getAllState().getState()
                 .get<dAttackRadialSimulation::State>().currenSequenceId;
-            sample.attackHits     = radialDerived.getAttackHits().size();
+            {
+                const auto& ledger = brawler(0u).getAllState().getState()
+                    .get<dAttackRadialSimulation::State>().hitTargets;
+                sample.ledgerTargets = static_cast<std::size_t>(std::count_if(ledger.begin(), ledger.end(),
+                    [](SimCharacterId id) { return id != SimCharacterId::None; }));
+            }
             sample.hitsThisTick   = radialDerived.getHitsThisTick().size();
             sample.wasHitThisTick = brawler(1u).getAllState().getDerivedState()
                 .get<brawlerInboundHit::DerivedState>().wasHitThisTick;
@@ -740,7 +752,7 @@ struct FEndToEndRig
         for (std::size_t i = from; i < to && i < samples.size(); ++i)
         {
             const TickSample& s = samples[i];
-            text += std::to_string(s.tick) + ":led" + std::to_string(s.attackHits)
+            text += std::to_string(s.tick) + ":led" + std::to_string(s.ledgerTargets)
                   + "/tick" + std::to_string(s.hitsThisTick)
                   + "/hit" + (s.wasHitThisTick ? "1" : "0") + " ";
         }
@@ -823,8 +835,10 @@ TEST_CASE("HitRouting.PerAttackReactionTableIsAuthoritative",
             // computed expression. The stun is a HAND-AUTHORED tuning knob; this line is
             // what forces a human to edit a test on purpose whenever that number moves.
             // Raised 0.3f -> 0.65f in task 86 so a forward/overhead hit outlasts the
-            // attacker's own recovery (see impl/design_stun_followup_window.md).
-            REQUIRE(slice.flinchDuration == Catch::Approx(0.65f).margin(1e-6f));
+            // attacker's own recovery (see impl/design_stun_followup_window.md). Raised
+            // 0.65f -> 0.72f by the user (og-brawler b8f6086, "so that a follow up side swipe
+            // cannot be blocked"); retyped here by og-netcode-v2-field-defects task 28.
+            REQUIRE(slice.flinchDuration == Catch::Approx(0.72f).margin(1e-6f));
         }
 
         // THE ATTACKER IS NOT HIT BY ITS OWN SWING (D5, pointer identity).
@@ -1073,7 +1087,7 @@ TEST_CASE("HitRouting.ProjectileOutcomeIsRoutedWhateverTheStepKind",
 // ===========================================================================
 // ⭐⭐ [movement-sim task 83] A RADIAL HIT FIRES ONCE. THIS IS THE USER'S BUG.
 //
-// The per-SWING dedup container was used as the per-TICK signal. `attackHits` accumulates
+// The per-SWING dedup container was used as the per-TICK signal. The ledger accumulates
 // across a whole swing and is cleared only in `deactivate()`; routing branch 2 iterated it on
 // every post-integrate, so ONE hit re-fired on EVERY remaining tick of the swing.
 //
@@ -1094,7 +1108,7 @@ TEST_CASE("HitRouting.RadialHitFiresOnceAcrossTheSwing", "[SimulatableBrawler][H
     std::size_t swingTicks = 0;
     for (const TickSample& s : rig.samples)
     {
-        ledgerPeak = std::max(ledgerPeak, s.attackHits);
+        ledgerPeak = std::max(ledgerPeak, s.ledgerTargets);
         if (isRealAttackSequence(s.radialSequence)) ++swingTicks;
     }
     INFO("trace " << rig.trace(kHitTick - 1u, kHitTick + 30u));
@@ -1108,7 +1122,7 @@ TEST_CASE("HitRouting.RadialHitFiresOnceAcrossTheSwing", "[SimulatableBrawler][H
     REQUIRE(swingTicks > 20u);
 
     std::size_t ledgerLiveTicks = 0;
-    for (const TickSample& s : rig.samples) if (s.attackHits == 1u) ++ledgerLiveTicks;
+    for (const TickSample& s : rig.samples) if (s.ledgerTargets == 1u) ++ledgerLiveTicks;
     INFO("the ledger was non-empty on " << ledgerLiveTicks << " ticks");
     REQUIRE(ledgerLiveTicks > 20u);
 
@@ -1119,7 +1133,10 @@ TEST_CASE("HitRouting.RadialHitFiresOnceAcrossTheSwing", "[SimulatableBrawler][H
     REQUIRE(rig.samples[kHitTick].hitsThisTick == 1u);
     // The tick after, the signal is gone even though the ledger still holds the entry. That
     // asymmetry is the whole fix, stated as an assertion.
-    REQUIRE(rig.samples[kHitTick + 1u].attackHits == 1u);
+    // [og-netcode-v2-field-defects task 27] The synced ledger records the hit on integrate(kHitTick+1),
+    // so it is first visible in sample kHitTick+1, the tick after the one that detected it.
+    REQUIRE(rig.samples[kHitTick].ledgerTargets == 0u);
+    REQUIRE(rig.samples[kHitTick + 1u].ledgerTargets == 1u);
     REQUIRE(rig.samples[kHitTick + 1u].hitsThisTick == 0u);
     REQUIRE_FALSE(rig.samples[kHitTick + 1u].wasHitThisTick);
 }
@@ -1223,13 +1240,13 @@ TEST_CASE("HitRouting.KnockbackTravelThroughRoutingIsTheClosedForm",
 
 // ===========================================================================
 // [movement-sim task 83] THE SAME CAUSE, ON THE STUN SIDE. A forward hit (sequence 4) is
-// authored as a stun with no knockback (0.3 s when task 83 was written, 0.65 s since task 86);
-// re-firing it every tick made the stun last for the rest of the swing plus that dwell.
+// authored as a stun with no knockback (0.3 s when task 83 was written, 0.65 s since task 86,
+// 0.72 s since the user's og-brawler b8f6086); re-firing it every tick made the stun last for the rest of the swing plus that dwell.
 //
 // RED BEFORE THE FIX.
 //
 // ⭐ [movement-sim task 86] AND IT NOW CARRIES THE FOLLOW-UP CLAIM TOO -- block 2 below. The
-// authored 0.65 s exists so that a forward/overhead hit outlasts the ATTACKER's own recovery,
+// authored 0.72 s exists so that a forward/overhead hit outlasts the ATTACKER's own recovery,
 // and that is a statement about ticks in the real simulation, not about a literal. It is
 // measured here, on this rig, rather than asserted in a document.
 // ===========================================================================
@@ -1268,7 +1285,7 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
     REQUIRE(enteredFlinchAt > 0);
     REQUIRE(leftFlinchAt > enteredFlinchAt);
 
-    // THE OBSERVABLE: one firing, and a dwell of 0.65 s measured FROM THE HIT TICK.
+    // THE OBSERVABLE: one firing, and a dwell of 0.72 s measured FROM THE HIT TICK.
     REQUIRE(rig.hitTickCount() == 1u);
     const float stunSpan = float(leftFlinchAt - int(kHitTick)) * kDt;
     INFO("stun span from the hit tick " << stunSpan << " s against an authored "
@@ -1277,7 +1294,8 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
     // HitRouting.ReactionTableIsAuthoritative: the stun duration is hand-authored, so the
     // only acceptable coupling to it is a line a human has to retype. ⛔ Do NOT replace this
     // with anything derived from getDuration(), swingTickCount() or a keyframe time.
-    REQUIRE(spec.lockoutDuration == Catch::Approx(0.65f).margin(1e-6f));
+    // Retyped 0.65f -> 0.72f for the user's b8f6086 (og-netcode-v2-field-defects task 28).
+    REQUIRE(spec.lockoutDuration == Catch::Approx(0.72f).margin(1e-6f));
     REQUIRE(stunSpan >= spec.lockoutDuration);
     REQUIRE(stunSpan <= spec.lockoutDuration + 3.f * kDt);
 
@@ -1292,7 +1310,7 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
     // =======================================================================
     // ⭐⭐ [movement-sim task 86] THE FOLLOW-UP WINDOW, MEASURED IN TICKS.
     //
-    // THE CLAIM the authored 0.65 s exists to make: *a forward/overhead hit leaves the
+    // THE CLAIM the authored 0.72 s exists to make: *a forward/overhead hit leaves the
     // attacker time to land a left/right before the defender recovers.*
     //
     // ⛔ A forward/overhead CANNOT CHAIN. The queue gate admits attackLeft only while the
@@ -1312,7 +1330,11 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
     //     tick 34  the held button starts a FRESH sequence 0
     //     tick 52  that swing's first damaging tick -- the follow-up CONNECTS
     //   ⇒ the window the stun must cover is 52 - 18 = 34 ticks = 0.567 s.
-    //   The authored 0.65 s ends the flinch on tick 58, so the margin is SIX ticks.
+    //   The flinch starts on 19 and holds ceil(dwell * 60) ticks, so it ends on
+    //   19 + ceil(dwell * 60): 0.65 s -> 19 + 39 = 58 (margin SIX ticks, task 86);
+    //   ⭐ 0.72 s (the user's b8f6086) -> 19 + ceil(43.2) = 63, so the margin is ELEVEN ticks
+    //   (0.183 s), measured 2026-09-26 (og-netcode-v2-field-defects task 28). The user's
+    //   intent -- the follow-up side swipe lands while the target is still stunned -- holds.
     //
     // ⚠ 0.55 s DOES NOT SUFFICE, and it was witnessed failing: it ends the flinch on
     //   tick 52 exactly, i.e. on the very tick the follow-up lands, and the REQUIRE below
@@ -1646,7 +1668,9 @@ TEST_CASE("HitRouting.KnockbackDirectionIsTheSwingTangentWithFallback",
 //
 // Routing branch 3 selects the projectile's spec from the TARGET's machine state as the previous
 // tick left it: `m_currentState == HitFlinch` (either reaction kind -- user ruling 2026-09-21)
-// selects `m_projectileHitOnFlinchReaction` (Knockback, 2000), anything else the authored Stun.
+// selects `m_projectileHitOnFlinchReaction` (Knockback), anything else the authored Stun. Task 88
+// designed its speed as 2000 (the melee knockback's); the user committed it as 1789 in og-brawler
+// d20fa81 (1789^2 / (2 * 4000) = 400 cm of travel against the melee's 500 cm).
 // The launch direction is the projectile's own travel direction (`spawnDir`), which branch 3
 // already passed and a Stun discards.
 //
@@ -1666,7 +1690,8 @@ TEST_CASE("HitRouting.ProjectileOnFlinchLaunchesElseStuns", "[SimulatableBrawler
         INFO("m_projectileHitOnFlinchReaction: kind=" << int(onFlinch.kind)
              << " speed=" << onFlinch.knockbackSpeed << " lockout=" << onFlinch.lockoutDuration);
         REQUIRE(onFlinch.kind == HitReactionKind::Knockback);
-        REQUIRE(onFlinch.knockbackSpeed == Catch::Approx(2000.f).margin(1e-4f));
+        // Retyped 2000.f -> 1789.f for the user's d20fa81 (og-netcode-v2-field-defects task 28).
+        REQUIRE(onFlinch.knockbackSpeed == Catch::Approx(1789.f).margin(1e-4f));
         REQUIRE(onFlinch.lockoutDuration == Catch::Approx(0.f).margin(1e-6f));
     }
 
@@ -1705,13 +1730,17 @@ TEST_CASE("HitRouting.ProjectileOnFlinchLaunchesElseStuns", "[SimulatableBrawler
         REQUIRE(slice.reactionKind == row.expected);
         if (row.expected == HitReactionKind::Knockback)
         {
-            REQUIRE(slice.knockbackSpeed == Catch::Approx(2000.f).margin(1e-4f));
+            // Relational: block 1 is the one absolute pin on the speed.
+            const HitReactionSpec& onFlinch = rig.staticData.m_projectileHitOnFlinchReaction;
+            REQUIRE(slice.knockbackSpeed == Catch::Approx(onFlinch.knockbackSpeed).margin(1e-4f));
             REQUIRE(slice.hitDirectionXY.x == Catch::Approx(0.f).margin(1e-5f));
             REQUIRE(slice.hitDirectionXY.y == Catch::Approx(1.f).margin(1e-5f));
-            // The dwell is the melee knockback's: 2000 / launchDecel = 0.5 s at the shipped pair.
+            // The dwell resolves as the melee knockback's does: max(lockout 0, speed / launchDecel).
             REQUIRE(slice.flinchDuration
-                    == Catch::Approx(2000.f / rig.launchDecel()).margin(1e-6f));
-            REQUIRE(slice.flinchDuration == Catch::Approx(0.5f).margin(1e-6f));
+                    == Catch::Approx(onFlinch.knockbackSpeed / rig.launchDecel()).margin(1e-6f));
+            // ...and absolutely, at the shipped pair: 1789 / 4000 = 0.44725 s (0.5 s at task
+            // 88's 2000). Retyped for the user's d20fa81 (og-netcode-v2-field-defects task 28).
+            REQUIRE(slice.flinchDuration == Catch::Approx(0.44725f).margin(1e-6f));
         }
         else
         {
@@ -1807,7 +1836,9 @@ TEST_CASE("HitRouting.ProjectileOnFlinchSameTickStaysAStun", "[SimulatableBrawle
         rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
         rig.route(20u);
         REQUIRE(rig.inbound(1u).reactionKind == HitReactionKind::Knockback);
-        REQUIRE(rig.inbound(1u).knockbackSpeed == Catch::Approx(2000.f).margin(1e-4f));
+        REQUIRE(rig.inbound(1u).knockbackSpeed
+                == Catch::Approx(rig.staticData.m_projectileHitOnFlinchReaction.knockbackSpeed)
+                       .margin(1e-4f));
     }
 }
 
@@ -1824,7 +1855,8 @@ TEST_CASE("HitRouting.ProjectileOnStunnedTargetLaunchesEndToEnd", "[SimulatableB
     using namespace hitRoutingTests::endToEnd;
 
     // After sequence 4 the attacker is Idle from tick 33 (HitRouting.StunHitFiresOnce) and the
-    // stun holds the target in HitFlinch to tick 58 -- 40 sits inside both with margin, and both
+    // stun holds the target in HitFlinch to tick 63 (58 before the user's 0.72 s, b8f6086) -- 40
+    // sits inside both with margin, and both
     // premises are re-measured below rather than trusted.
     constexpr int kFireTick = 40;
 
@@ -1873,9 +1905,12 @@ TEST_CASE("HitRouting.ProjectileOnStunnedTargetLaunchesEndToEnd", "[SimulatableB
          << shot.hitDirectionXY.x << ", " << shot.hitDirectionXY.y << ")");
     // PREMISE: the pass read a STUNNED target.
     REQUIRE(shot.targetMachine == DAttackState::HitFlinch);
-    // THE CLAIM: launched, at 2000, along the shot's travel (+X, away from the shooter).
+    // THE CLAIM: launched, at the on-flinch spec's speed (1789 since the user's d20fa81; the
+    // absolute pin is HitRouting.ProjectileOnFlinchLaunchesElseStuns), along the shot's travel
+    // (+X, away from the shooter).
+    const float onFlinchSpeed = rig.staticData.m_projectileHitOnFlinchReaction.knockbackSpeed;
     REQUIRE(shot.reactionKind == HitReactionKind::Knockback);
-    REQUIRE(shot.knockbackSpeed == Catch::Approx(2000.f).margin(1e-4f));
+    REQUIRE(shot.knockbackSpeed == Catch::Approx(onFlinchSpeed).margin(1e-4f));
     REQUIRE(shot.hitDirectionXY.x == Catch::Approx(1.f).margin(1e-5f));
     REQUIRE(shot.hitDirectionXY.y == Catch::Approx(0.f).margin(1e-5f));
 
@@ -1884,7 +1919,7 @@ TEST_CASE("HitRouting.ProjectileOnStunnedTargetLaunchesEndToEnd", "[SimulatableB
     INFO("after: velocity (" << after.targetVelocity.x << ", " << after.targetVelocity.y
          << ") machine " << int(after.targetMachine));
     REQUIRE(after.targetMachine == DAttackState::HitFlinch);
-    REQUIRE(after.targetVelocity.x == Catch::Approx(2000.f).margin(1.f));   // measured (2000, 0)
+    REQUIRE(after.targetVelocity.x == Catch::Approx(onFlinchSpeed).margin(1.f));
     REQUIRE(after.targetVelocity.y == Catch::Approx(0.f).margin(1e-3f));
 }
 

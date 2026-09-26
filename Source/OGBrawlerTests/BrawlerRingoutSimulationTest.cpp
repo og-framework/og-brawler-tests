@@ -944,7 +944,7 @@ template <typename... Ts> struct FRingoutSpawnPointsCompositeWireSize<Simulation
 
 TEST_CASE("Ringout.SpawnPoints.ReadingTheLevelCostsTheCompositeNothing", "[BrawlerRingout]")
 {
-    static_assert(FRingoutSpawnPointsCompositeWireSize<simulatableBrawler::State>::value == 326u,
+    static_assert(FRingoutSpawnPointsCompositeWireSize<simulatableBrawler::State>::value == 325u,
         "simulatableBrawler::State moved. Task 9 adds NO state - it replaces a compiled-in "
         "spawn table with one read off the level's APlayerStart actors, and StaticData has "
         "never been on the wire. If this fires, something else added a field: re-price the "
@@ -957,8 +957,9 @@ TEST_CASE("Ringout.SpawnPoints.ReadingTheLevelCostsTheCompositeNothing", "[Brawl
         "composite, kWireFormatVersion 3 -> 4, headroom 37 -> 38 B. "
         "[og-netcode-v2-field-defects task 17, 2026-09-24] 338 -> 326 B, and not this file's task "
         "either: brawlerProjectileSimulation::ProjectileSlot lost hitRootBodyId (4 B x 3 slots), "
-        "kWireFormatVersion 4 -> 5, headroom 38 -> 50 B.");
-    REQUIRE(FRingoutSpawnPointsCompositeWireSize<simulatableBrawler::State>::value == 326u);
+        "kWireFormatVersion 4 -> 5, headroom 38 -> 50 B. "
+        "[og-netcode-v2-field-defects task 27, 2026-09-26] 326 -> 325 B, and not this file's task either: dAttackRadialSimulation lost the dead InitialConditions activeRootBodyId (4 B) and its State gained the 3 B hitTargets ledger, kWireFormatVersion 5 -> 6, headroom 50 -> 51 B.");
+    REQUIRE(FRingoutSpawnPointsCompositeWireSize<simulatableBrawler::State>::value == 325u);
 
     // And the slice that DOES ride the wire is untouched at 4 B: the point is level data, the
     // index is network data, and task 9 moved only the first of those.
@@ -1678,7 +1679,7 @@ template <typename... Ts> struct FRingoutResimCompositeWireSize<SimulationCompos
 
 TEST_CASE("Ringout.Resim.TheResimTestsCostTheCompositeNothing", "[BrawlerRingout]")
 {
-    static_assert(FRingoutResimCompositeWireSize<simulatableBrawler::State>::value == 326u,
+    static_assert(FRingoutResimCompositeWireSize<simulatableBrawler::State>::value == 325u,
         "simulatableBrawler::State moved. Task 7 adds NO state - it is a test task. If this "
         "fires as part of a resim change, a field has been added to the composite; re-price the "
         "wire fences in SimulatableBrawlerTest.cpp and RoundVsPacketBudgetTest.cpp, and budget "
@@ -1691,8 +1692,9 @@ TEST_CASE("Ringout.Resim.TheResimTestsCostTheCompositeNothing", "[BrawlerRingout
         "composite, kWireFormatVersion 3 -> 4, headroom 37 -> 38 B. "
         "[og-netcode-v2-field-defects task 17, 2026-09-24] 338 -> 326 B, and not this file's task "
         "either: brawlerProjectileSimulation::ProjectileSlot lost hitRootBodyId (4 B x 3 slots), "
-        "kWireFormatVersion 4 -> 5, headroom 38 -> 50 B.");
-    REQUIRE(FRingoutResimCompositeWireSize<simulatableBrawler::State>::value == 326u);
+        "kWireFormatVersion 4 -> 5, headroom 38 -> 50 B. "
+        "[og-netcode-v2-field-defects task 27, 2026-09-26] 326 -> 325 B, and not this file's task either: dAttackRadialSimulation lost the dead InitialConditions activeRootBodyId (4 B) and its State gained the 3 B hitTargets ledger, kWireFormatVersion 5 -> 6, headroom 50 -> 51 B.");
+    REQUIRE(FRingoutResimCompositeWireSize<simulatableBrawler::State>::value == 325u);
 
     // ⭐ AND THE FIVE BYTES CASE 3 IS ABOUT ARE STILL ON THE WIRE. This is what makes the
     // mid-countdown case's premise machine-checked rather than assumed: `respawnAtTick` and the

@@ -40,12 +40,11 @@
 // at task 34. Detection is now `brawlerHitDetection::detectRadialHits`, run after integrate by
 // brawlerHitDetection::System; the cap and the reaching path below are unchanged by the move.
 //
-// THE DEFECT. `dAttackRadialSimulation::DerivedState()` seeded `attackHits` and
-// `guardHits` with FOUR default-constructed entries — `attackHits(4)` is a RESIZE, not
-// a reserve — and `collisionCheck`'s first line is
-//     if (derivedState.editAttackHits().size() >= 4) return;
-// a genuine "max 4 distinct targets per swing" cap (the container accumulates across the
-// whole swing, deduped by rootBodyId, and is cleared only in `deactivate`). A freshly
+// THE DEFECT. `dAttackRadialSimulation::DerivedState()` seeded its per-swing ledger and
+// `guardHits` with FOUR default-constructed entries — a member-init `(4)` is a RESIZE, not
+// a reserve — and `collisionCheck`'s first line returned once the ledger held four entries:
+// a genuine "max 4 distinct targets per swing" cap (the container accumulated across the
+// whole swing, deduped by rootBodyId, and was cleared only in `deactivate`). A freshly
 // constructed DerivedState therefore arrived at that cap ALREADY SATISFIED, and
 // collisionCheck became a silent no-op.
 //
@@ -88,6 +87,29 @@ static constexpr std::uint32_t kTargetRootBody = 42u;
 // The radial sub-simulation's query volume, so the scripted overlap report reaches the
 // radial sub-sim and NOT the guard/projectile/movement sub-sims that also run this tick.
 static constexpr std::uint32_t kRadialVolume = 7u;
+
+// [og-netcode-v2-field-defects task 27] The detector's resolver: the only character this rig
+// can hit is the scripted target, registered as SimCharacterId 2.
+static constexpr SimCharacterId kTargetId = SimCharacterId{ 2u };
+inline SimCharacterId resolveTargetId(BodyId root)
+{
+    return root == BodyId{ kTargetRootBody } ? kTargetId : SimCharacterId::None;
+}
+
+// The swing's hits so far: the synced ledger plus the last pass's registrations, which the
+// radial's next integrate would record. `onlyTarget` None counts every target.
+inline std::size_t swingHitsSoFar(const SimulatableBrawler& character, SimCharacterId onlyTarget)
+{
+    const auto& allState = character.getAllState();
+    std::size_t n = 0u;
+    for (const SimCharacterId id : allState.getState().get<dAttackRadialSimulation::State>().hitTargets)
+        if (id != SimCharacterId::None && (onlyTarget == SimCharacterId::None || id == onlyTarget))
+            ++n;
+    for (const auto& hit : allState.getDerivedState().get<dAttackRadialSimulation::DerivedState>().getHitsThisTick())
+        if (onlyTarget == SimCharacterId::None || hit.targetId == onlyTarget)
+            ++n;
+    return n;
+}
 
 // ---------------------------------------------------------------------------
 // Mocks — deliberately local to this TU, matching the convention of the sibling radial
@@ -137,18 +159,21 @@ struct MockSpatialQueryAdapter
 
 static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 
-// What one run of the rig observes. Both hit COUNTS are reported: the total exposes the
-// four phantom entries directly, while `attackHitsOnTarget` is the gameplay observable
+// What one run of the rig observes. Both hit COUNTS are reported: the total exposed the
+// four phantom entries directly, while `ledgerOnTarget` is the gameplay observable
 // and is immune to them — a swing that never fires reads 0 on target whether the
 // container holds four phantoms or nothing at all.
+// [og-netcode-v2-field-defects task 27] The ledger is the synced `State::hitTargets` now, and
+// integrate records a detection pass's hits on the NEXT integrate, so "the swing's hits so far"
+// after the rig's last detection is the ledger PLUS that pass's `hitsThisTick` (`swingHitsSoFar`).
 struct FirstTickOutcome
 {
     DAttackState  machineState        = DAttackState::Idle;
     unsigned int  machineSequence     = InvalidAttackSequenceId;
     unsigned int  radialSequenceId    = InvalidAttackSequenceId;
     float         radialAttackTimer   = 0.f;
-    std::size_t   attackHitsTotal     = 0;
-    std::size_t   attackHitsOnTarget  = 0;
+    std::size_t   ledgerTotal         = 0;
+    std::size_t   ledgerOnTarget      = 0;
     std::size_t   guardHitsTotal      = 0;
 };
 
@@ -223,7 +248,8 @@ static FirstTickOutcome runFirstTicks(int tickCount, float targetX, const glm::v
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
         // [og-netcode-v2-field-defects task 9] Detection is the tick's second step now:
         // brawlerHitDetection::System runs it after every integrate, on the state left behind.
-        brawlerHitDetection::detectRadialHits(kDt, character, staticData, physAdapter, queryAdapter);
+        brawlerHitDetection::detectRadialHits(kDt, character, staticData, physAdapter, queryAdapter,
+            resolveTargetId);
     }
 
     const auto& allState = character.getAllState();
@@ -237,13 +263,9 @@ static FirstTickOutcome runFirstTicks(int tickCount, float targetX, const glm::v
     out.machineSequence   = machineState.m_activeAttackSequence;
     out.radialSequenceId  = radialState.currenSequenceId;
     out.radialAttackTimer = radialState.attackTimer;
-    out.attackHitsTotal   = radialDerived.getAttackHits().size();
+    out.ledgerTotal       = swingHitsSoFar(character, SimCharacterId::None);
     out.guardHitsTotal    = radialDerived.getGuardHits().size();
-    out.attackHitsOnTarget = static_cast<std::size_t>(
-        std::count_if(radialDerived.getAttackHits().begin(),
-                      radialDerived.getAttackHits().end(),
-                      [](const dAttackRadialSimulation::DAttackHit& h)
-                      { return h.hitRootBodyId == BodyId{ kTargetRootBody }; }));
+    out.ledgerOnTarget    = swingHitsSoFar(character, kTargetId);
     return out;
 }
 
@@ -268,7 +290,7 @@ struct SwingOutcome
     DAttackState  machineState       = DAttackState::Idle;
     unsigned int  radialSequenceId   = InvalidAttackSequenceId;
     bool          registered         = false;
-    std::size_t   attackHitsTotal    = 0;
+    std::size_t   ledgerTotal        = 0;
     std::uint32_t hitTick            = 0u;
     float         attackTimerAtHit   = 0.f;
     float         authoredOmegaAtHit = 0.f;
@@ -345,19 +367,20 @@ static SwingOutcome runSwing(int tickCount, glm::vec3 targetPosition,
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
         // [og-netcode-v2-field-defects task 9] Detection is the tick's second step now:
         // brawlerHitDetection::System runs it after every integrate, on the state left behind.
-        brawlerHitDetection::detectRadialHits(kDt, character, staticData, physAdapter, queryAdapter);
+        brawlerHitDetection::detectRadialHits(kDt, character, staticData, physAdapter, queryAdapter,
+            resolveTargetId);
 
         const auto& radialDerived = character.getAllState().getDerivedState()
             .get<dAttackRadialSimulation::DerivedState>();
         const auto& radialState = character.getAllState().getState()
             .get<dAttackRadialSimulation::State>();
 
-        out.trace.emplace_back(radialState.currenSequenceId, radialDerived.getAttackHits().size());
+        out.trace.emplace_back(radialState.currenSequenceId, swingHitsSoFar(character, SimCharacterId::None));
 
-        if (!out.registered && !radialDerived.getAttackHits().empty())
+        if (!out.registered && !radialDerived.getHitsThisTick().empty())
         {
             const dAttackRadialSimulation::DAttackHit& registered =
-                radialDerived.getAttackHits().front();
+                radialDerived.getHitsThisTick().front();
             out.registered       = true;
             out.hitTick          = static_cast<std::uint32_t>(tick);
             out.attackTimerAtHit = timerBefore;
@@ -381,8 +404,7 @@ static SwingOutcome runSwing(int tickCount, glm::vec3 targetPosition,
         .get<dAttackMachineSimulation::State>().m_currentState;
     out.radialSequenceId = allState.getState()
         .get<dAttackRadialSimulation::State>().currenSequenceId;
-    out.attackHitsTotal  = allState.getDerivedState()
-        .get<dAttackRadialSimulation::DerivedState>().getAttackHits().size();
+    out.ledgerTotal      = swingHitsSoFar(character, SimCharacterId::None);
     return out;
 }
 
@@ -392,8 +414,8 @@ static SwingOutcome runSwing(int tickCount, glm::vec3 targetPosition,
 // ⭐ 1. THE ACCEPTANCE CRITERION — ONE TICK, FROM NOTHING, AND THE SWING CONNECTS.
 //
 // RED BEFORE THE FIX. Measured on the pre-fix header, 2026-09-04:
-//     attackHitsOnTarget = 0   (expected 1)
-//     attackHitsTotal    = 4   (the four phantom entries, untouched)
+//     hits on target = 0   (expected 1)
+//     ledger total   = 4   (the four phantom entries, untouched)
 //     guardHitsTotal     = 4   (ditto)
 // The premise assertions above the observable are what make this a walk of the reaching
 // path rather than a restatement of it: they say the machine really did transition out of
@@ -419,10 +441,10 @@ TEST_CASE("DAttackRadial.FirstTickSwingRegistersHits", "[DAttack][HitDetection][
     REQUIRE(out.radialAttackTimer == Catch::Approx(kDt).margin(1e-6f));
 
     // --- the observable ---
-    INFO("attackHitsOnTarget = " << out.attackHitsOnTarget
+    INFO("ledgerOnTarget = " << out.ledgerOnTarget
          << " (pre-fix: 0 — collisionCheck early-returned on four phantom entries)");
-    REQUIRE(out.attackHitsOnTarget == 1u);
-    REQUIRE(out.attackHitsTotal == 1u);      // pre-fix: 4
+    REQUIRE(out.ledgerOnTarget == 1u);
+    REQUIRE(out.ledgerTotal == 1u);      // pre-fix: 4
     REQUIRE(out.guardHitsTotal == 0u);       // pre-fix: 4
 }
 
@@ -434,7 +456,7 @@ TEST_CASE("DAttackRadial.FirstTickSwingRegistersHits", "[DAttack][HitDetection][
 // the `setInitialConditions` branch this time — and that function does not clear either
 // container, so the swing was blind here too.
 //
-// RED BEFORE THE FIX: attackHitsOnTarget = 0, attackHitsTotal = 4, guardHitsTotal = 4.
+// RED BEFORE THE FIX: hits on target = 0, ledger total = 4, guardHitsTotal = 4.
 //
 // Sequence 4 is the vertical one: rotation axis (0,1,0), points from -pi to +1.5pi/8 over
 // 0.42 s. Its plane contains the world X axis, so a target on that axis 150 cm out is
@@ -454,9 +476,9 @@ TEST_CASE("DAttackRadial.FirstTickSwingRegistersHitsForwardSequence", "[DAttack]
     // setInitialConditions DID run this time — it is what wrote this value.
     REQUIRE(out.radialSequenceId == 4u);
 
-    INFO("attackHitsOnTarget = " << out.attackHitsOnTarget << " (pre-fix: 0)");
-    REQUIRE(out.attackHitsOnTarget == 1u);
-    REQUIRE(out.attackHitsTotal == 1u);      // pre-fix: 4
+    INFO("ledgerOnTarget = " << out.ledgerOnTarget << " (pre-fix: 0)");
+    REQUIRE(out.ledgerOnTarget == 1u);
+    REQUIRE(out.ledgerTotal == 1u);      // pre-fix: 4
     REQUIRE(out.guardHitsTotal == 0u);       // pre-fix: 4
 }
 
@@ -482,17 +504,17 @@ TEST_CASE("DAttackRadial.FirstSwingKeepsRegisteringForItsWholeDuration", "[DAtta
     SECTION("target inside the annulus — one hit, deduped across ten ticks")
     {
         const FirstTickOutcome out = runFirstTicks(10, 150.f, glm::vec2(0.f, -1.f));
-        INFO("attackHitsOnTarget = " << out.attackHitsOnTarget << " (pre-fix: 0 for all ten ticks)");
-        REQUIRE(out.attackHitsOnTarget == 1u);
-        REQUIRE(out.attackHitsTotal == 1u);
+        INFO("ledgerOnTarget = " << out.ledgerOnTarget << " (pre-fix: 0 for all ten ticks)");
+        REQUIRE(out.ledgerOnTarget == 1u);
+        REQUIRE(out.ledgerTotal == 1u);
     }
 
     SECTION("NEGATIVE CONTROL — target 500 cm out, past the 300 cm outer radius")
     {
         const FirstTickOutcome out = runFirstTicks(10, 500.f, glm::vec2(0.f, -1.f));
-        REQUIRE(out.attackHitsOnTarget == 0u);
+        REQUIRE(out.ledgerOnTarget == 0u);
         // Post-fix the container is genuinely EMPTY, not "four phantoms and no real hit".
-        REQUIRE(out.attackHitsTotal == 0u);   // pre-fix: 4
+        REQUIRE(out.ledgerTotal == 0u);   // pre-fix: 4
     }
 }
 
@@ -501,9 +523,12 @@ TEST_CASE("DAttackRadial.FirstSwingKeepsRegisteringForItsWholeDuration", "[DAtta
 //
 // This is the one case stated directly on the type rather than through the simulation,
 // and it exists to stop the defect being reintroduced by a change that looks harmless.
-// `size() == 0` is the property the detector's cap depends on; `capacity() >= 4` is
-// the property the original `attackHits(4)` was reaching for, and the one
+// `size() == 0` is the property the detector's cap depended on; a reserved capacity is
+// the property the original member-init `(4)` was reaching for, and the one
 // SimulatableBrawlerTest's "the slice ctor really ran" case now anchors on.
+// [og-netcode-v2-field-defects task 27] The derived per-swing ledger is gone (the ledger is the
+// synced `State::hitTargets`), so the case pins the two vectors that remain, reserved to
+// kMaxHitTargetsPerSwing (3).
 //
 // RED BEFORE THE FIX on the size assertions (both read 4); GREEN on the capacity ones,
 // deliberately — a resize reserves too, so those arms do not discriminate and are here
@@ -514,14 +539,14 @@ TEST_CASE("DAttackRadial.FreshDerivedStateIsEmptyButReserved", "[DAttack][Radial
 {
     const dAttackRadialSimulation::DerivedState fresh;
 
-    REQUIRE(fresh.getAttackHits().empty());     // pre-fix: size 4
+    REQUIRE(fresh.getHitsThisTick().empty());
     REQUIRE(fresh.getGuardHits().empty());      // pre-fix: size 4
-    REQUIRE(fresh.getAttackHits().capacity() >= 4u);
-    REQUIRE(fresh.getGuardHits().capacity() >= 4u);
+    REQUIRE(fresh.getHitsThisTick().capacity() >= dAttackRadialSimulation::kMaxHitTargetsPerSwing);
+    REQUIRE(fresh.getGuardHits().capacity() >= dAttackRadialSimulation::kMaxHitTargetsPerSwing);
 
     // The copy ctor must not smuggle the phantoms back in either.
     const dAttackRadialSimulation::DerivedState copied(fresh);
-    REQUIRE(copied.getAttackHits().empty());
+    REQUIRE(copied.getHitsThisTick().empty());
     REQUIRE(copied.getGuardHits().empty());
 }
 
@@ -553,7 +578,7 @@ TEST_CASE("DAttackRadial.SwingTangentIsOrthogonalToTheWeapon", "[DAttack][HitDet
     const SwingOutcome out = runSwing(/*tickCount*/ 24, target, /*moveStick*/ glm::vec2(0.f, -1.f));
 
     REQUIRE(out.registered);
-    REQUIRE(out.attackHitsTotal == 1u);
+    REQUIRE(out.ledgerTotal == 1u);
 
     INFO("tangent = (" << out.swingTangent.x << ", " << out.swingTangent.y << ", "
          << out.swingTangent.z << "); axis = (" << out.rotationAxis.x << ", "
@@ -705,7 +730,7 @@ TEST_CASE("DAttackRadial.GetAngularVelocityIsTheDerivativeOfGetAngle", "[DAttack
 // ===========================================================================
 // [movement-sim task 83] THE CHAINED-SEQUENCE QUESTION -- WRITTEN TO DECIDE IT, NOT TO FIX
 // IT. The architect's hazard (design section 4): the second swing of a chain enters through
-// setInitialConditions, which does not clear attackHits, so it might be unable to re-hit a
+// setInitialConditions, which does not clear the per-swing ledger, so it might be unable to re-hit a
 // target the first swing already hit. If that reproduces it is ROUTED TO THE LEAD, because
 // it is a pre-existing behaviour with its own design question (should a chain re-hit?) and
 // not part of this task.

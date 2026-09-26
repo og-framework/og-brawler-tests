@@ -177,7 +177,7 @@ struct Sample
     DAttackState    targetMachine   = DAttackState::Idle;
     HitReactionKind targetReaction  = HitReactionKind::Stun;
     bool            targetWasHit    = false;
-    std::size_t     attackHits      = 0;
+    std::size_t     ledgerTargets   = 0;
     std::size_t     guardHits       = 0;
 };
 
@@ -296,7 +296,9 @@ struct FOrderSwapRig
         s.targetReaction  = target.getState().get<dAttackMachineSimulation::State>().m_hitReaction;
         s.targetWasHit    = target.getDerivedState().get<brawlerInboundHit::DerivedState>().wasHitThisTick;
         const auto& radial = attacker.getDerivedState().get<dAttackRadialSimulation::DerivedState>();
-        s.attackHits = radial.getAttackHits().size();
+        const auto& ledger = attacker.getState().get<dAttackRadialSimulation::State>().hitTargets;
+        s.ledgerTargets = static_cast<std::size_t>(std::count_if(ledger.begin(), ledger.end(),
+            [](SimCharacterId id) { return id != SimCharacterId::None; }));
         s.guardHits  = radial.getGuardHits().size();
         return s;
     }
@@ -382,7 +384,7 @@ inline std::string describe(const Arm& arm)
               + " target=" + stateName(s.targetMachine)
               + " reaction=" + std::to_string(static_cast<unsigned>(s.targetReaction))
               + " targetHit=" + (s.targetWasHit ? "1" : "0")
-              + " attackHits=" + std::to_string(s.attackHits)
+              + " ledgerTargets=" + std::to_string(s.ledgerTargets)
               + " guardHits=" + std::to_string(s.guardHits) + " | ";
     }
     return text;

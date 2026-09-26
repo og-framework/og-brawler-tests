@@ -578,7 +578,7 @@ template <typename... Ts> struct FScoreCompositeWireSize<SimulationComposite<Ts.
 
 TEST_CASE("RingoutScore.TheAwardCostsTheCompositeNothing", "[BrawlerRingout]")
 {
-    static_assert(FScoreCompositeWireSize<simulatableBrawler::State>::value == 326u,
+    static_assert(FScoreCompositeWireSize<simulatableBrawler::State>::value == 325u,
         "simulatableBrawler::State moved. Task 4 adds NO state: if this fires as part of a "
         "scoring change, a score has been put on the wire and it is now correctable, "
         "rewindable, and double-countable - which is the exact hazard ruling 1's split exists "
@@ -591,8 +591,9 @@ TEST_CASE("RingoutScore.TheAwardCostsTheCompositeNothing", "[BrawlerRingout]")
         "composite, kWireFormatVersion 3 -> 4, headroom 37 -> 38 B. "
         "[og-netcode-v2-field-defects task 17, 2026-09-24] 338 -> 326 B, and not this file's task "
         "either: brawlerProjectileSimulation::ProjectileSlot lost hitRootBodyId (4 B x 3 slots), "
-        "kWireFormatVersion 4 -> 5, headroom 38 -> 50 B.");
-    REQUIRE(FScoreCompositeWireSize<simulatableBrawler::State>::value == 326u);
+        "kWireFormatVersion 4 -> 5, headroom 38 -> 50 B. "
+        "[og-netcode-v2-field-defects task 27, 2026-09-26] 326 -> 325 B, and not this file's task either: dAttackRadialSimulation lost the dead InitialConditions activeRootBodyId (4 B) and its State gained the 3 B hitTargets ledger, kWireFormatVersion 5 -> 6, headroom 50 -> 51 B.");
+    REQUIRE(FScoreCompositeWireSize<simulatableBrawler::State>::value == 325u);
 
     // The ring-out STATE slice is unchanged too: 5 B, the flags byte plus the respawn tick.
     REQUIRE(syncSize<ringout::State>() == 5u);

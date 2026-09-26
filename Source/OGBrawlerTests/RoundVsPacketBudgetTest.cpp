@@ -413,7 +413,15 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     // middle of the composite, so `correctionStateBuffer::kWireFormatVersion` went 4 -> 5.
     // 337 = 1 (version) + 2 (used count) + 8 (correction header) + 326 (composite).
     // The correction buffer is at 334/384 B, 50 B of headroom.
-    REQUIRE(kStateWireBytes == 337u);
+    //
+    // [og-netcode-v2-field-defects task 27, 2026-09-26] 337 -> 336 B, and the INPUT wire DOES NOT
+    // MOVE (`ringWireBytes(1u)` re-quoted UNCHANGED at 86 B above). The radial InitialConditions
+    // lost the dead `activeRootBodyId` (4 B) and the radial State gained the 3 B `hitTargets` ledger
+    // (the per-swing hit record, now synced). The first slice changed, so
+    // `correctionStateBuffer::kWireFormatVersion` went 5 -> 6.
+    // 336 = 1 (version) + 2 (used count) + 8 (correction header) + 325 (composite).
+    // The correction buffer is at 333/384 B, 51 B of headroom.
+    REQUIRE(kStateWireBytes == 336u);
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +506,12 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     // and holds by 276 B. ⚠ Found by running the suite again, not named in advance: the brief
     // listed "the ring/round budgets" and the kStateWireBytes row was re-quoted, but this
     // equality was missed until it fired (1228 == 1240).
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1228u);
+    // [og-netcode-v2-field-defects task 27, 2026-09-26] 1228 -> **1227 B**, all of it the state
+    // term (344 -> 343 B batched: the radial IC's dead `activeRootBodyId`, -4 B, and the radial
+    // State's `hitTargets` ledger, +3 B). The ring term is UNTOUCHED at 5 x (168+7) = 875 B.
+    // 1227 = 875 + 343 + 9; the conclusion is unchanged and holds by 275 B. Found by running the
+    // suite, the third time for this row (1227 == 1228).
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1227u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will

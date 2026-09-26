@@ -330,13 +330,24 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     //    each slot, but the slots are an array inside the composite's third slice, so slot 1, slot
     //    2 and every later slice moved. Measured: this static_assert compiled at 326 on the tree
     //    after the removal (it fired at 338). The projectile slice is pinned in section 2 below.
-    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 326u,
+    //
+    //    [og-netcode-v2-field-defects task 27, 2026-09-26] 326 -> 325 B, -1 B, and BOTH radial
+    //    slices moved: the dead `dAttackRadialSimulation::InitialConditions::activeRootBodyId` (4 B,
+    //    written 0 by the machine, read by nothing) LEFT THE WIRE, and `State::hitTargets` (3 B, the
+    //    per-swing hit ledger of peer-stable SimCharacterIds, 1 B each) JOINED it. The ledger was a
+    //    derived vector that a correction never restored; on the wire, a replay and an adoption
+    //    bring back the authority's ledger with the rest of the swing.
+    //    ⛔ `correctionStateBuffer::kWireFormatVersion` IS BUMPED 5 -> 6: the removed field sat in
+    //    the composite's FIRST slice, so every later offset moved. Measured: this static_assert
+    //    compiled at 325 on the tree after the change (it fired at 326). Both radial slices are
+    //    pinned in section 2 below.
+    static_assert(FCompositeWireSize<simulatableBrawler::State>::value == 325u,
         "The simulatableBrawler::State wire footprint moved. That is a WIRE FORMAT "
         "CHANGE: re-measure it, re-price RoundVsPacketBudgetTest.cpp, and bump "
         "correctionStateBuffer::kWireFormatVersion if the layout moved OR if a whole "
         "sub-simulation entered or left the composite - an append that only grows an "
         "EXISTING slice is the one case that does not need the bump.");
-    REQUIRE(kComposite == 326u);
+    REQUIRE(kComposite == 325u);
 
     // 2. WHICH SLICE, so a break says what moved rather than only that something did.
     //
@@ -379,7 +390,12 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     // [og-netcode-v2-field-defects task 9, 2026-09-23] THE RADIAL SLICE, first pinned here, one
     // byte smaller than it was: `hasHitGuard` left it (see section 1). 61 -> 60 B, measured on the
     // tree after the removal (a probe pin's failure expansion read `60 == 1`), not derived.
-    REQUIRE(syncSize<dAttackRadialSimulation::State>() == 60u);
+    //
+    // [og-netcode-v2-field-defects task 27, 2026-09-26] 60 -> 63 B: `hitTargets`, 3 x 1 B, appended.
+    // The InitialConditions half is pinned here for the first time, at 20 B (4 + 12 + 4) after
+    // `activeRootBodyId` (4 B) left it.
+    REQUIRE(syncSize<dAttackRadialSimulation::State>() == 63u);
+    REQUIRE(syncSize<dAttackRadialSimulation::InitialConditions>() == 20u);
 
     // [og-netcode-v2-field-defects task 17, 2026-09-24] THE PROJECTILE SLICE, first pinned here:
     // 4 (SIM_VECTOR count) + 3 slots x 33 B = 103 B, down from 115 B (3 x 37) when each slot
@@ -814,23 +830,28 @@ TEST_CASE("DAttack.SimulatableBrawler.DerivedStateIsOffWire", "[DAttack][Simulat
     REQUIRE(vizCopy.getDerivedState().get<brawlerInboundHit::DerivedState>().wasHitThisTick);
 
     // 6. THE DEFAULTED CONSTRUCTION STILL RUNS EACH SLICE'S OWN CONSTRUCTOR.
-    //    The radial slice reserves 4 entries in each of its two hit vectors in its
-    //    default ctor; a tuple that value-initialised past it would show 0.
+    //    The radial slice reserves kMaxHitTargetsPerSwing (3) entries in each of its two hit
+    //    vectors in its default ctor; a tuple that value-initialised past it would show 0.
+    //    [og-netcode-v2-field-defects task 27] The two vectors are `hitsThisTick` and `guardHits`;
+    //    the derived per-swing ledger this case first anchored on left the type (the ledger is the
+    //    synced `State::hitTargets` now), and the reserve went 4 -> 3 with the cap (R3).
     //
     //    [movement-sim task 34] RE-ANCHORED FROM size() TO capacity(), and the intent
     //    stated above is unchanged — capacity() is a strictly better observable for it.
-    //    The ctor used to say `attackHits(4)`, which is a RESIZE, so size() happened to
+    //    The ctor used to say `<ledger>(4)`, which is a RESIZE, so size() happened to
     //    read 4 and was used as the proxy for "the slice ctor ran". Those four
     //    default-constructed entries were a live bug: the hit detector (dAttackRadialSimulation's
     //    collisionCheck then; brawlerHitDetection::detectRadialHits since og-netcode-v2-field-
-    //    defects task 9) early-returns at `attackHits.size() >= 4`, so a fresh character
+    //    defects task 9) early-returned at a ledger size >= 4, so a fresh character
     //    swinging on its first tick registered no hits at all (task 34). The ctor now
     //    RESERVES, which is what the comment above always claimed it did. A tuple that
     //    value-initialised past the slice ctor still shows 0 here — capacity 0 — so this
     //    case still fails for exactly the reason it was written to catch.
     const simulatableBrawler::DerivedState fresh;
-    REQUIRE(fresh.get<dAttackRadialSimulation::DerivedState>().getAttackHits().capacity() >= 4u);
-    REQUIRE(fresh.get<dAttackRadialSimulation::DerivedState>().getGuardHits().capacity() >= 4u);
+    REQUIRE(fresh.get<dAttackRadialSimulation::DerivedState>().getHitsThisTick().capacity()
+        >= dAttackRadialSimulation::kMaxHitTargetsPerSwing);
+    REQUIRE(fresh.get<dAttackRadialSimulation::DerivedState>().getGuardHits().capacity()
+        >= dAttackRadialSimulation::kMaxHitTargetsPerSwing);
     REQUIRE_FALSE(fresh.get<brawlerInboundHit::DerivedState>().wasHitThisTick);
 }
 
@@ -1249,12 +1270,12 @@ TEST_CASE("DAttack.SimulatableBrawler.AgreeingAnchorKeepsPushOut",
 //
 // ⭐ [og-netcode-v2-field-defects task 20] THE MECHANISM ABOVE IS NARROWED, NOT GONE. Routing now
 // runs in preIntegrate of the CONSUMING tick, so a replay anchored at T re-routes T's hit on its
-// first step -- when detection can re-find it. It cannot while the attacker's per-swing
-// `attackHits` ledger (derived, never restored) still holds the target, i.e. whenever the
-// correction lands mid-swing. That remaining case is exactly what this rig models (no routing
-// runs here; the slice is delivered by hand) and is pinned end to end in
-// BrawlerHitDetectionBehaviourTest.cpp, `...BodyHitTickFlinchesTheTarget`, section "frontier
-// mid-swing"; Backlog task 21 closes it.
+// first step -- when detection can re-find it. Until og-netcode-v2-field-defects task 27 it could
+// not while the attacker's per-swing ledger (derived, never restored) still held the target, i.e.
+// whenever the correction landed mid-swing. That case is what this rig models (no routing runs
+// here; the slice is delivered by hand). Task 27 put the ledger on the wire, and the end-to-end
+// pin is BrawlerHitDetectionBehaviourTest.cpp, `...BodyHitTickFlinchesTheTarget`, section
+// "frontier mid-swing", now HitFlinch on the replay.
 TEST_CASE("DAttack.SimulatableBrawler.ReplayAnchoredOnHitTickConvergesInOneCorrection",
           "[DAttack][SimulatableBrawler][MovementResim]")
 {
