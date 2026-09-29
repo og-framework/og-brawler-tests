@@ -56,8 +56,9 @@ namespace ringoutScorePushTests
 namespace ringout = brawlerRingout;
 
 // Three characters: enough for one dier and two survivors, which is the smallest population in
-// which an award is non-trivial. The legal maximum is 4 (`kPreDietCharacterCap`), and the
-// property under test is structural, so the size buys nothing beyond that shape.
+// which an award is non-trivial. The pre-diet cap is 4 (`kPreDietCharacterCap`, advisory) and the
+// spawn table places 8, but the property under test is structural, so the size buys nothing
+// beyond that shape.
 constexpr unsigned int kRigCharacters = 3u;
 
 // ⛔ DRIVEN THROUGH THE PRODUCTION VIEW. `StorageView`'s constructor is private and

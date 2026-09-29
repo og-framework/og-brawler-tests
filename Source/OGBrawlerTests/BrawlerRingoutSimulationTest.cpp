@@ -194,8 +194,9 @@ TEST_CASE("Ringout.Types.WireSlicesAndTheDeadBit", "[BrawlerRingout]")
     // Bit 0, on the wire and in the checksum.
     REQUIRE(ringout::kFlagDead == 1u);
 
-    // Sized against `ASimulationManagerUImpl::kPreDietCharacterCap`.
-    REQUIRE(ringout::kMaxSpawnPoints == 4u);
+    // Eight characters, by user ruling (og-brawler-uploadtosteam T18) — no longer the pre-diet
+    // cap of 4, which `SimulationManagerUImpl.h` asserts stays at or below this.
+    REQUIRE(ringout::kMaxSpawnPoints == 8u);
 
     // A fresh character is alive, with no countdown armed.
     const ringout::State fresh{};
@@ -474,7 +475,7 @@ TEST_CASE("Ringout.SpawnSlots.TwoRemoteClientsDoNotBothGetZero", "[BrawlerRingou
     REQUIRE(slotA == 0u);
     REQUIRE(slotB == 1u);
 
-    // A third and fourth client fill the table in the same order.
+    // A third and fourth client take the next indices in the same order.
     REQUIRE(allocator.acquire(7003u) == 2u);
     REQUIRE(allocator.acquire(7004u) == 3u);
 
@@ -489,10 +490,9 @@ TEST_CASE("Ringout.SpawnSlots.ReleaseFreesTheIndexAndALaterJoinReusesIt", "[Braw
 {
     ringout::SpawnSlotAllocator allocator;
 
-    REQUIRE(allocator.acquire(1u) == 0u);
-    REQUIRE(allocator.acquire(2u) == 1u);
-    REQUIRE(allocator.acquire(3u) == 2u);
-    REQUIRE(allocator.acquire(4u) == 3u);
+    // Fill the whole table: id N holds index N-1.
+    for (std::uint32_t id = 1u; id <= ringout::kMaxSpawnPoints; ++id)
+        REQUIRE(allocator.acquire(id) == id - 1u);
 
     // The character holding index 1 leaves.
     allocator.release(2u);
@@ -500,24 +500,24 @@ TEST_CASE("Ringout.SpawnSlots.ReleaseFreesTheIndexAndALaterJoinReusesIt", "[Braw
 
     // ⭐ THE RELEASED INDEX — not the next one up, and not the out-of-range value. A later
     // join reuses 1, which is what stops a long churning session from exhausting the table.
-    REQUIRE(allocator.acquire(5u) == 1u);
+    REQUIRE(allocator.acquire(1001u) == 1u);
 
     // ⛔ DECOY CONTROL. Without releasing first, the table is full and the NEXT join gets the
     // out-of-range value. Both assertions above are satisfied by an allocator that never
     // tracks occupancy at all; this one is not.
-    REQUIRE(allocator.acquire(6u) == ringout::SpawnSlotAllocator::kNoFreeSlot);
+    REQUIRE(allocator.acquire(1002u) == ringout::SpawnSlotAllocator::kNoFreeSlot);
 
     // The holders that never left kept their own indices throughout.
     REQUIRE(allocator.slotOf(1u) == 0u);
-    REQUIRE(allocator.slotOf(3u) == 2u);
-    REQUIRE(allocator.slotOf(4u) == 3u);
+    for (std::uint32_t id = 3u; id <= ringout::kMaxSpawnPoints; ++id)
+        REQUIRE(allocator.slotOf(id) == id - 1u);
 
     // Releasing an id that holds nothing is a no-op, which is what makes the UE unregister
     // path safe to run ungated on the client role where nothing ever acquired.
     allocator.release(9999u);
-    allocator.release(6u);
+    allocator.release(1002u);
     REQUIRE(allocator.slotOf(1u) == 0u);
-    REQUIRE(allocator.acquire(8u) == ringout::SpawnSlotAllocator::kNoFreeSlot);
+    REQUIRE(allocator.acquire(1003u) == ringout::SpawnSlotAllocator::kNoFreeSlot);
 }
 
 TEST_CASE("Ringout.SpawnSlots.AcquireIsIdempotentAndDoesNotConsumeASecondEntry", "[BrawlerRingout]")
@@ -530,12 +530,12 @@ TEST_CASE("Ringout.SpawnSlots.AcquireIsIdempotentAndDoesNotConsumeASecondEntry",
     REQUIRE(allocator.acquire(42u) == 0u);
     REQUIRE(allocator.acquire(42u) == 0u);
 
-    // The proof that nothing was consumed: three more distinct characters still fit, and the
-    // fifth does not.
-    REQUIRE(allocator.acquire(43u) == 1u);
-    REQUIRE(allocator.acquire(44u) == 2u);
-    REQUIRE(allocator.acquire(45u) == 3u);
-    REQUIRE(allocator.acquire(46u) == ringout::SpawnSlotAllocator::kNoFreeSlot);
+    // The proof that nothing was consumed: kMaxSpawnPoints - 1 more distinct characters still
+    // fit, and the next one does not.
+    for (std::uint32_t slot = 1u; slot < ringout::kMaxSpawnPoints; ++slot)
+        REQUIRE(allocator.acquire(42u + slot) == slot);
+    REQUIRE(allocator.acquire(42u + ringout::kMaxSpawnPoints)
+            == ringout::SpawnSlotAllocator::kNoFreeSlot);
 }
 
 TEST_CASE("Ringout.SpawnSlots.AFullTableYieldsTheOutOfRangeValueNotSlotZero", "[BrawlerRingout]")
@@ -592,6 +592,65 @@ TEST_CASE("Ringout.SpawnSlots.TwoCharactersRespawnToDifferentAuthoredPoints", "[
 }
 
 // ============================================================================================
+// [og-brawler-uploadtosteam T18, 2026-09-29] THE 5TH CHARACTER'S DEATH LOOP (T10 spike flag 1).
+//
+// With a four-entry table the 5th registration got `kNoFreeSlot`, so its respawn cleared the
+// dead bit, wrote NO teleport seed, and left the body below the kill plane: it died again on
+// the very next tick, every respawn delay, feeding every other player's score. User ruling
+// 2026-09-29: 8 slots. Seen RED at `kMaxSpawnPoints == 4` (impl notes p2_18).
+// ============================================================================================
+
+TEST_CASE("Ringout.SpawnSlots.CharactersFiveToEightGetDistinctSlotsAndRespawnWithoutLooping",
+          "[BrawlerRingout]")
+{
+    constexpr std::uint32_t kCharacters = 8u;
+
+    ringout::SpawnSlotAllocator allocator;
+    std::array<std::uint32_t, kCharacters> slots{};
+    for (std::uint32_t i = 0u; i < kCharacters; ++i)
+        slots[i] = allocator.acquire(8001u + i);
+
+    for (std::uint32_t i = 0u; i < kCharacters; ++i)
+    {
+        INFO("character " << (i + 1u) << " slot " << slots[i]);
+        REQUIRE(slots[i] != ringout::SpawnSlotAllocator::kNoFreeSlot);
+        REQUIRE(slots[i] < ringout::kMaxSpawnPoints);
+        for (std::uint32_t j = 0u; j < i; ++j)
+            REQUIRE(slots[i] != slots[j]);
+    }
+
+    // The 5th character, end to end through the real `integrate`: dies, respawns ONTO its own
+    // point, and does not die again once movement has spent the seed.
+    Rig fifth;
+    fifth.ic.spawnSlot = slots[4];
+    fifth.setBodyZ(fifth.belowThePlane());
+    fifth.tick(10u);
+    REQUIRE(fifth.dead());
+
+    const std::uint32_t respawnTick = fifth.state.respawnAtTick;
+    fifth.tick(respawnTick);
+    REQUIRE_FALSE(fifth.dead());
+    REQUIRE(fifth.movementIc.teleportPending == 1u);
+    REQUIRE(fifth.movementIc.teleportPos == fifth.sd.spawnPoints[slots[4]]);
+
+    fifth.consumeTeleportAsMovementWould();
+    for (std::uint32_t t = respawnTick + 1u; t <= respawnTick + 5u; ++t)
+    {
+        fifth.tick(t);
+        INFO("tick " << t);
+        REQUIRE_FALSE(fifth.dead());
+        REQUIRE_FALSE(fifth.derived.diedThisTick);
+    }
+
+    // Every authored point is its own place: a table that repeated a point would put two
+    // fighters on top of each other on respawn.
+    const ringout::StaticData sd{};
+    for (std::uint32_t i = 0u; i < ringout::kMaxSpawnPoints; ++i)
+        for (std::uint32_t j = 0u; j < i; ++j)
+            REQUIRE(sd.spawnPoints[i] != sd.spawnPoints[j]);
+}
+
+// ============================================================================================
 // ⭐⭐ [ringout task 9, 2026-09-13] THE SPAWN TABLE COMES FROM THE LEVEL'S PLAYER STARTS.
 //
 // The authored table is placeholder authoring at (±200, ±200, Z=200); the platform this mode
@@ -626,6 +685,22 @@ inline ringout::LevelSpawnPoint alpha() { return { "Alpha", glm::vec3( 900.f,  1
 inline ringout::LevelSpawnPoint bravo() { return { "Bravo", glm::vec3( 300.f,  20.f, 51.f) }; }
 inline ringout::LevelSpawnPoint chas()  { return { "Chas",  glm::vec3(-300.f,  30.f, 52.f) }; }
 inline ringout::LevelSpawnPoint delta() { return { "Delta", glm::vec3(-900.f,  40.f, 53.f) }; }
+
+// [T18] The table grew to eight, so the fill and overflow cases need more names than that. Same
+// anti-correlation: each later name sits further −X.
+inline Placements tenInNameOrder()
+{
+    return { alpha(), bravo(), chas(), delta(),
+             { "Echo",   glm::vec3(-1200.f,  50.f, 54.f) },
+             { "Fox",    glm::vec3(-1500.f,  60.f, 55.f) },
+             { "Golf",   glm::vec3(-1800.f,  70.f, 56.f) },
+             { "Hotel",  glm::vec3(-2100.f,  80.f, 57.f) },
+             { "India",  glm::vec3(-2400.f,  90.f, 58.f) },
+             { "Juliet", glm::vec3(-2700.f, 100.f, 59.f) } };
+}
+static_assert(ringout::kMaxSpawnPoints + 2u <= 10u,
+    "tenInNameOrder() must hold more placements than the spawn table, or CASE 5 stops testing "
+    "overflow and CASE 4 indexes past the fixture. Extend the fixture with the table.");
 
 // The authored table, taken from the shipped defaults rather than restated — the whole point of
 // `StaticData`'s defaulted constructor is that the literals live in exactly one place.
@@ -779,7 +854,7 @@ TEST_CASE("Ringout.SpawnPoints.FewerThanTheTableFillsWhatItCanAndLeavesTheRestAu
 {
     using namespace spawnpoints;
 
-    const Placements all{ alpha(), bravo(), chas(), delta() };
+    const Placements all = tenInNameOrder();
 
     for (size_t count = 0u; count <= static_cast<size_t>(ringout::kMaxSpawnPoints); ++count)
     {
@@ -809,29 +884,28 @@ TEST_CASE("Ringout.SpawnPoints.FewerThanTheTableFillsWhatItCanAndLeavesTheRestAu
 // ============================================================================================
 // CASE 5 — MORE PLAYER STARTS THAN SLOTS: the first `kMaxSpawnPoints` IN KEY ORDER win.
 //
-// Which four is a level-design question, so the only thing worth pinning is that the answer is
-// decided by the key and not by arrival — a level with six starts must not hand two peers
-// different fours.
+// Which eight is a level-design question, so the only thing worth pinning is that the answer is
+// decided by the key and not by arrival — a level with ten starts must not hand two peers
+// different eights.
 // ============================================================================================
 
-TEST_CASE("Ringout.SpawnPoints.MoreThanTheTableKeepsTheFirstFourInKeyOrder", "[BrawlerRingout]")
+TEST_CASE("Ringout.SpawnPoints.MoreThanTheTableKeepsTheFirstKMaxSpawnPointsInKeyOrder", "[BrawlerRingout]")
 {
     using namespace spawnpoints;
 
-    const ringout::LevelSpawnPoint echo{ "Echo", glm::vec3(-1200.f, 50.f, 54.f) };
-    const ringout::LevelSpawnPoint fox { "Fox",  glm::vec3(-1500.f, 60.f, 55.f) };
-
-    const Placements serverOrder{ alpha(), bravo(), chas(), delta(), echo, fox };
-    const Placements clientOrder{ fox, echo, delta(), chas(), bravo(), alpha() };
+    const Placements serverOrder = tenInNameOrder();
+    const Placements clientOrder(serverOrder.rbegin(), serverOrder.rend());
+    REQUIRE(serverOrder.size() > static_cast<size_t>(ringout::kMaxSpawnPoints));
 
     const auto serverTable = ringout::spawnPointsFromLevelPlacements(serverOrder, authored());
     const auto clientTable = ringout::spawnPointsFromLevelPlacements(clientOrder, authored());
 
     REQUIRE(serverTable == clientTable);
-    REQUIRE(serverTable[0] == alpha().position);
-    REQUIRE(serverTable[1] == bravo().position);
-    REQUIRE(serverTable[2] == chas().position);
-    REQUIRE(serverTable[3] == delta().position);
+    for (size_t slot = 0u; slot < static_cast<size_t>(ringout::kMaxSpawnPoints); ++slot)
+    {
+        INFO("slot " << slot);
+        REQUIRE(serverTable[slot] == serverOrder[slot].position);
+    }
     REQUIRE_FALSE(anySlotIsTheWorldOrigin(serverTable));
 }
 

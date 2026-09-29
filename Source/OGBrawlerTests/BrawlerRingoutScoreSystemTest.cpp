@@ -61,10 +61,13 @@ namespace ringoutScoreTests
 
 namespace ringout = brawlerRingout;
 
-// Four characters is not an arbitrary rig size: `ASimulationManagerUImpl::kPreDietCharacterCap`
-// and `brawlerRingout::kMaxSpawnPoints` are both 4, so it is the largest LEGAL session and the
-// one the award has to be right for.
+// Four characters is the pre-diet cap (`ASimulationManagerUImpl::kPreDietCharacterCap`), the
+// session size the packet budget underwrites. It is NOT the largest legal session: the cap only
+// warns, and since og-brawler-uploadtosteam T18 the spawn table (`brawlerRingout::kMaxSpawnPoints`)
+// places 8. The award has no size-dependent path, so four with two diers covers its cases.
 constexpr unsigned int kRigCharacters = 4u;
+static_assert(kRigCharacters <= ringout::kMaxSpawnPoints,
+    "every rig character must be placeable by the spawn table");
 
 // For the determinism case's INFO lines: the observed walk order, printable.
 inline std::string joinIds(const std::vector<unsigned int>& ids)
