@@ -88,44 +88,6 @@ struct MockStateSyncBuffer
     void writeToBuffer(uint32 /*byteIt*/, T /*val*/) {}
 };
 
-// [og-netcode-v2-input-relay T8] This mock now stands in for ONE role, not two.
-// It used to model both `FSimulationInputSyncBuffer` members on the component: the
-// CLIENT->SERVER buffer and the replicated SERVER->CLIENT correction-input buffer.
-// The latter is retired, so every `inputBuf` observation the T4/T6/T17 cases made
-// through it is gone with the channel (see the retirement inventory at
-// SimulationNetSync::sendCorrectionAll). What survives is the client->server role,
-// which the concept still requires — hence the mock, and hence the `write`/
-// `readInto` pair that keeps satisfying CompositeSyncedBufferConcept.
-struct MockInputSyncBuffer
-{
-    uint32 lastTick = 0;
-    int    writeCount = 0;
-    simulatableBrawler::PlayerInput lastInput{};
-
-    void write(const simulatableBrawler::PlayerInput& input, uint32 tick)
-    {
-        lastTick = tick;
-        lastInput = input;
-        ++writeCount;
-    }
-    // Plays the payload back, matching what MockStateSyncBuffer does. [T6 fixed
-    // this: it used to discard `outInput` and answer only the tick, which silently
-    // made every round-trip hand back a VALUE-INITIALISED input. Kept faithful even
-    // though T8 removed the case that first depended on it — a lying double is a
-    // trap regardless of who is currently standing on it.]
-    uint32_t readInto(simulatableBrawler::PlayerInput& outInput) const
-    {
-        outInput = lastInput;
-        return lastTick;
-    }
-
-    template <typename T>
-    T readFromBuffer(uint32 /*byteIt*/) const { return T{}; }
-
-    template <typename T>
-    void writeToBuffer(uint32 /*byteIt*/, T /*val*/) {}
-};
-
 // ---------------------------------------------------------------------------
 // [og-netcode-v2-input-relay T5] MockRelayedInputRing — the wire payload.
 //
@@ -166,13 +128,11 @@ struct MockRelayedInputRing
 struct MockPredictionOwner
 {
     using SyncedCorrectionBufferType  = MockStateSyncBuffer;
-    using SyncedRemoteInputBufferType = MockInputSyncBuffer;
     using RelayedInputRingType        = MockRelayedInputRing;
 
     std::function<void(const MockStateSyncBuffer&)>  onCorrectionStateReceived;
     // [T8] `onCorrectionInputReceived` and its set/clear pair are gone with the
-    // channel. `outgoingInputBuffer` stays — it is the CLIENT->SERVER buffer.
-    MockInputSyncBuffer outgoingInputBuffer;
+    // channel. [og-syncedInput-rework task 9] So is the client->server input buffer.
 
     // [T5] The relay ring + its arrival hook. `replicateRelayRing()` stands in for
     // OnRep_RelayedInputRing, which does exactly this and nothing else.
@@ -201,9 +161,6 @@ struct MockPredictionOwner
 
     void clearOnCorrectionStateReceivedCallback()
     { onCorrectionStateReceived = nullptr; }
-
-    MockInputSyncBuffer* getClientToServerInputSyncedBuffer()
-    { return &outgoingInputBuffer; }
 
     // Stage 1 (Task 9): redundancy-bundle send path. The real owner builds an
     // FInputRedundancyBundle from the queue and fires an unreliable RPC; the mock
