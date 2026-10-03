@@ -199,8 +199,9 @@ TEST_CASE("InputWriter.VisualizationPackerNeverRaisesAFlagBit", "[BrawlerMovemen
 {
 	// The render-rate path takes continuous fields ONLY, so no flag bit can structurally reach
 	// it — but "structurally" is a claim about the code as written, and this is the assertion
-	// that keeps it true. holdGuard is a BUTTON, so a discrete input edge that render-echoed
-	// would let the cosmetic path show a freeze the simulation never applied.
+	// that keeps it true. holdGuard comes from a BUTTON (the guard press, gated by the movement
+	// input on the sim path since og-brawler-3rdControllerMode task 5), so a discrete input edge
+	// that render-echoed would let the cosmetic path show a freeze the simulation never applied.
 	REQUIRE(packedFlags(simulatableBrawler::makeVisualizationPlayerInput(livePose())) == 0u);
 	REQUIRE(packedFlags(simulatableBrawler::makeVisualizationPlayerInput(
 		simulatableBrawler::ContinuousInputFields{})) == 0u);

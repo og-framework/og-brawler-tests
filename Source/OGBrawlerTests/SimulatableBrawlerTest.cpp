@@ -1059,9 +1059,9 @@ namespace movementResim
     simulatableBrawler::PlayerInput stickIntoTheWall()
     {
         simulatableBrawler::PlayerInput input = simulatableBrawler::getZeroPlayerInput();
-        // The stick arrives as a world XY direction whose LENGTH is the deflection
-        // (BrawlerInputPackaging.h), so a unit +X vector is "full deflection, into
-        // the wall".
+        // The stick arrives as a world XY direction whose LENGTH the sim reads as the
+        // deflection; the game sends unit length (getInputDirectionInCameraSpace normalises),
+        // so a unit +X vector is "full deflection, into the wall".
         input.edit<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld =
             glm::vec3(1.f, 0.f, 0.f);
         return input;

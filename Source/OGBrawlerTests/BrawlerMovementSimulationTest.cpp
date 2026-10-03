@@ -385,9 +385,9 @@ struct Rig
     bool frozenBit() const { return (state.flags & movement::kFlagFrozen) != 0u; }
     bool hasCommandBit() const { return (state.flags & movement::kFlagHasCommand) != 0u; }
 
-    // One movement tick. `stickWorld`'s LENGTH is the stick deflection
-    // (`BrawlerInputPackaging.h`: `moveDirectionWorld` is the move stick rotated into
-    // camera space, so the rotation preserves its length).
+    // One movement tick. The sim reads `stickWorld`'s LENGTH as the stick deflection. The
+    // game only ever sends 0 or 1: the UE input component builds `moveDirectionWorld` with
+    // `getInputDirectionInCameraSpace`, which normalises, and zeroes it below the move deadzone.
     void tick(std::uint32_t t,
               glm::vec3 stickWorld = glm::vec3(0.f),
               std::uint8_t inputFlags = 0u)
