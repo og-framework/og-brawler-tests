@@ -3,6 +3,7 @@
 
 #include "catch_amalgamated.hpp"
 #include "OGBrawler/SimulatableBrawler.h"
+#include "BrawlerTestInputs.h"
 #include "OGBrawler/DAttackMachineSimulation.h"
 // [Task 36] InvalidAttackSequenceId / kHadoukenSequenceSentinel relocated here; this TU
 // references both constants directly (transitively visible, but made explicit).
@@ -97,17 +98,12 @@ static dAttackMachineSimulation::State integrateOnce(
     MockPhysicsAdapter physAdapter;
     MockSpatialQueryAdapter queryAdapter;
 
-    simulatableBrawler::PlayerInput input(
-        dAttackRadialSimulation::PlayerInput(aimDirection, attackLeft, attackRight),
-        dAttackMachineSimulation::PlayerInput{aimDirection, attackLeft, attackRight, moveStick, moveDirectionWorld},
-        dAttackGuardSimulation::PlayerInput(aimDirection),
-        brawlerProjectileSimulation::PlayerInput{aimDirection},
-        brawlerMovementSimulation::PlayerInput{},
-        // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-        // composite. No field, no wire cost: the input composite is still 77 B and
-        // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-        // every sub-sim name an InputType it OWNS.
-        brawlerRingout::PlayerInput{});
+    simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
+        .aimDirection       = aimDirection,
+        .attackLeft         = attackLeft,
+        .attackRight        = attackRight,
+        .moveStick          = moveStick,
+        .moveDirectionWorld = moveDirectionWorld });
 
     SimulationTimeStep step(0u, false, false, false, 1.f / 60.f);
     character.integrate(step, input, physAdapter, queryAdapter, staticData);
@@ -290,17 +286,11 @@ TEST_CASE("DAttack.Integrate3.HadoukenCommitmentHoldsAttackingState", "[DAttack]
     // the SAME character across ticks so m_timeInCurrentState accumulates.
     auto runTick = [&](unsigned int tick, uint32_t triggeredActionId, bool attackLeft)
     {
-        simulatableBrawler::PlayerInput input(
-            dAttackRadialSimulation::PlayerInput(aim, attackLeft, false),
-            dAttackMachineSimulation::PlayerInput{aim, attackLeft, false, glm::vec2(0.f, 0.f), aim, triggeredActionId},
-            dAttackGuardSimulation::PlayerInput(aim),
-            brawlerProjectileSimulation::PlayerInput{aim},
-            brawlerMovementSimulation::PlayerInput{},
-            // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-            // composite. No field, no wire cost: the input composite is still 77 B and
-            // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-            // every sub-sim name an InputType it OWNS.
-            brawlerRingout::PlayerInput{});
+        simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
+            .aimDirection       = aim,
+            .attackLeft         = attackLeft,
+            .moveDirectionWorld = aim,
+            .triggeredActionId  = triggeredActionId });
 
         SimulationTimeStep step(tick, false, false, false, dt);
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
@@ -367,19 +357,11 @@ TEST_CASE("DAttack.Integrate3.MachineHadoukenUsesCharacterBindings", "[DAttack][
     MockSpatialQueryAdapter queryAdapter;
 
     const glm::vec3 aim = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
-    simulatableBrawler::PlayerInput input(
-        dAttackRadialSimulation::PlayerInput(aim, false, false),
+    simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
+        .aimDirection       = aim,
+        .moveDirectionWorld = aim,
         // triggeredActionId = kHadoukenActionId fires the machine's Hadouken trigger block.
-        dAttackMachineSimulation::PlayerInput{aim, false, false, glm::vec2(0.f), aim,
-                                              inputSequence::kHadoukenActionId},
-        dAttackGuardSimulation::PlayerInput(aim),
-        brawlerProjectileSimulation::PlayerInput{aim},
-        brawlerMovementSimulation::PlayerInput{},
-        // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-        // composite. No field, no wire cost: the input composite is still 77 B and
-        // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-        // every sub-sim name an InputType it OWNS.
-        brawlerRingout::PlayerInput{});
+        .triggeredActionId  = inputSequence::kHadoukenActionId });
 
     // Drive at a non-zero tick so the spawned slot's spawnTick (== currentTick) is non-zero
     // (spawnTick 0 reads as a free slot). The projectile sub-sim runs after the machine in the
@@ -441,17 +423,10 @@ TEST_CASE("DAttack.Integrate3.InboundHitTransitionsToHitFlinch", "[DAttack][HitF
         slice.wasHitThisTick = inboundHit;
         slice.reactionKind   = staticData.m_projectileHitReaction.kind;
         slice.flinchDuration = staticData.m_projectileHitReaction.lockoutDuration;
-        simulatableBrawler::PlayerInput input(
-            dAttackRadialSimulation::PlayerInput(aim, attackLeft, false),
-            dAttackMachineSimulation::PlayerInput{aim, attackLeft, false, glm::vec2(0.f, 0.f), aim},
-            dAttackGuardSimulation::PlayerInput(aim),
-            brawlerProjectileSimulation::PlayerInput{aim},
-            brawlerMovementSimulation::PlayerInput{},
-            // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-            // composite. No field, no wire cost: the input composite is still 77 B and
-            // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-            // every sub-sim name an InputType it OWNS.
-            brawlerRingout::PlayerInput{});
+        simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
+            .aimDirection       = aim,
+            .attackLeft         = attackLeft,
+            .moveDirectionWorld = aim });
         SimulationTimeStep step(tick, false, false, false, dt);
         character.integrate(step, input, physAdapter, queryAdapter, staticData);
         return character.getAllState().getState().get<dAttackMachineSimulation::State>();
@@ -581,18 +556,13 @@ struct FMachineRig
     void tick(unsigned int t, bool attackLeft, bool attackRight = false)
     {
         const glm::vec3 aimDir = aim;
-        simulatableBrawler::PlayerInput input(
-            dAttackRadialSimulation::PlayerInput(aimDir, attackLeft, attackRight),
-            dAttackMachineSimulation::PlayerInput{aimDir, attackLeft, attackRight,
-                                                 moveStick, moveWorld, triggeredActionId},
-            dAttackGuardSimulation::PlayerInput(aimDir),
-            brawlerProjectileSimulation::PlayerInput{aimDir},
-            brawlerMovementSimulation::PlayerInput{},
-            // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-            // composite. No field, no wire cost: the input composite is still 77 B and
-            // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-            // every sub-sim name an InputType it OWNS.
-            brawlerRingout::PlayerInput{});
+        simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
+            .aimDirection       = aimDir,
+            .attackLeft         = attackLeft,
+            .attackRight        = attackRight,
+            .moveStick          = moveStick,
+            .moveDirectionWorld = moveWorld,
+            .triggeredActionId  = triggeredActionId });
         character.integrate(SimulationTimeStep(t, false, false, false, kDt),
                             input, physAdapter, queryAdapter, staticData);
         // The routing pass owns the one-shot: it clears the whole slice at the top of every tick.
@@ -1140,13 +1110,9 @@ TEST_CASE("DAttack.Integrate3.EveryMachineAndRadialLogLineCarriesIdAndTick", "[D
     for (uint32_t tick = kFirstTick; tick < kFirstTick + kTickCount; ++tick)
     {
         const bool press = (tick == kFirstTick);
-        simulatableBrawler::PlayerInput input(
-            dAttackRadialSimulation::PlayerInput(aim, press, false),
-            dAttackMachineSimulation::PlayerInput{aim, press, false, glm::vec2(0.f), glm::vec3(0.f)},
-            dAttackGuardSimulation::PlayerInput(aim),
-            brawlerProjectileSimulation::PlayerInput{aim},
-            brawlerMovementSimulation::PlayerInput{},
-            brawlerRingout::PlayerInput{});
+        simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
+            .aimDirection = aim,
+            .attackLeft   = press });
         decltype(executor)::ResolvedInputsType inputs;
         std::get<std::unordered_map<unsigned int, simulatableBrawler::PlayerInput>>(inputs)
             .emplace(kCharacterId, input);

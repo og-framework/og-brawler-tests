@@ -5,6 +5,7 @@
 
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
+#include "BrawlerTestInputs.h"
 #include "OGBrawler/DAttackMachineSimulation.h"
 #include "OGBrawler/DAttackRadialSimulation.h"
 #include "OGBrawler/BrawlerHitDetectionSystem.h"
@@ -230,17 +231,11 @@ static FirstTickOutcome runFirstTicks(int tickCount, float targetX, const glm::v
     const glm::vec3 aim(1.f, 0.f, 0.f);
     const glm::vec3 moveWorld(moveStick.x, moveStick.y, 0.f);
 
-    const simulatableBrawler::PlayerInput input(
-        dAttackRadialSimulation::PlayerInput(aim, /*attackLeft*/ true, /*attackRight*/ false),
-        dAttackMachineSimulation::PlayerInput{ aim, true, false, moveStick, moveWorld },
-        dAttackGuardSimulation::PlayerInput(aim),
-        brawlerProjectileSimulation::PlayerInput{ aim },
-        brawlerMovementSimulation::PlayerInput{},
-        // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-        // composite. No field, no wire cost: the input composite is still 77 B and
-        // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-        // every sub-sim name an InputType it OWNS.
-        brawlerRingout::PlayerInput{});
+    const simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
+        .aimDirection       = aim,
+        .attackLeft         = true,
+        .moveStick          = moveStick,
+        .moveDirectionWorld = moveWorld });
 
     for (int tick = 0; tick < tickCount; ++tick)
     {
@@ -338,17 +333,11 @@ static SwingOutcome runSwing(int tickCount, glm::vec3 targetPosition,
     const glm::vec3 aim(1.f, 0.f, 0.f);
     const glm::vec3 moveWorld(moveStick.x, moveStick.y, 0.f);
 
-    const simulatableBrawler::PlayerInput input(
-        dAttackRadialSimulation::PlayerInput(aim, /*attackLeft*/ true, /*attackRight*/ false),
-        dAttackMachineSimulation::PlayerInput{ aim, true, false, moveStick, moveWorld },
-        dAttackGuardSimulation::PlayerInput(aim),
-        brawlerProjectileSimulation::PlayerInput{ aim },
-        brawlerMovementSimulation::PlayerInput{},
-        // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-        // composite. No field, no wire cost: the input composite is still 77 B and
-        // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-        // every sub-sim name an InputType it OWNS.
-        brawlerRingout::PlayerInput{});
+    const simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
+        .aimDirection       = aim,
+        .attackLeft         = true,
+        .moveStick          = moveStick,
+        .moveDirectionWorld = moveWorld });
 
     SwingOutcome out{};
 

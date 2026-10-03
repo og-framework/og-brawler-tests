@@ -85,7 +85,7 @@ struct Rig
                             movement::State> composite(ic, state, movementIc, movementState);
         auto deps = makeDependencies<ringout::Dependencies>(composite);
 
-        ringout::PlayerInput     pi    = ringout::PlayerInput::zero();
+        ringout::PlayerInputView  pi{};
         ringout::IntegrationUtils utils{ t };
         ringout::AllInput         allInput{ pi, utils };
 
@@ -132,7 +132,7 @@ struct MachineStateOwner
 {
     using Owned      = OwnedDeps<machine::State>;
     using External   = ExternalDeps<>;
-    using InputType  = machine::PlayerInput;
+    using InputType  = machine::PlayerInputView;
     Owned    owned;
     External external;
 };
@@ -184,12 +184,6 @@ TEST_CASE("Ringout.Types.WireSlicesAndTheDeadBit", "[BrawlerRingout]")
     // when the total moves.
     REQUIRE(syncSize<ringout::InitialConditions>() == 4u);
     REQUIRE(syncSize<ringout::State>() == 5u);
-
-    // ⛔ THE INPUT COSTS NOTHING, and it must stay that way. An input byte is multiplied
-    // across every entry of every relayed input ring — roughly ten times what a state byte
-    // costs. Ring-out carries no per-tick player signal: death is positional and respawn is a
-    // tick countdown.
-    REQUIRE(syncSize<ringout::PlayerInput>() == 0u);
 
     // Bit 0, on the wire and in the checksum.
     REQUIRE(ringout::kFlagDead == 1u);

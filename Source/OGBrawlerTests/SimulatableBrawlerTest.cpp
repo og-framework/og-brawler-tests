@@ -364,7 +364,8 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     REQUIRE(syncSize<brawlerMovementSimulation::InitialConditions>() == 16u);
 
     // [movement-sim task 27, 2026-09-12] THE MACHINE SLICE 16 -> 21 B, composite 321 -> 326 B,
-    // +5 B, and the INPUT wire DOES NOT MOVE (ZeroInputIsTheFold below re-quotes 77 B unchanged;
+    // +5 B, and the INPUT wire DOES NOT MOVE (ZeroInputIsTheFold re-quoted 77 B unchanged -- its successor
+    // since og-syncedInput-rework task 3 is SyncedPlayerInputTest.cpp, 39 B;
     // RoundVsPacketBudgetTest.cpp re-quotes ringWireBytes(1u) == 86u and the 82 B entry stride).
     // `m_hitReaction` (1 B) and `m_flinchDuration` (4 B) are APPENDED to
     // dAttackMachineSimulation::State: the movement sub-sim needs the reaction KIND on every tick
@@ -379,7 +380,8 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     // the constant in CorrectionStateBufferCodec.h. Task 27 grew a sub-sim both builds compile in,
     // which is the case that correctly declines.
     // ⭐ [movement-sim task 84, 2026-09-20] THE MACHINE SLICE 21 -> 25 B, composite 335 -> 339 B,
-    // +4 B, and the INPUT wire DOES NOT MOVE (ZeroInputIsTheFold below re-quotes 77 B unchanged;
+    // +4 B, and the INPUT wire DOES NOT MOVE (ZeroInputIsTheFold re-quoted 77 B unchanged -- its successor
+    // since og-syncedInput-rework task 3 is SyncedPlayerInputTest.cpp, 39 B;
     // RoundVsPacketBudgetTest.cpp re-quotes ringWireBytes(1u) == 86u and the 82 B entry stride).
     // `m_attackEndTick` (4 B) is APPENDED to dAttackMachineSimulation::State: the movement sub-sim
     // needs the tick the swing ENDS on every tick of the slide, and a proxy that adopts a
@@ -475,239 +477,6 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
          << (kStateSyncBufferBytes - kBufferUsed) << " B");
 }
 
-
-// ===========================================================================
-// THE ZERO INPUT IS A FOLD  [movement-sim task 22]
-//
-// simulatableBrawler::getZeroPlayerInput() no longer hand-builds one argument per
-// sub-input. Each sub-simulation's PlayerInput owns a `static PlayerInput zero()`
-// beside the type itself, SimulationComposite::zero() folds them, and the function
-// is one line. Two properties are pinned here, and they are the two that could
-// break silently:
-//
-//  1. BYTE IDENTITY. kZeroInputWireBefore below is the serialized zero input as it
-//     stood BEFORE any production line of task 22 was written. PROVENANCE: on the
-//     shipped tree (tasks 1/2/4/5/10a/10 applied, nothing of task 22), a temporary
-//     Catch2 case serialized getZeroPlayerInput() through
-//     writeCompositeInputToSyncedBuffer into a poison-filled 76-byte buffer and
-//     WARN'd the hex. Those 76 bytes are transcribed below; the probe case was then
-//     deleted and this permanent case took its place. No production file was edited
-//     between the capture and the transcription.
-//
-//  2. ANTI-VACUITY - the tag survived. getZeroPlayerInput() must stay a DIFFERENT
-//     VALUE from simulatableBrawler::PlayerInput{}: radial/machine/guard carry a
-//     (0,0,1) forward aim, a value-initialised input carries (0,0,0). That gap is
-//     both a normalize() guard and the tag SimulationInputResolutionTest and
-//     SimulationNetSyncTest discriminate on - make default construction the zero and
-//     every one of those anti-vacuity pairs keeps passing while testing nothing.
-//     DO NOT change a default member initialiser to close this gap.
-// ===========================================================================
-
-namespace
-{
-    // Byte-addressable stand-in for the input sync buffer - the same shape
-    // writeCompositeInputToSyncedBuffer reaches for, and the same trick the wire
-    // tests in both suites already use.
-    struct FZeroInputProbeBuffer
-    {
-        std::vector<std::uint8_t> bytes;
-
-        template <typename T>
-        void writeToBuffer(std::uint32_t off, const T& value)
-        { std::memcpy(bytes.data() + off, &value, sizeof(T)); }
-
-        template <typename T>
-        T readFromBuffer(std::uint32_t off) const
-        { T v; std::memcpy(&v, bytes.data() + off, sizeof(T)); return v; }
-    };
-
-    constexpr std::uint32_t kZeroInputWireBytes = 77u;
-
-    // The captured "before" bytes, grouped by composite slice in wire order:
-    // radial(14) -> machine(38) -> guard(12) -> projectile(12) -> movement(1).
-    //
-    // [movement-sim task 11, 2026-09-06] 76 -> 77 B. The movement sub-sim's PlayerInput
-    // gained `holdGuard` as a `bool` member, so the slice that used to serialize nothing now
-    // contributes exactly one byte. The first 76 bytes are UNCHANGED and still carry task
-    // 22's original provenance; the appended 0x00 is not a re-capture, it is
-    // `holdGuard == false`, which is that type's own zero() and is derivable by inspection.
-    // Everything the block comment above says about the capture remains true of the prefix
-    // it describes.
-    //
-    // [movement-sim task 51, 2026-09-06] UNCHANGED, and the fact that it is unchanged is the
-    // hazard. That `bool` member became `uint8_t flags`, with holdGuard as bit 0: the same
-    // 1 B, and the same 0x00 when neutral, so THIS ARRAY DID NOT MOVE and neither did
-    // `kZeroInputWireBytes`. A byte-comparison fixture that passes because both sides changed
-    // together proves nothing, so section 5 of the case below flips bit 0 and requires the
-    // wire to move at exactly index 76 -- that, not this comment, is what keeps the trailing
-    // byte a holdGuard byte rather than merely a zero byte.
-    //
-    // The three 0x0000803F runs are the (0,0,1) forward aims; the projectile aim is
-    // (0,0,0), which is what the pre-fold call site passed it.
-    constexpr std::uint8_t kZeroInputWireBefore[kZeroInputWireBytes] = {
-        // radial: aimDirection (0,0,1), attackLeft, attackRight
-        0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x80u,0x3Fu, 0x00u,0x00u,
-        // machine: aimDirection (0,0,1), attackLeft, attackRight,
-        //          moveDirection (0,0), moveDirectionWorld (0,0,0), triggeredActionId 0
-        0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x80u,0x3Fu, 0x00u,0x00u,
-        0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u,
-        0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u,
-        0x00u,0x00u,0x00u,0x00u,
-        // guard: aimDirection (0,0,1)
-        0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x80u,0x3Fu,
-        // projectile: aimDirection (0,0,0)
-        0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u,
-        // movement: flags 0x00 -- ALL BITS CLEAR, and bit 0 is holdGuard (task 51)
-        0x00u,
-    };
-
-    std::vector<std::uint8_t> serializeInput(const simulatableBrawler::PlayerInput& input)
-    {
-        FZeroInputProbeBuffer buf;
-        // Poison, not zero: a slice that is never written would otherwise read back
-        // as a legitimate all-zero value and the comparison would pass on a hole.
-        buf.bytes.assign(kZeroInputWireBytes, 0xCDu);
-        const std::uint32_t written = writeCompositeInputToSyncedBuffer(input, buf, 0u);
-        REQUIRE(written == kZeroInputWireBytes);
-        return buf.bytes;
-    }
-
-    // Index of the first differing byte, or -1. Reported instead of 76 separate
-    // REQUIREs so a break names the offset without inflating the assertion count.
-    int firstDifference(const std::vector<std::uint8_t>& actual, const std::uint8_t* expected)
-    {
-        for (std::uint32_t i = 0; i < kZeroInputWireBytes; ++i)
-            if (actual[i] != expected[i]) return static_cast<int>(i);
-        return -1;
-    }
-
-    // FIELD-EXHAUSTIVE equality over the whole input composite - every field of every
-    // sub-input. Mirrors the helper in SimulationInputResolutionTest.cpp (where the
-    // anti-vacuity pairing lives) deliberately, including its reason for not memcmp'ing:
-    // padding bytes are not part of the value.
-    bool sameInput(const simulatableBrawler::PlayerInput& a,
-                   const simulatableBrawler::PlayerInput& b)
-    {
-        const auto& ra = a.get<dAttackRadialSimulation::PlayerInput>();
-        const auto& rb = b.get<dAttackRadialSimulation::PlayerInput>();
-        const auto& ma = a.get<dAttackMachineSimulation::PlayerInput>();
-        const auto& mb = b.get<dAttackMachineSimulation::PlayerInput>();
-        const auto& ga = a.get<dAttackGuardSimulation::PlayerInput>();
-        const auto& gb = b.get<dAttackGuardSimulation::PlayerInput>();
-        const auto& pa = a.get<brawlerProjectileSimulation::PlayerInput>();
-        const auto& pb = b.get<brawlerProjectileSimulation::PlayerInput>();
-        // [movement-sim task 51] The movement slice was missing from this "every field of
-        // every sub-input" list since task 11 added it. Adding it does not change the
-        // REQUIRE_FALSE below -- movement's zero() IS its default, so this term is equal on
-        // both sides -- but it makes the comment above true, and it means a future bit that
-        // stopped folding correctly would show up here rather than only on the wire.
-        const auto& va = a.get<brawlerMovementSimulation::PlayerInput>();
-        const auto& vb = b.get<brawlerMovementSimulation::PlayerInput>();
-
-        return ra.aimDirection == rb.aimDirection
-            && ra.attackLeft == rb.attackLeft
-            && ra.attackRight == rb.attackRight
-            && ma.aimDirection == mb.aimDirection
-            && ma.attackLeft == mb.attackLeft
-            && ma.attackRight == mb.attackRight
-            && ma.moveDirection == mb.moveDirection
-            && ma.moveDirectionWorld == mb.moveDirectionWorld
-            && ma.triggeredActionId == mb.triggeredActionId
-            && ga.aimDirection == gb.aimDirection
-            && pa.aimDirection == pb.aimDirection
-            && va.flags == vb.flags;
-    }
-}
-
-TEST_CASE("DAttack.SimulatableBrawler.ZeroInputIsTheFold", "[DAttack][SimulatableBrawler]")
-{
-    // The array above is sized for exactly this footprint; a composite change that
-    // moved it would otherwise compare against a stale length.
-    static_assert(compositeSyncSize<dAttackRadialSimulation::PlayerInput,
-                                    dAttackMachineSimulation::PlayerInput,
-                                    dAttackGuardSimulation::PlayerInput,
-                                    brawlerProjectileSimulation::PlayerInput,
-                                    brawlerMovementSimulation::PlayerInput>()
-                  == kZeroInputWireBytes,
-        "The PlayerInput composite's wire footprint moved. Re-capture the zero input's "
-        "bytes before touching kZeroInputWireBefore -- and treat it as a WIRE CHANGE.");
-
-    const auto zero = simulatableBrawler::getZeroPlayerInput();
-
-    // 1. BYTE IDENTITY - the fold reproduces the pre-task value exactly.
-    const std::vector<std::uint8_t> after = serializeInput(zero);
-    const int diffAt = firstDifference(after, kZeroInputWireBefore);
-    INFO("first differing byte index (-1 = identical): " << diffAt);
-    REQUIRE(diffAt == -1);
-
-    // 2. THE FOLD IS ELEMENT-WISE. Each slice is that type's OWN zero(), so the
-    //    composite carries no second definition of the neutral value.
-    REQUIRE(zero.get<dAttackRadialSimulation::PlayerInput>().aimDirection
-            == dAttackRadialSimulation::PlayerInput::zero().aimDirection);
-    REQUIRE(zero.get<dAttackMachineSimulation::PlayerInput>().aimDirection
-            == dAttackMachineSimulation::PlayerInput::zero().aimDirection);
-    REQUIRE(zero.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId
-            == dAttackMachineSimulation::PlayerInput::zero().triggeredActionId);
-    REQUIRE(zero.get<dAttackGuardSimulation::PlayerInput>().aimDirection
-            == dAttackGuardSimulation::PlayerInput::zero().aimDirection);
-    REQUIRE(zero.get<brawlerProjectileSimulation::PlayerInput>().aimDirection
-            == brawlerProjectileSimulation::PlayerInput::zero().aimDirection);
-    // [movement-sim task 51] The movement slice folds the same way; its neutral value is
-    // `flags == 0`, i.e. every bit -- holdGuard today, wall-grab/jump/dash/ski-tuck later --
-    // clear. That is why the fold survives each future bit without a re-capture here.
-    REQUIRE(zero.get<brawlerMovementSimulation::PlayerInput>().flags
-            == brawlerMovementSimulation::PlayerInput::zero().flags);
-
-    // 3. ANTI-VACUITY - THE TAG SURVIVED. This is the assertion that would fail if
-    //    anyone "simplified" the design by making default construction the zero.
-    REQUIRE_FALSE(sameInput(simulatableBrawler::getZeroPlayerInput(),
-                            simulatableBrawler::PlayerInput{}));
-
-    // ...and WHICH slices carry the tag, so a break says what collapsed rather than
-    // only that something did.
-    REQUIRE(zero.get<dAttackRadialSimulation::PlayerInput>().aimDirection
-            == glm::vec3(0.f, 0.f, 1.f));
-    REQUIRE(zero.get<dAttackMachineSimulation::PlayerInput>().aimDirection
-            == glm::vec3(0.f, 0.f, 1.f));
-    REQUIRE(zero.get<dAttackGuardSimulation::PlayerInput>().aimDirection
-            == glm::vec3(0.f, 0.f, 1.f));
-    REQUIRE(simulatableBrawler::PlayerInput{}
-                .get<dAttackRadialSimulation::PlayerInput>().aimDirection
-            == glm::vec3(0.f, 0.f, 0.f));
-
-    // 4. And the difference is visible ON THE WIRE too, not only field-wise - a
-    //    value-initialised input does NOT serialize to the captured bytes.
-    REQUIRE(firstDifference(serializeInput(simulatableBrawler::PlayerInput{}),
-                            kZeroInputWireBefore) != -1);
-
-    // 5. * [movement-sim task 51] THE TRAILING BYTE STILL DISCRIMINATES, and this is the
-    //    assertion the re-layout owes. `brawlerMovementSimulation::PlayerInput` went from
-    //    a `bool` member to `uint8_t flags`, with holdGuard as bit 0. Both are 1 B and both
-    //    serialize 0x00 when neutral, so sections 1-4 would ALL have passed unchanged even if
-    //    the byte had quietly stopped carrying holdGuard -- their discrimination comes from
-    //    the (0,0,1) aim tags in the PREFIX, not from anything in the movement slice.
-    //
-    //    So: set bit 0 and require the wire to move AT EXACTLY index 76, to that exact value.
-    //    That is what makes the last byte a holdGuard byte instead of merely a zero byte, and
-    //    it is a live negative control -- deleting `SIM_MEMBER(MovementInput, flags)`, or
-    //    re-pointing bit 0 at some other signal, turns this red.
-    static constexpr std::uint32_t kMovementFlagsByte = kZeroInputWireBytes - 1u;   // 76
-    REQUIRE(after[kMovementFlagsByte] == 0u);
-
-    auto guarded = simulatableBrawler::getZeroPlayerInput();
-    guarded.edit<brawlerMovementSimulation::PlayerInput>().flags =
-        brawlerMovementSimulation::kInputFlagHoldGuard;
-    const std::vector<std::uint8_t> guardedBytes = serializeInput(guarded);
-
-    INFO("holdGuard-set input: first differing byte = "
-         << firstDifference(guardedBytes, kZeroInputWireBefore)
-         << ", byte[76] = " << static_cast<int>(guardedBytes[kMovementFlagsByte]));
-    REQUIRE(firstDifference(guardedBytes, kZeroInputWireBefore)
-            == static_cast<int>(kMovementFlagsByte));
-    REQUIRE(guardedBytes[kMovementFlagsByte]
-            == brawlerMovementSimulation::kInputFlagHoldGuard);
-    REQUIRE(brawlerMovementSimulation::kInputFlagHoldGuard == 1u);
-}
 
 // ---------------------------------------------------------------------------
 // [movement-sim task 23] simulatableBrawler::DerivedState is a
@@ -951,7 +720,7 @@ namespace movementResim
     }
 
     // Byte-addressable stand-in for FSimulationStateSyncBuffer -- the same shape
-    // ZeroInputIsTheFold's probe buffer uses, and the shape
+    // SyncedPlayerInputTest.cpp's ByteBuffer uses, and the shape
     // correctionStateBuffer's Buffer concept asks for.
     struct FCorrectionProbeBuffer
     {
@@ -1062,8 +831,7 @@ namespace movementResim
         // The stick arrives as a world XY direction whose LENGTH the sim reads as the
         // deflection; the game sends unit length (getInputDirectionInCameraSpace normalises),
         // so a unit +X vector is "full deflection, into the wall".
-        input.edit<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld =
-            glm::vec3(1.f, 0.f, 0.f);
+        input.moveDirectionWorld = glm::vec3(1.f, 0.f, 0.f);
         return input;
     }
 

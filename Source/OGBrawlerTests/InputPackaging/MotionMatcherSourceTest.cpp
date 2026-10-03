@@ -68,13 +68,13 @@ inline glm::vec2 stickForAngle(float theta)
 	return glm::vec2(std::cos(theta), -std::sin(theta));
 }
 
-inline dAttackMachineSimulation::PlayerInput frame(glm::vec2 stick,
+inline simulatableBrawler::PlayerInput frame(glm::vec2 stick,
                                                    bool leftAttack = false,
                                                    bool rightAttack = false)
 {
-	dAttackMachineSimulation::PlayerInput in;
+	simulatableBrawler::PlayerInput in;
 	in.aimDirection       = aim();
-	in.moveDirection      = stick;
+	in.moveStick          = stick;
 	in.moveDirectionWorld = glm::vec3(stick.x, stick.y, 0.f);
 	in.attackLeft         = leftAttack;
 	in.attackRight        = rightAttack;
@@ -103,19 +103,19 @@ inline simulatableBrawler::ContinuousInputFields liveFields()
 class CaptureFeed
 {
 public:
-	void set(std::int32_t tick, const dAttackMachineSimulation::PlayerInput& in)
+	void set(std::int32_t tick, const simulatableBrawler::PlayerInput& in)
 	{
 		m_byTick[tick] = in;
 	}
 
-	const dAttackMachineSimulation::PlayerInput* find(std::int32_t tick) const
+	const simulatableBrawler::PlayerInput* find(std::int32_t tick) const
 	{
 		const auto it = m_byTick.find(tick);
 		return it == m_byTick.end() ? nullptr : &it->second;
 	}
 
 private:
-	std::map<std::int32_t, dAttackMachineSimulation::PlayerInput> m_byTick;
+	std::map<std::int32_t, simulatableBrawler::PlayerInput> m_byTick;
 };
 
 // THE NEW SOURCE, modelled: at(t) answers with capture t.
@@ -124,7 +124,7 @@ class RawCaptureHistory
 public:
 	explicit RawCaptureHistory(const CaptureFeed& feed) : m_feed(&feed) {}
 
-	const dAttackMachineSimulation::PlayerInput* at(std::uint32_t tick) const
+	const simulatableBrawler::PlayerInput* at(std::uint32_t tick) const
 	{
 		return m_feed->find(static_cast<std::int32_t>(tick));
 	}
@@ -142,7 +142,7 @@ public:
 	AppliedColumnHistory(const CaptureFeed& feed, int delayTicks)
 		: m_feed(&feed), m_delay(delayTicks) {}
 
-	const dAttackMachineSimulation::PlayerInput* at(std::uint32_t tick) const
+	const simulatableBrawler::PlayerInput* at(std::uint32_t tick) const
 	{
 		return m_feed->find(static_cast<std::int32_t>(tick) - m_delay);
 	}
@@ -305,7 +305,7 @@ TEST_CASE("MotionMatcherSource.RisingEdge.HeldButtonEdgesExactlyOnce",
 
 		for (int tick = kPressTick - 5; tick <= kPressTick + 15; ++tick)
 		{
-			const dAttackMachineSimulation::PlayerInput* live = feed.find(tick);
+			const simulatableBrawler::PlayerInput* live = feed.find(tick);
 			REQUIRE(live != nullptr);
 
 			const std::uint8_t held =
@@ -464,15 +464,15 @@ TEST_CASE("MotionMatcherSource.Adapter.AbsentTickIsNullNotNeutral",
 
 	const simulatableBrawler::DelayLineMotionHistory history(line);
 
-	// Present tick: the machine sub-input of the stored composite, by reference.
-	const dAttackMachineSimulation::PlayerInput* present = history.at(50u);
+	// Present tick: the stored input, by reference.
+	const simulatableBrawler::PlayerInput* present = history.at(50u);
 	REQUIRE(present != nullptr);
 	REQUIRE(present->attackLeft == true);
-	REQUIRE(present == &line.at(50).get<dAttackMachineSimulation::PlayerInput>());
+	REQUIRE(present == &line.at(50));
 
 	// Absent tick: the LINE hands back the neutral (a real object, never null)...
 	REQUIRE(line.has(49) == false);
-	REQUIRE(line.at(49).get<dAttackMachineSimulation::PlayerInput>().attackLeft == false);
+	REQUIRE(line.at(49).attackLeft == false);
 	// ...while the ADAPTER reports absence. This is the gate.
 	REQUIRE(history.at(49u) == nullptr);
 

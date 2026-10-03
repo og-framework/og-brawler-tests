@@ -232,22 +232,21 @@ TEST_CASE("Poll.TheGlyphClassifiesTheSameStickFieldTheMatcherDoes",
 		/*moveStick*/          glm::vec2(0.f, 1.f),
 		/*moveDirectionWorld*/ glm::vec3(-1.f, 0.f, 0.f));
 
-	const auto& machineInput = capture.get<dAttackMachineSimulation::PlayerInput>();
 	const CaptureRowFields fields =
-		brawlerInputHistoryVisualization::captureRowFieldsOf(machineInput, kDeadzone);
+		brawlerInputHistoryVisualization::captureRowFieldsOf(capture, kDeadzone);
 
 	// moveDirectionWorld is opposite the aim, so the row must read Back.
 	CHECK(fields.direction == DirectionBucket::Back);
 
 	// And the stick field, if it had been read, would have said something else entirely.
 	CHECK(brawlerInputHistoryVisualization::directionBucketOf(
-	          machineInput.moveDirection, glm::vec3(1.f, 0.f, 0.f), kDeadzone)
+	          capture.moveStick, glm::vec3(1.f, 0.f, 0.f), kDeadzone)
 	      != DirectionBucket::Back);
 
 	// Cross-checked against the matcher's own expression rather than against a literal.
 	const std::optional<float> matcherAngle = inputSequence::aimRelativeAngle(
-		glm::vec2(machineInput.moveDirectionWorld.x, machineInput.moveDirectionWorld.y),
-		glm::vec3(machineInput.aimDirection.x, machineInput.aimDirection.y, 0.f),
+		glm::vec2(capture.moveDirectionWorld.x, capture.moveDirectionWorld.y),
+		glm::vec3(capture.aimDirection.x, capture.aimDirection.y, 0.f),
 		kDeadzone);
 
 	REQUIRE(matcherAngle.has_value());
@@ -271,7 +270,7 @@ TEST_CASE("Poll.TheRowFieldsAreExactlyTheTwoThePanelDraws",
 				leftAttack, rightAttack);
 
 			const CaptureRowFields fields = brawlerInputHistoryVisualization::captureRowFieldsOf(
-				capture.get<dAttackMachineSimulation::PlayerInput>(), kDeadzone);
+				capture, kDeadzone);
 
 			if (fields.buttonMask == simulatableBrawler::motionButtonMask(leftAttack, rightAttack))
 				++agreeing;
@@ -291,13 +290,12 @@ TEST_CASE("Poll.TheRowFieldsAreExactlyTheTwoThePanelDraws",
 			false, false, inputSequence::kHadoukenActionId);
 
 		// The two captures really do differ; it is the ROW that ignores the difference.
-		REQUIRE(matched.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId
-		        != plain.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId);
+		REQUIRE(matched.triggeredActionId != plain.triggeredActionId);
 
 		const CaptureRowFields held = brawlerInputHistoryVisualization::captureRowFieldsOf(
-			plain.get<dAttackMachineSimulation::PlayerInput>(), kDeadzone);
+			plain, kDeadzone);
 		const CaptureRowFields firing = brawlerInputHistoryVisualization::captureRowFieldsOf(
-			matched.get<dAttackMachineSimulation::PlayerInput>(), kDeadzone);
+			matched, kDeadzone);
 
 		CHECK(held.direction == firing.direction);
 		CHECK(held.buttonMask == firing.buttonMask);

@@ -164,8 +164,7 @@ static std::size_t radialBodyHits(float planarX,
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
     query.report.hits.push_back(hit);
 
-    PlayerInput pi{};
-    pi.aimDirection = glm::vec3(1.f, 0.f, 0.f);
+    PlayerInputView pi{};
 
     IntegrationUtils<MockPhysicsAdapter> utils{ kDt, physics };
     AllInput<MockPhysicsAdapter> allInput{ pi, utils };

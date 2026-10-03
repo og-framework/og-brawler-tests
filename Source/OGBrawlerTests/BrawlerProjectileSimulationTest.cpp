@@ -111,7 +111,7 @@ static void callIntegrate(
     SimulationComposite<InitialConditions, State> composite(ic, state);
     auto deps = makeDependencies<Dependencies>(composite);
 
-    PlayerInput pi{};
+    PlayerInputView pi{};
     IntegrationUtils<MockPhysicsAdapter> utils{ kDt, currentTick, physics };
     AllInput<MockPhysicsAdapter> allInput{ pi, utils };
 

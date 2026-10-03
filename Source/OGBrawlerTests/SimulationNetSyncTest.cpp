@@ -429,18 +429,18 @@ TEST_CASE("DAttack.SimulationNetSync.SendLocalInputNoProviderIsNoOp", "[DAttack]
 namespace
 {
     // Tag each tick's capture so the resolved input identifies which tick it was
-    // captured at. aimDirection is a public field on the radial sub-input and is
-    // carried through the composite untouched by collectInputAll.
+    // captured at. aimDirection is a public field on the input and is
+    // carried through untouched by collectInputAll.
     simulatableBrawler::PlayerInput taggedCapture(float tickTag)
     {
         simulatableBrawler::PlayerInput input = simulatableBrawler::getZeroPlayerInput();
-        input.edit<dAttackRadialSimulation::PlayerInput>().aimDirection.x = tickTag;
+        input.aimDirection.x = tickTag;
         return input;
     }
 
     float captureTagOf(const simulatableBrawler::PlayerInput& input)
     {
-        return input.get<dAttackRadialSimulation::PlayerInput>().aimDirection.x;
+        return input.aimDirection.x;
     }
 
     // The tag the game's zero input carries — getZeroPlayerInput builds a
@@ -456,11 +456,7 @@ namespace
     // value-initialised input would carry (0,0,0) into normalisation.
     bool isGameZeroInput(const simulatableBrawler::PlayerInput& input)
     {
-        const glm::vec3 aim = input.get<dAttackRadialSimulation::PlayerInput>().aimDirection;
-        const glm::vec3 expected =
-            simulatableBrawler::getZeroPlayerInput()
-                .get<dAttackRadialSimulation::PlayerInput>().aimDirection;
-        return aim == expected;
+        return input.aimDirection == simulatableBrawler::getZeroPlayerInput().aimDirection;
     }
 }
 

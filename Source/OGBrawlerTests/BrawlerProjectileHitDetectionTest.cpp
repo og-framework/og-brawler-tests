@@ -42,6 +42,7 @@
 #include "OGBrawler/BrawlerHitRoutingSystem.h"
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
+#include "BrawlerTestInputs.h"
 #include "OGBrawler/BrawlerInboundHit.h"
 #include "OGBrawler/BrawlerProjectileSimulation.h"
 #include "OGBrawler/DAttackMachineSimulation.h"
@@ -287,13 +288,7 @@ struct Rig
 
     static simulatableBrawler::PlayerInput makeInput(const glm::vec3& aim, std::uint8_t flags)
     {
-        return simulatableBrawler::PlayerInput(
-            dAttackRadialSimulation::PlayerInput(aim, false, false),
-            dAttackMachineSimulation::PlayerInput{ aim, false, false, glm::vec2(0.f), glm::vec3(0.f) },
-            dAttackGuardSimulation::PlayerInput(aim),
-            brawlerProjectileSimulation::PlayerInput{ aim },
-            brawlerMovementSimulation::PlayerInput{ flags },
-            brawlerRingout::PlayerInput{});
+        return brawlerTestInputs::make({ .aimDirection = aim, .flags = flags });
     }
 
     // The stun the field capture opens with, delivered the way routing delivers it: tick 0's

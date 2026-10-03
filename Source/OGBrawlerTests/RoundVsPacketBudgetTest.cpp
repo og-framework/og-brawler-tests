@@ -213,10 +213,11 @@ namespace
             : kJoinBurstEntries * 1000u + (characters - 2u) * kAvgEntriesX1000;
     }
 
-    // The pre-diet character cap. DERIVED here rather than typed: it is the largest
-    // N whose join-alone round still fits, and the runtime fence
-    // (`ASimulationManagerUImpl::kPreDietCharacterCap`) mirrors this value. Both are
-    // deleted by item 40.
+    // The join-alone character bound. DERIVED here rather than typed: it is the largest
+    // N whose join-alone round still fits. Until og-syncedInput-rework task 3 the runtime
+    // fence (`ASimulationManagerUImpl::kPreDietCharacterCap`, 4) mirrored this value; the
+    // 82 -> 44 B entry stride moved it to 11 and the runtime cap was retained at 4 (lifting
+    // it is unscheduled: og-netcode-v2-input-relay item 40 closed on 2026-10-03).
     constexpr std::uint32_t largestFittingCharacterCountUnderJoin()
     {
         std::uint32_t n = 2u;
@@ -246,8 +247,8 @@ namespace
     // effect at all, and would quietly stop firing on the one that does.
     constexpr std::uint32_t kSteadyEntriesPerRing = 1u;
 
-    // The rotation width a session runs at. Pre-diet this is 1 (T38 §16.2); item 40
-    // restores 2.
+    // The rotation width a session runs at. Pre-diet this is 1 (T38 §16.2). Restoring 2
+    // was item 40's; that item closed on 2026-10-03 and nobody owns the restore today.
     constexpr std::uint32_t kShippedRotationK =
         static_cast<std::uint32_t>(TimeConfig{}.correctionRotationK);
 
@@ -279,7 +280,7 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     static_assert(roundBytes(kTargetCharacters, kSteadyEntriesPerRing) <= kUsableSingleBunchBytes,
         "The relay rings of all remote characters plus one correction state no longer fit a "
         "single Iris packet at the product character target. This is the T37 defect: the "
-        "round, not the payload, is the budget. Shrink the wire (item 40's diet) before "
+        "round, not the payload, is the budget. Shrink the wire before "
         "raising the character count or either payload.");
 
     // ⚠ [T34] THIS CASE PRICES THE STEADY FRAME, NOT THE WORST ONE. Under bare C1
@@ -303,14 +304,15 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     //
     // [movement-sim task 51, 2026-09-06] RE-QUOTED UNCHANGED at 86 B, and that is the whole
     // result of the task. `PlayerInput` went from a `bool` member to `uint8_t flags`, with
-    // holdGuard as bit 0 and bits 1-7 reserved for wall-grab (20), jump (21), dash (31) and
-    // ski-tuck (48). `bool` and `uint8_t` are both 1 B, so the input composite is still 77 B,
-    // the entry stride is still 82 B and this line still reads 86. The four future signals
+    // holdGuard as bit 0 and bits 1-7 UNASSIGNED (corrected by og-syncedInput-rework task 4:
+    // this entry said "reserved for wall-grab (20), jump (21), dash (31) and ski-tuck (48)",
+    // and nothing reserved them). `bool` and `uint8_t` are both 1 B, so the input composite is
+    // still 77 B, the entry stride is still 82 B and this line still reads 86. The four future signals
     // now cost ZERO further ring bytes instead of ~10.264 B of margin each.
     //
     // ⭐⭐ [ringout task 2, 2026-09-13] RE-QUOTED UNCHANGED AT 86 B, AND THAT IS THE POINT OF
     // THE LINE, NOT AN ASIDE. This task appended a SIXTH slice to
-    // `simulatableBrawler::PlayerInput` — `brawlerRingout::PlayerInput` — and the number did
+    // `simulatableBrawler::PlayerInput` — ring-out's own `PlayerInput` — and the number did
     // not move, because that type has ZERO FIELDS and an EMPTY `SerializableFields` tuple.
     // The input composite is still 77 B, the entry stride is still 82 B, and this line still
     // reads 86.
@@ -325,12 +327,22 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     // reports an `OwnershipOverlap` instead.
     //
     // ⛔ THIS IS THE FENCE THAT WOULD CATCH THE MISTAKE. A field added to
-    // `brawlerRingout::PlayerInput` would cost ~10.264 B of margin per byte against the
+    // ring-out's `PlayerInput` slice would cost ~10.264 B of margin per byte against the
     // ~27.352 B of slack in the ordinary-join table at the bottom of this file — roughly ten
     // times what a STATE byte costs, because an input byte is multiplied across every entry
     // of every remote ring. The whole ring-out state increment cost 9 STATE bytes; three
     // input bytes would have cost more margin than all nine.
-    REQUIRE(ringWireBytes(1u) == 86u);
+    //
+    // [og-syncedInput-rework task 3, 2026-10-03] 86 -> 48 B. The six-slice input composite
+    // (77 B, every shared field sent up to four times) became the flat 39 B
+    // `simulatableBrawler::SyncedPlayerInput`, so the entry stride went 82 -> 44 B and
+    // 48 = 2 (u16 prefix) + 2 (codec header) + 44 (one entry). Every input-byte price quoted
+    // in the entries above (~10.264 B of margin per byte, ~27.352 B of slack, ~2.5 input
+    // bytes of margin left) was measured at the 82 B stride and the cap of 4, and is
+    // superseded: the pre-diet table below now derives a join-alone bound of 11, and at that
+    // bound one input byte costs 18.188 B of margin (8 + 9 x 1.132 entries) against 10.728 B
+    // over the half-entry floor -- ONE more input byte turns that floor red.
+    REQUIRE(ringWireBytes(1u) == 48u);
     // [movement-sim T1 -> T5, 2026-09-02] 311 -> 363 -> 335 B. T1 appended the
     // movement sub-sim's State carrying a placeholder 52 B PhysicsBodyState
     // (composite 300 -> 352 B); T5 swapped that slice to the 24 B LinearBodyState
@@ -428,7 +440,7 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
 // 2. THE POSITIVE CONTROL — proof the fence can actually bite.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product target does NOT fit",
+TEST_CASE("PacketBudget: the fence bites — three entries per ring at the product target does NOT fit",
           "[PacketBudget][InputFirstReplication]")
 {
     // A budget test that only ever passes is indistinguishable from no test. This
@@ -441,19 +453,32 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     // stopped being "what happens if somebody sets the knob to 2" (the T33
     // experiment T37 refuted) and became "what a correlated p99 frame at six
     // characters would cost", which is the same arithmetic pointed at a live
-    // scenario. Six characters is out of reach until item 40's diet lands, and this
-    // is one of the two independent reasons why.
-    REQUIRE(roundBytes(kTargetCharacters, kP99Entries) > kUsableSingleBunchBytes);
+    // scenario.
+    //
+    // [og-syncedInput-rework task 3, 2026-10-03] THE p99 ROW STOPPED BITING, so the bite
+    // moved to three entries. At the 44 B stride a correlated p99 frame at six characters
+    // is 847 B and FITS the 952 B bunch (it was 1227 B at the 82 B stride, and was "one of
+    // the two independent reasons" six characters was out of reach -- it is not any more).
+    // Three entries per ring at six characters is 1067 B and does not fit; that is the
+    // positive control now. The p99 fact is kept, asserted in the direction it is measured.
+    REQUIRE(roundBytes(kTargetCharacters, 3u) > kUsableSingleBunchBytes);
+    REQUIRE(roundBytes(kTargetCharacters, kP99Entries) <= kUsableSingleBunchBytes);
 
     // ...and the boundary is where the arithmetic says, not merely "somewhere
-    // above 1". At six characters the rings alone at two entries are 5 x 175 = 875 B,
-    // which leaves no room for a state (327 B) inside 952 B.
+    // above 1". [og-syncedInput-rework task 3] At six characters the rings alone at two
+    // entries are 5 x (92+7) = 495 B, plus the 343 B state batch and 9 B per packet = 847 B,
+    // which fits; at three entries they are 5 x (136+7) = 715 B, so 1067 B, which does not.
+    // (Before task 3: 5 x 175 = 875 B at two entries, leaving no room for a state.)
     // [movement-sim task 51, 2026-09-06] RE-QUOTED UNCHANGED at 168 B: the flags re-layout
     // is 1 B for 1 B, so neither the stride nor any multiple of it moved.
     // [movement-sim task 11, 2026-09-06] 166 -> 168 B (2 x the 81 -> 82 B entry stride);
     // the state batch is 327 B, not 342. Both terms moved, and the row's conclusion is
     // unchanged and now holds by a wider margin.
-    REQUIRE(ringWireBytes(2u) == 168u);
+    // [og-syncedInput-rework task 3, 2026-10-03] 168 -> 92 B (2 x the 82 -> 44 B entry
+    // stride). The flat 39 B SyncedPlayerInput replaced the 77 B six-slice composite.
+    REQUIRE(ringWireBytes(2u) == 92u);
+    // [og-syncedInput-rework task 3, 2026-10-03] NEW row: three entries, 2 + 2 + 3 x 44.
+    REQUIRE(ringWireBytes(3u) == 136u);
     // [movement-sim T1 -> T5, 2026-09-02] 1192 -> 1244 -> 1216 B, all of it the state
     // term (318 -> 370 -> 342 B batched). The ring term never moved: the movement
     // sub-sim's PlayerInput slice is empty, so that task changed the STATE wire and
@@ -471,6 +496,7 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     // (327 -> 339 B batched, the +12 B of `positionCmd`). The ring term is UNTOUCHED at
     // 5 x (168+7) = 875 B — this task moves the STATE wire and not one input byte, which is
     // the constraint the ordinary-join table below is now only ~2.5 input bytes away from.
+    // (Superseded by og-syncedInput-rework task 3: see the 92 B ledger line below.)
     // 1223 = 875 (rings) + 339 (state batch) + 9 (per-packet overhead); the conclusion is
     // unchanged and now holds by 271 B.
     // [movement-sim task 27, 2026-09-12] 1223 -> 1228 B, and ALL of it is the state term
@@ -511,7 +537,13 @@ TEST_CASE("PacketBudget: the fence bites — two entries per ring at the product
     // State's `hitTargets` ledger, +3 B). The ring term is UNTOUCHED at 5 x (168+7) = 875 B.
     // 1227 = 875 + 343 + 9; the conclusion is unchanged and holds by 275 B. Found by running the
     // suite, the third time for this row (1227 == 1228).
-    REQUIRE(roundBytes(kTargetCharacters, 2u) == 1227u);
+    // [og-syncedInput-rework task 3, 2026-10-03] 1227 -> **847 B**, all of it the RING term:
+    // 5 x (168+7) = 875 -> 5 x (92+7) = 495 B, with the state batch unchanged at 343 B.
+    // 847 = 495 + 343 + 9, and this row's verdict FLIPPED: it fits (by 105 B). The positive
+    // control is the three-entry row now.
+    REQUIRE(roundBytes(kTargetCharacters, 2u) == 847u);
+    // [og-syncedInput-rework task 3, 2026-10-03] NEW row: 5 x (136+7) + 343 + 9 = 1067 B.
+    REQUIRE(roundBytes(kTargetCharacters, 3u) == 1067u);
 
     // The relay ring's own malformed-length ceiling is far above the packet, and
     // that is not a contradiction: kMaxWireBytes bounds what a RECEIVER will
@@ -552,8 +584,9 @@ TEST_CASE("PacketBudget: the shipped round leaves the margin the PIE gate is set
     // At the SHIPPED rotation width every extra state must fit too. [T34] K is 1
     // pre-diet, so `extraStates` is 0 and these two rows are currently the same
     // statement as the two above — kept, and kept computed from the knob rather
-    // than folded away, because item 40 restores K=2 and this is where that restore
-    // gets priced against the small character counts the shipped gates measure.
+    // than folded away, because restoring K=2 (item 40's job until that item closed on
+    // 2026-10-03; unowned today) gets priced here against the small character counts the
+    // shipped gates measure.
     const std::uint32_t extraStates =
         (kShippedRotationK > 1u) ? (kShippedRotationK - 1u) : 0u;
 
@@ -567,9 +600,10 @@ TEST_CASE("PacketBudget: the shipped round leaves the margin the PIE gate is set
 // ⭐ 4. [og-netcode-v2-input-relay T34] THE PRE-DIET TABLE — the cap, from inside
 //    the suite.
 //
-// ⛔ ITEM 40 REPLACES THIS WHOLE SECTION with the post-diet table (its AC 2), and
-// deletes `ASimulationManagerUImpl::kPreDietCharacterCap` with it. Their joint
-// absence is the "cap lifted" statement; there is no flag to flip.
+// ⛔ ITEM 40 WAS TO REPLACE THIS WHOLE SECTION with the post-diet table (its AC 2), and
+// delete `ASimulationManagerUImpl::kPreDietCharacterCap` with it; their joint absence is
+// the "cap lifted" statement, and there is no flag to flip. [og-syncedInput-rework task 3]
+// Item 40 closed on 2026-10-03 without doing either, so lifting the cap is unscheduled.
 //
 // WHY A TABLE AND NOT A CONSTANT. Bare C1 makes the ring's residency VARIABLE, so
 // the question "does the round fit" stopped having one answer and acquired a
@@ -582,7 +616,9 @@ TEST_CASE("PacketBudget: the shipped round leaves the margin the PIE gate is set
 // THE SCENARIO THAT DECIDES IT is an ORDINARY JOIN: the joining character's ring at
 // the stage cap while everyone else sits at the measured steady average. It needs no
 // server hitch and no correlated burst — it happens every time somebody connects.
-// N = 4 clears it with about five sixths of one entry to spare; N = 5 does not.
+// [og-syncedInput-rework task 3, 2026-10-03] N = 11 clears it with 32.728 B (0.744 of an
+// entry) to spare; N = 12 does not. Before task 3 that boundary sat at 4/5 ("N = 4 clears it
+// with about five sixths of one entry to spare; N = 5 does not"), at the 82 B stride.
 //
 // [movement-sim task 11, 2026-09-06] ⭐⭐ THE INPUT WIRE IS THE SCARCE ONE, AND THE NUMBER
 // IS SMALL. Task 11's `PlayerInput::holdGuard` moved the entry stride 81 -> 82 B, and the
@@ -606,44 +642,61 @@ TEST_CASE("PacketBudget: the shipped round leaves the margin the PIE gate is set
 // byte they cost nothing beyond what `holdGuard` already spent.
 //
 // ⭐⭐ [movement-sim task 51, 2026-09-06] THE FLAGS BYTE NOW EXISTS, AND NONE OF THE
-// ARITHMETIC ABOVE MOVED. `brawlerMovementSimulation::PlayerInput` is `uint8_t flags` with
-// holdGuard as bit 0 and bits 1-7 reserved for exactly those four tasks. `bool` -> `uint8_t`
-// is 1 B for 1 B, so the entry stride is still 82 B, `ringWireBytes(1u)` is still 86 B, and
+// ARITHMETIC ABOVE MOVED. The movement sub-sim's `PlayerInput` is `uint8_t flags` with
+// holdGuard as bit 0 and bits 1-7 UNASSIGNED (corrected by og-syncedInput-rework task 4: this
+// entry said "reserved for exactly those four tasks", and nothing reserved them).
+// `bool` -> `uint8_t` is 1 B for 1 B, so the entry stride is still 82 B, `ringWireBytes(1u)` is still 86 B, and
 // the margin at the cap is still 68.352 B with 27.352 B of slack over the half-entry floor.
 // The four coming signals are now free at this fence rather than ~10.264 B of margin each,
 // which is what turns "2.54 more input bytes, ever" into a budget the roadmap fits inside.
 // The rule is no longer advisory: the type it names has nowhere to put a new `bool`.
+//
+// ⭐⭐ [og-syncedInput-rework task 3, 2026-10-03] THE ARITHMETIC ABOVE IS HISTORY. The input
+// wire is the flat 39 B `simulatableBrawler::SyncedPlayerInput` now (its `flags` byte
+// carries holdGuard at bit 0), the entry stride is 44 B, and the derived join-alone bound
+// moved from 4 to 11. At the bound the margin is 32.728 B (0.744 entries) against a
+// half-entry floor of 22 B, so 10.728 B of slack; one input byte there costs 18.188 B of
+// margin (8 join-burst + 9 x 1.132 average entries), so ONE more input byte turns the
+// floor red. The runtime cap (`kPreDietCharacterCap`) stays at 4: the K = 1 rows below
+// still price 2..4, which is the configuration that ships.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("PacketBudget: the pre-diet cap is 4, and it is where join-alone crosses the bound",
+TEST_CASE("PacketBudget: the join-alone bound is 11 characters, and N = 12 crosses it",
           "[PacketBudget][InputFirstReplication]")
 {
-    // ⭐ THE INVERTED ROW. N = 5's ordinary-join round EXCEEDS the budget — this is
-    // the assertion that makes the cap a derived fact rather than a preference, and
+    // ⭐ THE INVERTED ROW. N = 12's ordinary-join round EXCEEDS the budget — this is
+    // the assertion that makes the bound a derived fact rather than a preference, and
     // the one that must go red first if anyone grows the entry payload.
-    INFO("N=5 join-alone ringsOnly(x1000)=" << ringsOnlyBytesX1000(5u, joinAloneSumEntriesX1000(5u))
+    // [og-syncedInput-rework task 3, 2026-10-03] Moved N = 5 -> N = 12 (980.080 B against
+    // 952 B): the 82 -> 44 B entry stride moved the bound from 4 to 11.
+    INFO("N=12 join-alone ringsOnly(x1000)=" << ringsOnlyBytesX1000(12u, joinAloneSumEntriesX1000(12u))
          << " budget(x1000)=" << kBudgetX1000);
-    REQUIRE(ringsOnlyBytesX1000(5u, joinAloneSumEntriesX1000(5u)) > kBudgetX1000);
+    REQUIRE(ringsOnlyBytesX1000(12u, joinAloneSumEntriesX1000(12u)) > kBudgetX1000);
 
-    // ...and the rows below it PASS, so the boundary is exactly where the cap says.
-    for (std::uint32_t n = 2u; n <= 4u; ++n)
+    // ...and the rows below it PASS, so the boundary is exactly where the bound says.
+    // [og-syncedInput-rework task 3, 2026-10-03] Loop 2..4 -> 2..11 (N = 11 is 919.272 B).
+    for (std::uint32_t n = 2u; n <= 11u; ++n)
     {
         INFO("N=" << n << " join-alone ringsOnly(x1000)="
              << ringsOnlyBytesX1000(n, joinAloneSumEntriesX1000(n)));
         REQUIRE(ringsOnlyBytesX1000(n, joinAloneSumEntriesX1000(n)) <= kBudgetX1000);
     }
 
-    // The cap, derived by walking the same bound rather than typed. The runtime
-    // fence mirrors this value as `ASimulationManagerUImpl::kPreDietCharacterCap`;
-    // the two are pinned together by this line and by that constant's derivation tag (D-01,
-    // into SimulationManagerUImpl-rationale.md's pre-diet cap section),
-    // because a pure-C++ target cannot see a UCLASS.
-    REQUIRE(largestFittingCharacterCountUnderJoin() == 4u);
+    // The bound, derived by walking the same inequality rather than typed. Until
+    // og-syncedInput-rework task 3 the runtime fence `ASimulationManagerUImpl::kPreDietCharacterCap`
+    // mirrored this value; it is retained at 4 while this bound is 11 (that constant's
+    // derivation tag D-01, in SimulationManagerUImpl-rationale.md's pre-diet cap section,
+    // records the split). A pure-C++ target cannot see a UCLASS.
+    // [og-syncedInput-rework task 3, 2026-10-03] 4 -> 11.
+    REQUIRE(largestFittingCharacterCountUnderJoin() == 11u);
 
-    // The margin at the cap, reported rather than asserted loosely: any payload
+    // The margin at the bound, reported rather than asserted loosely: any payload
     // growth that eats it turns the row above red instead of silently narrowing it.
+    // [og-syncedInput-rework task 3, 2026-10-03] Computed at the DERIVED bound (11) rather
+    // than at a literal 4: 32.728 B = 0.744 entries, so both bounds below still hold.
+    const std::uint32_t bound = largestFittingCharacterCountUnderJoin();
     const std::uint64_t marginX1000 =
-        kBudgetX1000 - ringsOnlyBytesX1000(4u, joinAloneSumEntriesX1000(4u));
+        kBudgetX1000 - ringsOnlyBytesX1000(bound, joinAloneSumEntriesX1000(bound));
     INFO("margin at the cap = " << (marginX1000 / 1000u) << " B = "
          << (marginX1000 / kRingEntryBytes) << " milli-entries");
     REQUIRE(marginX1000 < kRingEntryBytes * 1000ull);   // under ONE entry of slack
@@ -676,7 +729,7 @@ TEST_CASE("PacketBudget: at the cap the whole round fits on average AND at corre
     REQUIRE(kShippedRotationK == 1u);
 }
 
-TEST_CASE("PacketBudget: the K=2 round at the cap does NOT fit — the premise K=1 shipped on holds again",
+TEST_CASE("PacketBudget: the K=2 round at the cap fits again, and bites only at the product target",
           "[PacketBudget][InputFirstReplication]")
 {
     // ⭐ THIS ROW WAS AN INVERTED POSITIVE CONTROL AND IT HAS NOW FIRED. Read the
@@ -754,10 +807,29 @@ TEST_CASE("PacketBudget: the K=2 round at the cap does NOT fit — the premise K
     // ⚠ Note the literal `2ull` below: this row prices a HYPOTHETICAL K=2 round and
     // is deliberately independent of the configured `kShippedRotationK`. Changing the
     // config does not change this arithmetic by a single byte.
+    //
+    // ⭐⭐ [og-syncedInput-rework task 3, 2026-10-03] MEASURED A SEVENTH TIME, AND THE
+    // DIRECTION FLIPPED TO `<=` -- the task-29 precedent, for the opposite reason. This time
+    // the RING term moved, not the state: the entry stride went 82 -> 44 B (the flat 39 B
+    // `SyncedPlayerInput` replaced the 77 B six-slice composite). The N=4 round goes
+    // 1006.472 B (the value at the 82 B stride with today's 343 B state batch; the state-side
+    // tasks since ringout task 2 moved it from the 1026.472 recorded above without a line
+    // here) -> **877.424 B**, CLEARING the 952 B bunch by 74.576 B. So the arithmetic
+    // objection to K=2 at the shipped cap is gone again; §16.2's Iris huge-object-window
+    // objection is not arithmetic and is untouched, and K stays 1 (the preceding case).
+    // The `>` alarm this row exists to raise moved to the product target: the new negative
+    // control below.
     const std::uint64_t avgRingsAtCap = ringsOnlyBytesX1000(4u, 3u * kAvgEntriesX1000);
     INFO("N=4 K=2 avgRound(x1000)=" << (avgRingsAtCap + 2ull * kStateBatchBytes * 1000ull)
          << " budget(x1000)=" << kBudgetX1000);
-    REQUIRE(avgRingsAtCap + 2ull * kStateBatchBytes * 1000ull > kBudgetX1000);
+    REQUIRE(avgRingsAtCap + 2ull * kStateBatchBytes * 1000ull <= kBudgetX1000);
+
+    // [og-syncedInput-rework task 3, 2026-10-03] NEW NEGATIVE CONTROL, at the product
+    // target: six characters on an average frame with K=2 is 999.040 B and does NOT fit.
+    const std::uint64_t avgRingsAtTarget = ringsOnlyBytesX1000(6u, 5u * kAvgEntriesX1000);
+    INFO("N=6 K=2 avgRound(x1000)=" << (avgRingsAtTarget + 2ull * kStateBatchBytes * 1000ull)
+         << " budget(x1000)=" << kBudgetX1000);
+    REQUIRE(avgRingsAtTarget + 2ull * kStateBatchBytes * 1000ull > kBudgetX1000);
 
     // At three characters K=2 still fits on average, which is why §16.2 had to
     // reason about the window rather than about bytes to rule it out there.
@@ -803,6 +875,13 @@ TEST_CASE("PacketBudget: the K=2 round at the cap does NOT fit — the premise K
     // this arm crosses. That is the number the next sub-simulation should budget against,
     // and it is SMALLER than the correction buffer's own 41 B of headroom — this row, not
     // `kBufferBytes`, is the binding constraint on state growth now.
+    //
+    // [og-syncedInput-rework task 3, 2026-10-03] STILL CLEARS, by far more: the ring term
+    // shrank with the 82 -> 44 B entry stride, so 902.648 B (at the 82 B stride with today's
+    // 343 B state batch) -> **816.616 B**, clearing by 135.384 B. The "~14 more state bytes"
+    // room above is now ~67 (135.384 / 2), which is MORE than the correction buffer's own
+    // headroom (51 B at the last WireFootprint ledger line), so this row is no longer the
+    // binding constraint on state growth -- `kBufferBytes` is again.
     const std::uint64_t avgRingsAtThree = ringsOnlyBytesX1000(3u, 2u * kAvgEntriesX1000);
     INFO("N=3 K=2 avgRound(x1000)=" << (avgRingsAtThree + 2ull * kStateBatchBytes * 1000ull)
          << " budget(x1000)=" << kBudgetX1000);

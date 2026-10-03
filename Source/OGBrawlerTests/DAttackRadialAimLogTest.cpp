@@ -136,8 +136,7 @@ static std::vector<std::string> captureRadialLines(float aimAngle, const glm::ve
 
     MockPhysicsAdapter      physics{ 2 };            // 0 = weapon (own), 1 = capsule (parent)
 
-    PlayerInput pi{};
-    pi.aimDirection = glm::vec3(1.f, 0.f, 0.f);
+    PlayerInputView pi{};
 
     IntegrationUtils<MockPhysicsAdapter> utils{ kDt, physics };
     AllInput<MockPhysicsAdapter> allInput{ pi, utils };

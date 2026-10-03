@@ -40,6 +40,7 @@
 #include "OGBrawler/BrawlerHitRoutingSystem.h"
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
+#include "BrawlerTestInputs.h"
 #include "OGBrawler/HitReaction.h"
 #include "OGBrawler/BrawlerInboundHit.h"
 #include "OGBrawler/DAttackDirectionClassifier.h"
@@ -632,37 +633,18 @@ struct FEndToEndRig
                                   : (followUp ? followUpStick : glm::vec2(0.f));
             const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
 
-            const simulatableBrawler::PlayerInput attackerInput(
-                dAttackRadialSimulation::PlayerInput(aim, pressing, false),
-                // [movement-sim task 87] The 6th field is `triggeredActionId`, which the input
-                // layer's motion matcher sets on the ONE tick a motion completes. Every case
-                // before this task leaves `hadoukenOnTick` at -1 and therefore passes the 0 the
-                // 5-arg form defaulted it to.
-                dAttackMachineSimulation::PlayerInput{ aim, pressing, false, stick,
-                                                       pressing ? moveWorld : glm::vec3(0.f),
-                                                       firing ? inputSequence::kHadoukenActionId
-                                                              : 0u },
-                dAttackGuardSimulation::PlayerInput(aim),
-                brawlerProjectileSimulation::PlayerInput{ aim },
-                brawlerMovementSimulation::PlayerInput{},
-                // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-                // composite. No field, no wire cost: the input composite is still 77 B and
-                // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-                // every sub-sim name an InputType it OWNS.
-                brawlerRingout::PlayerInput{});
+            const simulatableBrawler::PlayerInput attackerInput = brawlerTestInputs::make({
+                .aimDirection       = aim,
+                .attackLeft         = pressing,
+                .moveStick          = stick,
+                .moveDirectionWorld = pressing ? moveWorld : glm::vec3(0.f),
+                // [movement-sim task 87] `triggeredActionId` is what the input layer's motion
+                // matcher sets on the ONE tick a motion completes. Every case before this task
+                // leaves `hadoukenOnTick` at -1 and therefore passes 0.
+                .triggeredActionId  = firing ? inputSequence::kHadoukenActionId : 0u });
 
-            const simulatableBrawler::PlayerInput targetInput(
-                dAttackRadialSimulation::PlayerInput(aim, false, false),
-                dAttackMachineSimulation::PlayerInput{ aim, false, false,
-                                                       glm::vec2(0.f), glm::vec3(0.f) },
-                dAttackGuardSimulation::PlayerInput(aim),
-                brawlerProjectileSimulation::PlayerInput{ aim },
-                brawlerMovementSimulation::PlayerInput{},
-                // [ringout task 2, 2026-09-13] Ring-out's ZERO-BYTE PlayerInput, appended to the
-                // composite. No field, no wire cost: the input composite is still 77 B and
-                // ringWireBytes(1u) is still 86 B. Required only because ValidDependencies makes
-                // every sub-sim name an InputType it OWNS.
-                brawlerRingout::PlayerInput{});
+            const simulatableBrawler::PlayerInput targetInput =
+                brawlerTestInputs::make({ .aimDirection = aim });
 
             const SimulationTimeStep step(tick, false, false, false, kDt);
             brawler(0u).integrate(step, attackerInput, phys, query, staticData);

@@ -186,7 +186,7 @@ static TickResult tick(const glm::vec3& aim,
 
     MockSpatialQueryAdapter query{};
 
-    PlayerInput pi{};
+    PlayerInputView pi{};
     pi.aimDirection = aim;
 
     IntegrationUtils<MockPhysicsAdapter, MockSpatialQueryAdapter> utils{ kDt, physics, query };
@@ -286,8 +286,8 @@ TEST_CASE("DAttackGuard.ZeroAimFallsBackToDefaultForward", "[DAttack][DAttackGua
     using namespace dattackguardtests;
 
     // A value-initialised aim would reach normalize(vec3(0)). The length guard
-    // substitutes +X instead — the same reason guard PlayerInput::zero() is
-    // (0,0,1) and not PlayerInput{}.
+    // substitutes +X instead. The neutral input's (0,0,1) aim projects to the same
+    // zero XY vector, so it takes this path too.
     const TickResult r = tick(glm::vec3(0.f));
     const glm::vec3 fwd = forwardOf(r);
     REQUIRE(std::isfinite(fwd.x));

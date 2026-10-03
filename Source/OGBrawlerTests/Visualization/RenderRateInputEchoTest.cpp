@@ -80,7 +80,7 @@ struct AimVizFixture
 };
 
 // One render frame of the production composition, reproduced exactly:
-//   select source -> unpack the machine sub-input -> build Input -> visualize.
+//   select source -> read the input fields -> build Input -> visualize.
 //
 // Returns the endpoint of the FIRST drawLine this frame emitted, or nullopt if the
 // viz did not run (mirroring the has_value() gate at the call site). visualize()
@@ -104,18 +104,18 @@ std::optional<glm::vec3> renderFrameAimRay(
 	if (!selected.has_value())
 		return std::nullopt;
 
-	const auto& machineInput = selected->get<dAttackMachineSimulation::PlayerInput>();
+	const simulatableBrawler::PlayerInput& selectedInput = *selected;
 
 	std::vector<glm::vec3> thisFrame;
 	RecordingRenderer renderer{ &thisFrame };
 	SilentLogger logger;
 	dAttackAimVisualization::Input<RecordingRenderer, SilentLogger> input(
 		1.f / 240.f,
-		machineInput.aimDirection,
+		selectedInput.aimDirection,
 		renderer,
 		logger,
-		machineInput.moveDirection,
-		machineInput.moveDirectionWorld);
+		selectedInput.moveStick,
+		selectedInput.moveDirectionWorld);
 
 	dAttackAimVisualization::visualize(
 		input, fx.state, fx.ic, fx.derived, fx.staticData, vizState);
@@ -333,7 +333,7 @@ TEST_CASE("Visualization.RenderRateInputEcho.ListenServerHostEchoesWithNoCorrect
 // ---------------------------------------------------------------------------
 // Discrete input edges structurally cannot render-echo. The live source is at the
 // "everything pressed" extreme; the echoed value must still carry neutral discrete
-// fields on EVERY sub-input. (T12 pins this for the packer; this pins that the T13
+// fields. (T12 pins this for the packer; this pins that the T13
 // path did not reintroduce a discrete field on the way through.)
 // ---------------------------------------------------------------------------
 TEST_CASE("Visualization.RenderRateInputEcho.DiscreteEdgesNeverRenderEcho",
@@ -368,20 +368,15 @@ TEST_CASE("Visualization.RenderRateInputEcho.DiscreteEdgesNeverRenderEcho",
 
 	REQUIRE(echoed.has_value());
 
-	const auto& machine = echoed->get<dAttackMachineSimulation::PlayerInput>();
-	REQUIRE_FALSE(machine.attackLeft);
-	REQUIRE_FALSE(machine.attackRight);
-	REQUIRE(machine.triggeredActionId == inputSequence::kNoMatch);
-
-	const auto& radial = echoed->get<dAttackRadialSimulation::PlayerInput>();
-	REQUIRE_FALSE(radial.attackLeft);
-	REQUIRE_FALSE(radial.attackRight);
+	REQUIRE_FALSE(echoed->attackLeft);
+	REQUIRE_FALSE(echoed->attackRight);
+	REQUIRE(echoed->triggeredActionId == inputSequence::kNoMatch);
 
 	// Continuous fields DID come through — otherwise the neutrality above would be
 	// vacuous (an all-zero result would also pass it).
-	REQUIRE(machine.aimDirection.x == Catch::Approx(pressed.aimDirection.x).margin(1e-5));
-	REQUIRE(machine.aimDirection.y == Catch::Approx(pressed.aimDirection.y).margin(1e-5));
-	REQUIRE(machine.moveDirection.y == Catch::Approx(pressed.moveStick.y).margin(1e-5));
+	REQUIRE(echoed->aimDirection.x == Catch::Approx(pressed.aimDirection.x).margin(1e-5));
+	REQUIRE(echoed->aimDirection.y == Catch::Approx(pressed.aimDirection.y).margin(1e-5));
+	REQUIRE(echoed->moveStick.y == Catch::Approx(pressed.moveStick.y).margin(1e-5));
 }
 
 // ---------------------------------------------------------------------------
@@ -447,13 +442,12 @@ TEST_CASE("Visualization.RenderRateInputEcho.ZeroMoveDirectionWorldStillNaNs_Pre
 		simulatableBrawler::makeVisualizationPlayerInput(
 			simulatableBrawler::readContinuousInputFields(idle));
 
-	const auto& machine = echoed.get<dAttackMachineSimulation::PlayerInput>();
-	REQUIRE(glm::length(machine.moveDirectionWorld) == Catch::Approx(0.f).margin(1e-6));
+	REQUIRE(glm::length(echoed.moveDirectionWorld) == Catch::Approx(0.f).margin(1e-6));
 
 	// This is what the viz would then compute. Documented, not asserted through
 	// visualize() itself — driving NaN geometry into the renderer proves nothing
 	// extra and makes the failure mode harder to read.
-	const glm::vec3 normalized = glm::normalize(machine.moveDirectionWorld);
+	const glm::vec3 normalized = glm::normalize(echoed.moveDirectionWorld);
 	REQUIRE(std::isnan(normalized.x));
 }
 

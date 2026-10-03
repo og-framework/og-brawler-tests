@@ -379,18 +379,18 @@ TEST_CASE("DAttack.SimulationNetSync.CacheSlotAdvances", "[DAttack][SimulationNe
 namespace
 {
     // Tag each tick's capture so the resolved input identifies which tick it was
-    // captured at. aimDirection is a public field on the radial sub-input and is
-    // carried through the composite untouched by collectInputAll.
+    // captured at. aimDirection is a public field on the input and is
+    // carried through untouched by collectInputAll.
     simulatableBrawler::PlayerInput taggedCapture(float tickTag)
     {
         simulatableBrawler::PlayerInput input = simulatableBrawler::getZeroPlayerInput();
-        input.edit<dAttackRadialSimulation::PlayerInput>().aimDirection.x = tickTag;
+        input.aimDirection.x = tickTag;
         return input;
     }
 
     float captureTagOf(const simulatableBrawler::PlayerInput& input)
     {
-        return input.get<dAttackRadialSimulation::PlayerInput>().aimDirection.x;
+        return input.aimDirection.x;
     }
 
     // The tag the game's zero input carries — getZeroPlayerInput builds a
@@ -406,11 +406,7 @@ namespace
     // value-initialised input would carry (0,0,0) into normalisation.
     bool isGameZeroInput(const simulatableBrawler::PlayerInput& input)
     {
-        const glm::vec3 aim = input.get<dAttackRadialSimulation::PlayerInput>().aimDirection;
-        const glm::vec3 expected =
-            simulatableBrawler::getZeroPlayerInput()
-                .get<dAttackRadialSimulation::PlayerInput>().aimDirection;
-        return aim == expected;
+        return input.aimDirection == simulatableBrawler::getZeroPlayerInput().aimDirection;
     }
 }
 
@@ -1198,56 +1194,35 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingVersionMismatchIsDroppedWholesale"
 
 namespace
 {
-    // FIELD-EXHAUSTIVE equality over the whole input composite. Every field of
-    // every sub-input is compared — these are plain aggregates, so this is the
-    // complete value, not a sample of it. Written rather than memcmp'd because
-    // padding bytes are not part of the value and would make a passing case
-    // depend on how the compiler laid the aggregates out.
+    // FIELD-EXHAUSTIVE equality over the whole input. Every field is compared —
+    // it is a plain aggregate, so this is the complete value, not a sample of it.
+    // Written rather than memcmp'd because padding bytes are not part of the value
+    // and would make a passing case depend on how the compiler laid it out.
     bool sameInput(const simulatableBrawler::PlayerInput& a,
                    const simulatableBrawler::PlayerInput& b)
     {
-        const auto& ra = a.get<dAttackRadialSimulation::PlayerInput>();
-        const auto& rb = b.get<dAttackRadialSimulation::PlayerInput>();
-        const auto& ma = a.get<dAttackMachineSimulation::PlayerInput>();
-        const auto& mb = b.get<dAttackMachineSimulation::PlayerInput>();
-        const auto& ga = a.get<dAttackGuardSimulation::PlayerInput>();
-        const auto& gb = b.get<dAttackGuardSimulation::PlayerInput>();
-        const auto& pa = a.get<brawlerProjectileSimulation::PlayerInput>();
-        const auto& pb = b.get<brawlerProjectileSimulation::PlayerInput>();
-
-        return ra.aimDirection == rb.aimDirection
-            && ra.attackLeft == rb.attackLeft
-            && ra.attackRight == rb.attackRight
-            && ma.aimDirection == mb.aimDirection
-            && ma.attackLeft == mb.attackLeft
-            && ma.attackRight == mb.attackRight
-            && ma.moveDirection == mb.moveDirection
-            && ma.moveDirectionWorld == mb.moveDirectionWorld
-            && ma.triggeredActionId == mb.triggeredActionId
-            && ga.aimDirection == gb.aimDirection
-            && pa.aimDirection == pb.aimDirection;
+        return a.aimDirection == b.aimDirection
+            && a.attackLeft == b.attackLeft
+            && a.attackRight == b.attackRight
+            && a.moveStick == b.moveStick
+            && a.moveDirectionWorld == b.moveDirectionWorld
+            && a.triggeredActionId == b.triggeredActionId
+            && a.flags == b.flags;
     }
 
     // A capture with EVERY field distinct from both the game zero and a
     // value-initialised input, so "passed through untouched" is a statement about
-    // the whole composite rather than about the one tagged field.
+    // the whole input rather than about the one tagged field.
     simulatableBrawler::PlayerInput richCapture()
     {
         simulatableBrawler::PlayerInput input = simulatableBrawler::getZeroPlayerInput();
-        auto& radial = input.edit<dAttackRadialSimulation::PlayerInput>();
-        radial.aimDirection = glm::vec3(0.6f, 0.f, 0.8f);
-        radial.attackLeft   = true;
-        radial.attackRight  = false;
-        auto& machine = input.edit<dAttackMachineSimulation::PlayerInput>();
-        machine.aimDirection       = glm::vec3(0.f, 0.8f, 0.6f);
-        machine.attackLeft         = false;
-        machine.attackRight        = true;
-        machine.moveDirection      = glm::vec2(0.3f, -0.7f);
-        machine.moveDirectionWorld = glm::vec3(0.3f, 0.f, -0.7f);
-        machine.triggeredActionId  = 9u;
-        input.edit<dAttackGuardSimulation::PlayerInput>().aimDirection = glm::vec3(1.f, 0.f, 0.f);
-        input.edit<brawlerProjectileSimulation::PlayerInput>().aimDirection =
-            glm::vec3(0.f, 1.f, 0.f);
+        input.aimDirection       = glm::vec3(0.6f, 0.f, 0.8f);
+        input.attackLeft         = true;
+        input.attackRight        = true;
+        input.moveStick          = glm::vec2(0.3f, -0.7f);
+        input.moveDirectionWorld = glm::vec3(0.3f, 0.f, -0.7f);
+        input.triggeredActionId  = 9u;
+        input.flags              = brawlerMovementSimulation::kInputFlagHoldGuard;
         return input;
     }
 

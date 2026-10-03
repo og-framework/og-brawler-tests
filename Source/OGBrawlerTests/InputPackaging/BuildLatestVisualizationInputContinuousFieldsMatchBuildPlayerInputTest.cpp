@@ -29,23 +29,14 @@
 namespace
 {
 
-// Asserts the continuous fields agree across every sub-input that carries them.
+// Asserts the continuous fields agree.
 void requireContinuousFieldsMatch(const simulatableBrawler::PlayerInput& sim,
                                   const simulatableBrawler::PlayerInput& viz)
 {
-	REQUIRE(viz.get<dAttackRadialSimulation::PlayerInput>().aimDirection
-	        == sim.get<dAttackRadialSimulation::PlayerInput>().aimDirection);
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().aimDirection
-	        == sim.get<dAttackMachineSimulation::PlayerInput>().aimDirection);
-	REQUIRE(viz.get<dAttackGuardSimulation::PlayerInput>().aimDirection
-	        == sim.get<dAttackGuardSimulation::PlayerInput>().aimDirection);
-	REQUIRE(viz.get<brawlerProjectileSimulation::PlayerInput>().aimDirection
-	        == sim.get<brawlerProjectileSimulation::PlayerInput>().aimDirection);
+	REQUIRE(viz.aimDirection == sim.aimDirection);
 
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().moveDirection
-	        == sim.get<dAttackMachineSimulation::PlayerInput>().moveDirection);
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld
-	        == sim.get<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld);
+	REQUIRE(viz.moveStick == sim.moveStick);
+	REQUIRE(viz.moveDirectionWorld == sim.moveDirectionWorld);
 }
 
 } // namespace
@@ -101,17 +92,14 @@ TEST_CASE("Discrete fields are allowed to differ, and do", "[InputPackaging][Vis
 
 	// ...while the discrete half diverges, by design. This is the assertion that
 	// makes the "byte equality would be wrong" claim concrete rather than a comment.
-	REQUIRE(sim.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId
-	        == inputSequence::kHadoukenActionId);
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId
-	        == inputSequence::kNoMatch);
-	REQUIRE(sim.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId
-	        != viz.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId);
+	REQUIRE(sim.triggeredActionId == inputSequence::kHadoukenActionId);
+	REQUIRE(viz.triggeredActionId == inputSequence::kNoMatch);
+	REQUIRE(sim.triggeredActionId != viz.triggeredActionId);
 
-	REQUIRE(sim.get<dAttackRadialSimulation::PlayerInput>().attackLeft  == true);
-	REQUIRE(viz.get<dAttackRadialSimulation::PlayerInput>().attackLeft  == false);
-	REQUIRE(sim.get<dAttackMachineSimulation::PlayerInput>().attackRight == true);
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().attackRight == false);
+	REQUIRE(sim.attackLeft  == true);
+	REQUIRE(viz.attackLeft  == false);
+	REQUIRE(sim.attackRight == true);
+	REQUIRE(viz.attackRight == false);
 }
 
 TEST_CASE("Agreement holds when the sim path carries no discrete input", "[InputPackaging][VisualizationInput]")
@@ -134,10 +122,8 @@ TEST_CASE("Agreement holds when the sim path carries no discrete input", "[Input
 		simulatableBrawler::makeVisualizationPlayerInput(fields);
 
 	requireContinuousFieldsMatch(sim, viz);
-	REQUIRE(sim.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId
-	        == viz.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId);
-	REQUIRE(sim.get<dAttackRadialSimulation::PlayerInput>().attackLeft
-	        == viz.get<dAttackRadialSimulation::PlayerInput>().attackLeft);
+	REQUIRE(sim.triggeredActionId == viz.triggeredActionId);
+	REQUIRE(sim.attackLeft == viz.attackLeft);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

@@ -18,10 +18,10 @@
 // that is exactly why the gap survived review: a seeded-by-hand flags byte proves the gate
 // reads the bit, and proves nothing at all about who writes it.
 //
-// So every case below reads the flags byte back OFF THE ASSEMBLED COMPOSITE
-// (`packed.get<brawlerMovementSimulation::PlayerInput>().flags`) rather than off a helper's
+// So every case below reads the flags byte back OFF THE ASSEMBLED INPUT
+// (`packed.flags`) rather than off a helper's
 // return value. That is the byte the ring serializes and the byte step 1 consumes; a writer
-// that computed the right value and dropped it into the wrong slice would pass a helper test
+// that computed the right value and dropped it into the wrong field would pass a helper test
 // and fail these.
 //
 // F-4 is the call shape, and its fences are the last case in this file.
@@ -31,9 +31,8 @@
 // constant at bit 0 and task 14's recipe originally read `{ getHoldGuard() }`, which compiles
 // and is correct ONLY because holdGuard happens to sit at bit 0 today. A test that pinned the
 // numeral would keep passing while the writer and the reader disagreed about which bit they
-// meant. Naming the constant makes these cases FOLLOW the bit if it ever moves — which it
-// may, since bits 1-7 are already spoken for by wall-grab (20), jump (21), dash (31) and
-// ski-tuck (48).
+// meant. Naming the constant makes these cases FOLLOW the bit if it ever moves. Bits 1-7 are
+// UNASSIGNED: no constant names them and no reader tests them.
 // ---------------------------------------------------------------------------
 
 namespace
@@ -53,15 +52,15 @@ simulatableBrawler::ContinuousInputFields livePose()
 	return fields;
 }
 
-// The flags byte AS THE SIMULATION WILL SEE IT — off the composite slice, not off an
+// The flags byte AS THE SIMULATION WILL SEE IT — off the assembled input, not off an
 // intermediate. See the file header for why this indirection is the point of the test.
 uint8_t packedFlags(const simulatableBrawler::PlayerInput& packed)
 {
-	return packed.get<movement::PlayerInput>().flags;
+	return packed.flags;
 }
 
 // Every bit that is NOT holdGuard. Written as a mask rather than as a list so it keeps
-// covering the seven reserved bits as they are claimed, without an edit here.
+// covering the seven unassigned bits as later flags claim them, without an edit here.
 constexpr uint8_t kEveryOtherBit = static_cast<uint8_t>(~movement::kInputFlagHoldGuard);
 
 } // namespace
@@ -89,7 +88,7 @@ TEST_CASE("InputWriter.PressedGuardRaisesExactlyTheHoldGuardBit", "[BrawlerMovem
 	// And it is DISTINGUISHABLE from the neutral input. Without this line a writer that
 	// returned zero would still satisfy "no other bit is set", and `zero()` is precisely what
 	// the pre-task-14 writer produced for every input.
-	REQUIRE(flags != movement::PlayerInput::zero().flags);
+	REQUIRE(flags != simulatableBrawler::getZeroPlayerInput().flags);
 }
 
 TEST_CASE("InputWriter.ReleasedGuardPacksToTheNeutralFlagsByte", "[BrawlerMovement][InputWriter]")
@@ -111,21 +110,20 @@ TEST_CASE("InputWriter.ReleasedGuardPacksToTheNeutralFlagsByte", "[BrawlerMoveme
 	REQUIRE(packedFlags(defaulted) == 0u);
 	REQUIRE(packedFlags(released) == packedFlags(defaulted));
 
-	// ⭐ And the neutral is the sub-simulation's OWN zero(), not a local 0 this test invented.
-	// brawlerMovementSimulation::PlayerInput::zero() is what SimulationComposite::zero() folds
-	// in, so this is the assertion that keeps `{}` and "the neutral input" the same thing. If a
-	// future flag's neutral value were ever non-zero, the packing rule at the type and this line
-	// would disagree, loudly, here.
-	REQUIRE(packedFlags(released) == movement::PlayerInput::zero().flags);
-	REQUIRE(packedFlags(defaulted) == movement::PlayerInput::zero().flags);
+	// ⭐ And the neutral is the game zero input's OWN flags, not a local 0 this test invented.
+	// getZeroPlayerInput() is SyncedPlayerInput::zero(), so this is the assertion that keeps
+	// `{}` and "the neutral input" the same thing. If a future flag's neutral value were ever
+	// non-zero, the packing rule at the type and this line would disagree, loudly, here.
+	REQUIRE(packedFlags(released) == simulatableBrawler::getZeroPlayerInput().flags);
+	REQUIRE(packedFlags(defaulted) == simulatableBrawler::getZeroPlayerInput().flags);
 }
 
 TEST_CASE("InputWriter.NoOtherInputFieldReachesTheFlagsByte", "[BrawlerMovement][InputWriter]")
 {
 	// The flags byte is written from the flag fields and from NOTHING ELSE. The attack
-	// booleans and triggeredActionId travel to their own sub-inputs and must not touch this
+	// booleans and triggeredActionId travel to their own fields and must not touch this
 	// byte; a writer that OR-ed an attack in would be caught here and by nothing else in the
-	// suite, because every other input test reads the sub-input it cares about.
+	// suite, because every other input test reads the field it cares about.
 	for (const bool leftAttack : {false, true})
 	{
 		for (const bool rightAttack : {false, true})
@@ -163,36 +161,24 @@ TEST_CASE("InputWriter.GuardPressChangesTheFlagsByteAndNothingElse", "[BrawlerMo
 		fields, /*leftAttack*/ true, /*rightAttack*/ false, inputSequence::kHadoukenActionId,
 		simulatableBrawler::InputFlagFields{.holdGuard = true});
 
-	// The byte moved, so the two composites really are the pressed/released pair...
+	// The byte moved, so the two inputs really are the pressed/released pair...
 	REQUIRE(packedFlags(idle) != packedFlags(held));
 
-	// ...and every other field a sub-input carries is untouched by the press.
-	REQUIRE(held.get<dAttackRadialSimulation::PlayerInput>().aimDirection
-	        == idle.get<dAttackRadialSimulation::PlayerInput>().aimDirection);
-	REQUIRE(held.get<dAttackRadialSimulation::PlayerInput>().attackLeft
-	        == idle.get<dAttackRadialSimulation::PlayerInput>().attackLeft);
-	REQUIRE(held.get<dAttackMachineSimulation::PlayerInput>().aimDirection
-	        == idle.get<dAttackMachineSimulation::PlayerInput>().aimDirection);
-	REQUIRE(held.get<dAttackMachineSimulation::PlayerInput>().attackRight
-	        == idle.get<dAttackMachineSimulation::PlayerInput>().attackRight);
-	REQUIRE(held.get<dAttackMachineSimulation::PlayerInput>().moveDirection
-	        == idle.get<dAttackMachineSimulation::PlayerInput>().moveDirection);
-	REQUIRE(held.get<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld
-	        == idle.get<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld);
-	REQUIRE(held.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId
-	        == idle.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId);
-	REQUIRE(held.get<dAttackGuardSimulation::PlayerInput>().aimDirection
-	        == idle.get<dAttackGuardSimulation::PlayerInput>().aimDirection);
-	REQUIRE(held.get<brawlerProjectileSimulation::PlayerInput>().aimDirection
-	        == idle.get<brawlerProjectileSimulation::PlayerInput>().aimDirection);
+	// ...and every other field is untouched by the press.
+	REQUIRE(held.aimDirection == idle.aimDirection);
+	REQUIRE(held.attackLeft == idle.attackLeft);
+	REQUIRE(held.attackRight == idle.attackRight);
+	REQUIRE(held.moveStick == idle.moveStick);
+	REQUIRE(held.moveDirectionWorld == idle.moveDirectionWorld);
+	REQUIRE(held.triggeredActionId == idle.triggeredActionId);
 
 	// ⛔ And the press did NOT leak into the attack booleans it sits beside in the argument
 	// list. `attackLeft` is true here on BOTH sides on purpose: a transposition that replaced
 	// it with holdGuard would flip the released side to false, and the equality above would
 	// catch it — but only if the value being compared is not the same by luck, so it is pinned
 	// to its expected value directly too.
-	REQUIRE(held.get<dAttackRadialSimulation::PlayerInput>().attackLeft  == true);
-	REQUIRE(held.get<dAttackMachineSimulation::PlayerInput>().attackRight == false);
+	REQUIRE(held.attackLeft  == true);
+	REQUIRE(held.attackRight == false);
 }
 
 TEST_CASE("InputWriter.VisualizationPackerNeverRaisesAFlagBit", "[BrawlerMovement][InputWriter]")
@@ -206,7 +192,7 @@ TEST_CASE("InputWriter.VisualizationPackerNeverRaisesAFlagBit", "[BrawlerMovemen
 	REQUIRE(packedFlags(simulatableBrawler::makeVisualizationPlayerInput(
 		simulatableBrawler::ContinuousInputFields{})) == 0u);
 	REQUIRE(packedFlags(simulatableBrawler::makeVisualizationPlayerInput(livePose()))
-	        == movement::PlayerInput::zero().flags);
+	        == simulatableBrawler::getZeroPlayerInput().flags);
 }
 
 // ===========================================================================

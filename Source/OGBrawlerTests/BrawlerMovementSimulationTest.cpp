@@ -19,7 +19,7 @@
 //     was written and ships `true` since task 15, so `Rig()` PINS it to the passenger arm
 //     and the driving-arm cases opt in explicitly. Read the ctor before adding a case;
 //     [movement-sim task 15]
-//   * a `machineInput` chosen per tick, which is where the movement stick actually lives.
+//   * a movement `PlayerInputView` chosen per tick: the `flags` byte and the stick (`moveDirectionWorld`).
 // `SimulatableBrawlerTest.cpp` keeps the whole-brawler cases (`[MovementResim]`, task 50),
 // and this file deliberately does NOT restate them -- see THE TASK 50 BOUNDARY below.
 //
@@ -397,18 +397,14 @@ struct Rig
                             machine::State> composite(ic, state, machineState);
         auto deps = makeDependencies<movement::Dependencies>(composite);
 
-        movement::PlayerInput pi{};
-        pi.flags = inputFlags;
-
-        machine::PlayerInput mi = machine::PlayerInput::zero();
-        mi.moveDirectionWorld = stickWorld;
+        const movement::PlayerInputView pi{ .flags = inputFlags, .moveDirectionWorld = stickWorld };
 
         movement::IntegrationUtils<brawlerTestMocks::MockPhysicsAdapter, QueryT>
             utils{ kDt, t, phys, query };
         movement::AllInput<brawlerTestMocks::MockPhysicsAdapter, QueryT>
             allInput{ pi, utils };
 
-        movement::integrate(kDt, allInput, mi, sd, deps, bindings, derived, inbound);
+        movement::integrate(kDt, allInput, sd, deps, bindings, derived, inbound);
         inbound = brawlerInboundHit::DerivedState{};
 
         // The composite holds COPIES (it was constructed by value), so sync back.
@@ -808,9 +804,9 @@ TEST_CASE("BrawlerMovement.FrozenByHoldGuard", "[BrawlerMovement]")
     REQUIRE_FALSE(free.frozenBit());
     REQUIRE(free.state.velocity.x == Catch::Approx(free.sd.maxWalkSpeed).margin(1e-4f));
 
-    // ⭐ CONTROL 2 -- A RESERVED BIT IS INERT. Bits 1-7 are spoken for by wall-grab (20),
-    // jump (21), dash (31) and ski-tuck (48); this pins that `frozen` reads bit 0 and not
-    // "any bit set", so the first of those four to land cannot silently freeze locomotion.
+    // ⭐ CONTROL 2 -- AN UNASSIGNED BIT IS INERT. Bits 1-7 are UNASSIGNED; this pins that
+    // `frozen` reads bit 0 and not "any bit set", so the first flag to land in them cannot
+    // silently freeze locomotion.
     ScriptedRig reserved;
     seatOnFlatGroundAtRideHeight(reserved);
     reserved.state.velocity = glm::vec3(reserved.sd.maxWalkSpeed, 0.f, 0.f);

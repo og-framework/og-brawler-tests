@@ -50,6 +50,7 @@
 #include "OGBrawler/BrawlerHitRoutingSystem.h"
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
+#include "BrawlerTestInputs.h"
 #include "OGBrawler/HitReaction.h"
 #include "OGBrawler/BrawlerInboundHit.h"
 #include "OGBrawler/DAttackDirectionClassifier.h"
@@ -237,13 +238,11 @@ struct FOrderSwapRig
                                                      const glm::vec2& stick, std::uint8_t flags)
     {
         const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
-        return simulatableBrawler::PlayerInput(
-            dAttackRadialSimulation::PlayerInput(aim, attackLeft, false),
-            dAttackMachineSimulation::PlayerInput{ aim, attackLeft, false, stick, moveWorld },
-            dAttackGuardSimulation::PlayerInput(aim),
-            brawlerProjectileSimulation::PlayerInput{ aim },
-            brawlerMovementSimulation::PlayerInput{ flags },
-            brawlerRingout::PlayerInput{});
+        return brawlerTestInputs::make({ .aimDirection       = aim,
+                                         .attackLeft         = attackLeft,
+                                         .moveStick          = stick,
+                                         .moveDirectionWorld = moveWorld,
+                                         .flags              = flags });
     }
 
     void integrateBoth(std::uint32_t t, Order order,

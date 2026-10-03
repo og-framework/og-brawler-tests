@@ -3,7 +3,7 @@
 
 #include "catch_amalgamated.hpp"
 #include "OGBrawler/InputSequence/InputSequence.h"
-#include "OGBrawler/DAttackMachineSimulation.h"
+#include "OGBrawler/SimulatableBrawlerTypes.h"
 #include <map>
 
 // ---------------------------------------------------------------------------
@@ -22,10 +22,10 @@
 namespace inputseqtests
 {
 
-static dAttackMachineSimulation::PlayerInput makeInput(glm::vec2 stick, glm::vec3 aim)
+static simulatableBrawler::PlayerInput makeInput(glm::vec2 stick, glm::vec3 aim)
 {
-    dAttackMachineSimulation::PlayerInput pi;
-    pi.moveDirection      = stick;
+    simulatableBrawler::PlayerInput pi;
+    pi.moveStick          = stick;
     pi.moveDirectionWorld = glm::vec3(stick.x, stick.y, 0.f);
     pi.aimDirection       = aim;
     return pi;
@@ -154,12 +154,12 @@ TEST_CASE("InputSequence.MatchSequence.HadoukenMatches", "[InputSequence]")
     const glm::vec3 aim(1.f, 0.f, 0.f);
     const uint32_t currentTick = 10;
 
-    std::map<uint32_t, dAttackMachineSimulation::PlayerInput> history;
+    std::map<uint32_t, simulatableBrawler::PlayerInput> history;
     history[5] = makeInput(glm::vec2(-1.f,  0.f), aim); // Back
     history[7] = makeInput(glm::vec2(-1.f, -1.f), aim); // DownBack
     history[9] = makeInput(glm::vec2( 0.f, -1.f), aim); // Down
 
-    auto accessor = [&](uint32_t tick) -> const dAttackMachineSimulation::PlayerInput*
+    auto accessor = [&](uint32_t tick) -> const simulatableBrawler::PlayerInput*
     {
         auto it = history.find(tick);
         return (it != history.end()) ? &it->second : nullptr;
@@ -192,12 +192,12 @@ TEST_CASE("InputSequence.MatchSequence.MaxGapFramesViolation", "[InputSequence]"
     const glm::vec3 aim(1.f, 0.f, 0.f);
     const uint32_t currentTick = 10;
 
-    std::map<uint32_t, dAttackMachineSimulation::PlayerInput> history;
+    std::map<uint32_t, simulatableBrawler::PlayerInput> history;
     history[3] = makeInput(glm::vec2(-1.f,  0.f), aim); // Back
     history[5] = makeInput(glm::vec2(-1.f, -1.f), aim); // DownBack (gap=4 from Down at 9)
     history[9] = makeInput(glm::vec2( 0.f, -1.f), aim); // Down
 
-    auto accessor = [&](uint32_t tick) -> const dAttackMachineSimulation::PlayerInput*
+    auto accessor = [&](uint32_t tick) -> const simulatableBrawler::PlayerInput*
     {
         auto it = history.find(tick);
         return (it != history.end()) ? &it->second : nullptr;
@@ -232,7 +232,7 @@ TEST_CASE("InputSequence.MatchSequence.TightToleranceRejects", "[InputSequence]"
     // Stick at ~30° from aim — well outside a pi/16 tolerance around Forward (0).
     auto inputAt30Deg = makeInput(glm::vec2(0.866f, -0.5f), aim);
 
-    auto accessor = [&](uint32_t) -> const dAttackMachineSimulation::PlayerInput* { return &inputAt30Deg; };
+    auto accessor = [&](uint32_t) -> const simulatableBrawler::PlayerInput* { return &inputAt30Deg; };
 
     // Single-step motion: target Forward, tolerance pi/16.
     MotionCommand cmd{
@@ -259,7 +259,7 @@ TEST_CASE("InputSequence.MatchSequence.ColdCacheReturnsNoMatch", "[InputSequence
 
     const glm::vec3 aim(1.f, 0.f, 0.f);
 
-    auto nullAccessor = [](uint32_t) -> const dAttackMachineSimulation::PlayerInput* { return nullptr; };
+    auto nullAccessor = [](uint32_t) -> const simulatableBrawler::PlayerInput* { return nullptr; };
 
     const std::vector<MotionCommand> defs{ makeHadouken() };
 
@@ -281,8 +281,8 @@ TEST_CASE("InputSequence.MatchSequence.NeverMatchingBufferReturnsNoMatch", "[Inp
 
     const glm::vec3 aim(1.f, 0.f, 0.f);
 
-    dAttackMachineSimulation::PlayerInput neutral = makeInput(glm::vec2(0.f, 0.f), aim);
-    auto accessor = [&](uint32_t) -> const dAttackMachineSimulation::PlayerInput* { return &neutral; };
+    simulatableBrawler::PlayerInput neutral = makeInput(glm::vec2(0.f, 0.f), aim);
+    auto accessor = [&](uint32_t) -> const simulatableBrawler::PlayerInput* { return &neutral; };
 
     const std::vector<MotionCommand> defs{ makeHadouken() };
 
@@ -308,11 +308,11 @@ TEST_CASE("InputSequence.MatchSequence.TieBreakLongerWins", "[InputSequence]")
 
     const glm::vec3 aim(1.f, 0.f, 0.f);
 
-    std::map<uint32_t, dAttackMachineSimulation::PlayerInput> history;
+    std::map<uint32_t, simulatableBrawler::PlayerInput> history;
     history[7] = makeInput(glm::vec2(-1.f, -1.f), aim); // DownBack
     history[9] = makeInput(glm::vec2( 0.f, -1.f), aim); // Down
 
-    auto accessor = [&](uint32_t tick) -> const dAttackMachineSimulation::PlayerInput*
+    auto accessor = [&](uint32_t tick) -> const simulatableBrawler::PlayerInput*
     {
         auto it = history.find(tick);
         return (it != history.end()) ? &it->second : nullptr;

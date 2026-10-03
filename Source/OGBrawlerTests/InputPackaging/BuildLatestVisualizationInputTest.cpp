@@ -35,14 +35,11 @@ TEST_CASE("Visualization input carries the live continuous fields", "[InputPacka
 		simulatableBrawler::makeVisualizationPlayerInput(
 			simulatableBrawler::readContinuousInputFields(src));
 
-	// Continuous fields land on every sub-input that carries them.
-	REQUIRE(viz.get<dAttackRadialSimulation::PlayerInput>().aimDirection == src.aimDirection);
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().aimDirection == src.aimDirection);
-	REQUIRE(viz.get<dAttackGuardSimulation::PlayerInput>().aimDirection == src.aimDirection);
-	REQUIRE(viz.get<brawlerProjectileSimulation::PlayerInput>().aimDirection == src.aimDirection);
+	// Continuous fields land on the fields that carry them.
+	REQUIRE(viz.aimDirection == src.aimDirection);
 
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().moveDirection == src.moveStick);
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld == src.moveDirectionWorld);
+	REQUIRE(viz.moveStick == src.moveStick);
+	REQUIRE(viz.moveDirectionWorld == src.moveDirectionWorld);
 }
 
 TEST_CASE("Visualization input leaves every discrete field neutral", "[InputPackaging][VisualizationInput]")
@@ -64,13 +61,11 @@ TEST_CASE("Visualization input leaves every discrete field neutral", "[InputPack
 			simulatableBrawler::readContinuousInputFields(src));
 
 	// The motion matcher was not run: triggeredActionId is untouched.
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId == inputSequence::kNoMatch);
+	REQUIRE(viz.triggeredActionId == inputSequence::kNoMatch);
 
 	// Attack edges cannot render-echo.
-	REQUIRE(viz.get<dAttackRadialSimulation::PlayerInput>().attackLeft   == false);
-	REQUIRE(viz.get<dAttackRadialSimulation::PlayerInput>().attackRight  == false);
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().attackLeft  == false);
-	REQUIRE(viz.get<dAttackMachineSimulation::PlayerInput>().attackRight == false);
+	REQUIRE(viz.attackLeft  == false);
+	REQUIRE(viz.attackRight == false);
 }
 
 TEST_CASE("Continuous read reflects a changed source on every call", "[InputPackaging][VisualizationInput]")
@@ -100,38 +95,22 @@ TEST_CASE("Default continuous fields pack to the neutral player input", "[InputP
 	// getZeroPlayerInput(). Pinning the two to agree means the cold path and the
 	// live path cannot disagree about what "no input" looks like.
 	//
-	// ⚠ PRE-EXISTING QUIRK, pinned here rather than silently worked around:
-	// getZeroPlayerInput() is NOT internally uniform. It hands aim (0,0,1) to the
-	// radial, machine and guard sub-inputs but leaves the projectile sub-input
-	// default-constructed, i.e. aim (0,0,0) — see SimulatableBrawlerTypes.h. The
-	// LIVE path has never had that asymmetry: buildPlayerInput passes the same
-	// aimDirection to all four sub-inputs, and makeSimPlayerInput /
-	// makeVisualizationPlayerInput preserve exactly that. So the three uniform
-	// slots agree and the projectile slot legitimately does not. Asserting both
-	// halves keeps the discrepancy visible; if getZeroPlayerInput is ever made
-	// uniform, the second block fails and points straight at this comment.
+	// [og-syncedInput-rework task 3] FIELD FOR FIELD. Until task 3 this case pinned a
+	// quirk: getZeroPlayerInput() left the projectile sub-input's aim at (0,0,0) while
+	// the packer gave it (0,0,1), and the case asserted that divergence. Task 3 put ONE
+	// aim on the wire (simulatableBrawler::SyncedPlayerInput), so the quirk is gone and
+	// the two now agree in every field.
 	const simulatableBrawler::PlayerInput packed =
 		simulatableBrawler::makeVisualizationPlayerInput(simulatableBrawler::ContinuousInputFields{});
 	const simulatableBrawler::PlayerInput zero = simulatableBrawler::getZeroPlayerInput();
 
-	REQUIRE(packed.get<dAttackRadialSimulation::PlayerInput>().aimDirection
-	        == zero.get<dAttackRadialSimulation::PlayerInput>().aimDirection);
-	REQUIRE(packed.get<dAttackMachineSimulation::PlayerInput>().aimDirection
-	        == zero.get<dAttackMachineSimulation::PlayerInput>().aimDirection);
-	REQUIRE(packed.get<dAttackMachineSimulation::PlayerInput>().moveDirection
-	        == zero.get<dAttackMachineSimulation::PlayerInput>().moveDirection);
-	REQUIRE(packed.get<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld
-	        == zero.get<dAttackMachineSimulation::PlayerInput>().moveDirectionWorld);
-	REQUIRE(packed.get<dAttackGuardSimulation::PlayerInput>().aimDirection
-	        == zero.get<dAttackGuardSimulation::PlayerInput>().aimDirection);
-	REQUIRE(packed.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId
-	        == zero.get<dAttackMachineSimulation::PlayerInput>().triggeredActionId);
-
-	// The documented divergence, asserted explicitly rather than omitted.
-	REQUIRE(packed.get<brawlerProjectileSimulation::PlayerInput>().aimDirection
-	        == glm::vec3(0.f, 0.f, 1.f));
-	REQUIRE(zero.get<brawlerProjectileSimulation::PlayerInput>().aimDirection
-	        == glm::vec3(0.f, 0.f, 0.f));
+	REQUIRE(packed.aimDirection == zero.aimDirection);
+	REQUIRE(packed.attackLeft == zero.attackLeft);
+	REQUIRE(packed.attackRight == zero.attackRight);
+	REQUIRE(packed.moveStick == zero.moveStick);
+	REQUIRE(packed.moveDirectionWorld == zero.moveDirectionWorld);
+	REQUIRE(packed.triggeredActionId == zero.triggeredActionId);
+	REQUIRE(packed.flags == zero.flags);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS
