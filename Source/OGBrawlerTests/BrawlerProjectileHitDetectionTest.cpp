@@ -198,7 +198,8 @@ struct Sample
     std::uint32_t endTick[2]     = { 0u, 0u };   // slot 0 of brawler 0 and of brawler 1
     unsigned int  endReason[2]   = { 0u, 0u };
     bool          targetHitAfterPre     = false;  // routed onto the target's slice by pre(t)
-    bool          shooterBlockedAfterPre = false; // routed onto the shooter's slice by pre(t)
+    // [og-attackstatetransition-cleanup task 4] `shooterBlockedAfterPre` is gone with
+    // wasProjectileBlockedThisTick: a block routes nothing onto the shooter's slice any more.
     bool          shooterHitAfterPre    = false;
 };
 
@@ -317,7 +318,6 @@ struct Rig
         exec.firePreIntegrate(s, storage, staticData, /*isAuthority*/ !resim);
         Sample sample{};
         sample.targetHitAfterPre      = inbound(1u).wasHitThisTick;
-        sample.shooterBlockedAfterPre = inbound(0u).wasProjectileBlockedThisTick;
         sample.shooterHitAfterPre     = inbound(0u).wasHitThisTick;
         if (t == 0u && stunTargetOnTickZero)
             seedStun();
@@ -382,14 +382,14 @@ struct ArmResult
     DAttackState  shooterAtC  = DAttackState::Idle;
     DAttackState  shooterAtC1 = DAttackState::Idle;
     int           routedHits  = 0;
-    int           routedBlocks = 0;
+    int           blocksEnded = 0;   // ticks on which the shooter's slot ended BLOCKED (endReason 4); was routedBlocks
     std::string   describe() const
     {
         return "endReason=" + std::to_string(endReason) + " endTick=" + std::to_string(endTick)
              + " target C/C+1=" + name(targetAtC) + "/" + name(targetAtC1)
              + " shooter C/C+1=" + name(shooterAtC) + "/" + name(shooterAtC1)
              + " routedHits=" + std::to_string(routedHits)
-             + " routedBlocks=" + std::to_string(routedBlocks);
+             + " blocksEnded=" + std::to_string(blocksEnded);
     }
 };
 
@@ -414,10 +414,11 @@ inline ArmResult runOrderSwapArm(Order order, std::uint32_t C)
     r.targetAtC1  = rig.at(C + 1u).targetMachine;
     r.shooterAtC  = rig.at(C).shooterMachine;
     r.shooterAtC1 = rig.at(C + 1u).shooterMachine;
-    for (const Sample& s : rig.samples)
+    for (std::uint32_t t = 0u; t < rig.samples.size(); ++t)
     {
-        if (s.targetHitAfterPre)      ++r.routedHits;
-        if (s.shooterBlockedAfterPre) ++r.routedBlocks;
+        const Sample& s = rig.samples[t];
+        if (s.targetHitAfterPre) ++r.routedHits;
+        if (s.endTick[0] == t && s.endReason[0] == 4u) ++r.blocksEnded;
     }
     return r;
 }
@@ -461,11 +462,12 @@ TEST_CASE("HitDetection.Projectile.StunExitTickOutcomeIsIndependentOfIntegrateOr
     CHECK(targetFirst.targetAtC  == DAttackState::HitFlinch);
     CHECK(shooterFirst.targetAtC == DAttackState::HitFlinch);
     CHECK(targetFirst.routedHits == 1);
-    CHECK(targetFirst.routedBlocks == 0);
+    CHECK(targetFirst.blocksEnded == 0);
 }
 
 // One tick later the guard is up in the state integrate(C) left, so both arms BLOCK, and the
-// shooter recoils in the same step. Not RED on the pre-task tree (the guard is up for both orders
+// shooter recoils in the same step. [og-attackstatetransition-cleanup task 4] It no longer recoils
+// (machine G-04 retired): the shooter stays Idle, and the block shows only as the slot's endReason 4. Not RED on the pre-task tree (the guard is up for both orders
 // there too); it pins the block side of the same convention.
 TEST_CASE("HitDetection.Projectile.TheTickAfterTheStunExitBlocksInBothOrders",
           "[SimulatableBrawler][HitDetection]")
@@ -483,11 +485,11 @@ TEST_CASE("HitDetection.Projectile.TheTickAfterTheStunExitBlocksInBothOrders",
     CHECK(shooterFirst.endReason == 4u);
     CHECK(targetFirst.endTick == C);
     CHECK(shooterFirst.endTick == C);
-    CHECK(targetFirst.routedBlocks == 1);
-    CHECK(shooterFirst.routedBlocks == 1);
+    CHECK(targetFirst.blocksEnded == 1);
+    CHECK(shooterFirst.blocksEnded == 1);
     CHECK(targetFirst.routedHits == 0);
     CHECK(shooterFirst.shooterAtC1 == targetFirst.shooterAtC1);
-    CHECK(targetFirst.shooterAtC1 == DAttackState::GuardFlinch);
+    CHECK(targetFirst.shooterAtC1 == DAttackState::Idle);
 }
 
 // ---------------------------------------------------------------------------

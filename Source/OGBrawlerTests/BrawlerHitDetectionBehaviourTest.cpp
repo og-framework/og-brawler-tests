@@ -13,6 +13,9 @@
 //      (T15). Task 20 moved detection and routing to preIntegrate(T+1): the signal is produced and
 //      consumed inside T+1, from the restored end-of-T state, on the live path and the replay alike.
 //      Three cases, one per signal. Each was RED on the pre-task-20 tree (impl_notes_defect_20.md).
+//      [og-attackstatetransition-cleanup task 4] wasProjectileBlockedThisTick left the slice: a
+//      blocked projectile no longer recoils its shooter. Its case (1c) now pins that the replay
+//      re-detects the block, i.e. ends the slot with endReason 4 on T+1 exactly as live did.
 //   2. A brawler that is in storage but has not been integrated yet reaches the detector with the
 //      radial's DEFAULT State: currenSequenceId 0, InitialConditions Invalid. G-01 gates on the
 //      pair first and returns (task 9 Rework (1)). Task 20 adds the pre-integrate reach: the
@@ -457,6 +460,11 @@ TEST_CASE("HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheBodyHitTickFlinches
 // 1c. Replay anchored at the END of tick T, the last tick the attacker's projectile is in flight on
 // the wire, when it is BLOCKED by the guard on T+1. Live, the shooter recoils (GuardFlinch, from any
 // state: machine G-04) on T+1.
+// ⚠ [og-attackstatetransition-cleanup task 4] NO LONGER: machine G-04 is retired and routing branch
+// 4 with it (user ruling 2026-10-03), so live and replay both leave the shooter Idle. The case was
+// `HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheProjectileBlockTickRecoils`; renamed, and it now
+// asserts what the replay must still reproduce: the block itself, the slot ended with endReason 4 on
+// T+1, and the same shooter state as live.
 // PRE-TASK-20 (RED): routing branch 4 matched `slot.endTick == currentTick` in post-integrate of the
 // block tick; a replay starting after it never re-ran that pass, and the slice held the frontier's
 // `false`.
@@ -468,7 +476,7 @@ TEST_CASE("HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheBodyHitTickFlinches
 // end of T, where the slot is still in flight, and re-detects. The assertions are unchanged except
 // the slot premise, which now reads the slot in flight at the anchor and ended with 4 on T+1.
 // ---------------------------------------------------------------------------
-TEST_CASE("HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheProjectileBlockTickRecoils",
+TEST_CASE("HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheProjectileBlockTickReDetectsTheBlock",
           "[SimulatableBrawler][HitDetection]")
 {
     const int T = 40;
@@ -495,8 +503,7 @@ TEST_CASE("HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheProjectileBlockTick
                 .get<brawlerProjectileSimulation::State>().slots[0].endReason;
         }
     }
-    REQUIRE(liveAtT1 == DAttackState::GuardFlinch);
-    REQUIRE_FALSE(rig.inbound(0u).wasProjectileBlockedThisTick);   // the frontier's slice
+    REQUIRE(liveAtT1 == DAttackState::Idle);   // no shooter recoil since og-attackstatetransition-cleanup task 4
     REQUIRE(endOfT.a.get<brawlerProjectileSimulation::State>().slots[0].endTick == 0u);   // in flight at T
     REQUIRE(liveEndReasonAtT1 == 4u);
 
@@ -505,9 +512,14 @@ TEST_CASE("HitDetection.Behaviour.ReplayAnchoredAtTheEndOfTheProjectileBlockTick
     rig.reduce(static_cast<std::uint32_t>(T + 1), true);
     rig.step(static_cast<std::uint32_t>(T + 1), true, rig.inputsFor(T + 1, -1));
     const DAttackState replayAtT1 = rig.attackerMachine();
+    const auto& replaySlot = rig.brawler(0u).getAllState().getState()
+        .get<brawlerProjectileSimulation::State>().slots[0];
 
-    INFO("live shooter T+1=" << name(liveAtT1) << " replay shooter T+1=" << name(replayAtT1));
-    CHECK(replayAtT1 == DAttackState::GuardFlinch);
+    INFO("live shooter T+1=" << name(liveAtT1) << " replay shooter T+1=" << name(replayAtT1)
+         << "; replay slot endTick=" << replaySlot.endTick << " endReason=" << unsigned(replaySlot.endReason));
+    CHECK(replaySlot.endReason == 4u);
+    CHECK(replaySlot.endTick == static_cast<std::uint32_t>(T + 1));
+    CHECK(replayAtT1 == DAttackState::Idle);
     CHECK(replayAtT1 == liveAtT1);
 }
 
@@ -529,14 +541,17 @@ namespace hitDetectionBehaviourTests
 struct SkipStepOutcome
 {
     bool         hitRoutedOnSkip      = false;   // target's wasHitThisTick after pre(L+2)
-    bool         blockRoutedOnSkip    = false;   // shooter's wasProjectileBlockedThisTick after pre(L+2)
+    unsigned int shotEndReason        = 0u;      // the slot's endReason after integrate(L+2): 2 hit, 4 blocked
+    std::uint32_t shotEndTick         = 0u;      // the slot's endTick after integrate(L+2)
     DAttackState shooterAfterSkip     = DAttackState::Idle;
     DAttackState targetAfterSkip      = DAttackState::Idle;
-    bool         reRoutedOnNextNormal = false;   // either bit set again by pre(L+3)
+    bool         reRoutedOnNextNormal = false;   // the hit set again by pre(L+3)
 };
 
-// `blocked`: the target holds its guard facing the shot (a block, branch 4); otherwise it turns
-// its guard away and the shot hits its body (branch 3).
+// `blocked`: the target holds its guard facing the shot (a block); otherwise it turns its guard away
+// and the shot hits its body (branch 3). [og-attackstatetransition-cleanup task 4] A block routes
+// nothing any more (branch 4 and wasProjectileBlockedThisTick are gone), so the block row reads the
+// slot the projectile integrate ended instead of the shooter's slice.
 inline SkipStepOutcome runProjectileContactOnASkipStep(bool blocked)
 {
     constexpr std::uint32_t L = 40u;
@@ -557,16 +572,18 @@ inline SkipStepOutcome runProjectileContactOnASkipStep(bool blocked)
     rig.query.projectileOverlapsTarget = true;
     rig.reduce(L + 2u, false, StepKind::Skip);      // the Skip step's preIntegrate
     out.hitRoutedOnSkip   = rig.inbound(1u).wasHitThisTick;
-    out.blockRoutedOnSkip = rig.inbound(0u).wasProjectileBlockedThisTick;
     const SimulationTimeStep sSkip(L + 2u, false, StepKind::Skip, kDt);
     rig.integration.integrateAll(sSkip, rig.inputsFor(static_cast<int>(L + 2u), -1, blocked));
     out.shooterAfterSkip = rig.attackerMachine();
     out.targetAfterSkip  = rig.machine(1u);
+    const auto& slot = rig.brawler(0u).getAllState().getState()
+        .get<brawlerProjectileSimulation::State>().slots[0];
+    out.shotEndReason = slot.endReason;
+    out.shotEndTick   = slot.endTick;
     rig.exec.firePostIntegrate(sSkip, rig.storage, rig.staticData, /*isAuthority*/ false);
 
     rig.reduce(L + 3u, false);                      // the next Normal step
-    out.reRoutedOnNextNormal = rig.inbound(1u).wasHitThisTick
-                            || rig.inbound(0u).wasProjectileBlockedThisTick;
+    out.reRoutedOnNextNormal = rig.inbound(1u).wasHitThisTick;
     return out;
 }
 } // namespace hitDetectionBehaviourTests
@@ -580,19 +597,22 @@ TEST_CASE("HitDetection.Behaviour.ProjectileHitOnTheTickBeforeASkipStepFlinchesT
          << "; re-routed on pre(L+3)=" << o.reRoutedOnNextNormal);
     CHECK(o.hitRoutedOnSkip);
     CHECK(o.targetAfterSkip == DAttackState::HitFlinch);
-    CHECK_FALSE(o.blockRoutedOnSkip);
+    CHECK(o.shotEndReason == 2u);
     CHECK_FALSE(o.reRoutedOnNextNormal);
 }
 
-TEST_CASE("HitDetection.Behaviour.ProjectileBlockOnTheTickBeforeASkipStepRecoils",
+// [og-attackstatetransition-cleanup task 4] Was `HitDetection.Behaviour.ProjectileBlockOnTheTickBeforeASkipStepRecoils`.
+// The shooter no longer recoils; the block is still detected exactly once, on the Skip step.
+TEST_CASE("HitDetection.Behaviour.ProjectileBlockOnTheTickBeforeASkipStepEndsTheShot",
           "[SimulatableBrawler][HitDetection]")
 {
-    const SkipStepOutcome o = runProjectileContactOnASkipStep(true);    // branch 4
-    INFO("slice after pre(L+2 skip): shooter blocked=" << o.blockRoutedOnSkip
+    const SkipStepOutcome o = runProjectileContactOnASkipStep(true);    // a block
+    INFO("slot after integrate(L+2 skip): endReason=" << o.shotEndReason << " endTick=" << o.shotEndTick
          << "; shooter after integrate(L+2)=" << name(o.shooterAfterSkip)
          << "; re-routed on pre(L+3)=" << o.reRoutedOnNextNormal);
-    CHECK(o.blockRoutedOnSkip);
-    CHECK(o.shooterAfterSkip == DAttackState::GuardFlinch);
+    CHECK(o.shotEndReason == 4u);
+    CHECK(o.shotEndTick == 42u);
+    CHECK(o.shooterAfterSkip == DAttackState::Idle);
     CHECK_FALSE(o.hitRoutedOnSkip);
     CHECK_FALSE(o.reRoutedOnNextNormal);
 }

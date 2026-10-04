@@ -303,8 +303,9 @@ TEST_CASE("DAttack.Integrate3.HadoukenCommitmentHoldsAttackingState", "[DAttack]
     REQUIRE(state.m_activeAttackSequence == kHadoukenSequenceSentinel);
 
     // Ticks 1..15 — attackLeft STILL held but no new rising edge (triggeredActionId 0).
-    // 15 * dt = 0.25 s < kHadoukenCommitmentSeconds (0.3 s): the machine must stay committed
-    // to the Hadouken-Attacking state and must NOT exit to Idle or chain a normal swing.
+    // 15 * dt = 0.25 s < kHadoukenCommitmentSeconds (0.3 s before og-attackstatetransition-cleanup
+    // task 4, 0.875 s since it, 0.74167 s since its task 6): the machine must stay committed to the
+    // Hadouken-Attacking state and must NOT exit to Idle or chain a normal swing.
     for (unsigned int tick = 1; tick <= 15; ++tick)
     {
         state = runTick(tick, 0u, /*attackLeft*/ true);
@@ -317,7 +318,7 @@ TEST_CASE("DAttack.Integrate3.HadoukenCommitmentHoldsAttackingState", "[DAttack]
     // and run further ticks; the machine must leave the Hadouken-Attacking state (sentinel
     // cleared) — landing in Idle or chaining a normal swing is both acceptable.
     bool leftSentinel = false;
-    for (unsigned int tick = 16; tick <= 40 && !leftSentinel; ++tick)
+    for (unsigned int tick = 16; tick <= 80 && !leftSentinel; ++tick)
     {
         state = runTick(tick, 0u, /*attackLeft*/ true);
         if (state.m_activeAttackSequence != kHadoukenSequenceSentinel)

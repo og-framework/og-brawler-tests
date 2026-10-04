@@ -835,7 +835,7 @@ TEST_CASE("HitRouting.PerAttackReactionTableIsAuthoritative",
     rig.route(8u);
     const brawlerInboundHit::DerivedState& cleared = rig.inbound(1u);
     REQUIRE_FALSE(cleared.wasHitThisTick);
-    REQUIRE_FALSE(cleared.wasProjectileBlockedThisTick);
+    REQUIRE_FALSE(cleared.wasGuardBlockedThisTick);   // [og-attackstatetransition-cleanup task 4] was wasProjectileBlockedThisTick, which left the slice
     REQUIRE(cleared.reactionKind == HitReactionKind::Stun);
     REQUIRE(cleared.knockbackSpeed == 0.f);
     REQUIRE(cleared.flinchDuration == 0.f);
@@ -962,11 +962,13 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
         // suite stayed green. A relational assertion cannot see the number it reads move.
         // ⛔ This is the line a human has to retype, and it is deliberately NOT a computed
         // expression: the stun is a HAND-AUTHORED tuning knob (user ruling 2026-09-21) and must
-        // never be derived from getDuration(), swingTickCount() or a keyframe time. The
-        // BEHAVIOURAL claim the 0.65 exists to make -- that a point-blank projectile hit
-        // outlasts the shooter's own recovery -- is measured in
-        // HitRouting.ProjectilePointBlankFollowUpWindow below; this line only stops the number
-        // moving unnoticed. ⚠ The melee half has had the same pin since task 86
+        // never be derived from getDuration(), swingTickCount() or a keyframe time. Task 87
+        // chose 0.65 so that a point-blank projectile hit outlasted the shooter's own recovery
+        // and left time for a follow-up swing. That combo was DROPPED (og-attackstatetransition-
+        // cleanup task 4, user ruling 2026-10-04: the 0.875 s Hadouken commitment leaves it 32
+        // ticks short; task 6's 0.74167 s still leaves it 24 short), and the user kept 0.65 as it
+        // is. This line only stops the number moving
+        // unnoticed. ⚠ The melee half has had the same pin since task 86
         // (HitRouting.PerAttackReactionTableIsAuthoritative and HitRouting.StunHitFiresOnce).
         REQUIRE(rig.staticData.m_projectileHitReaction.lockoutDuration
                 == Catch::Approx(0.65f).margin(1e-6f));
@@ -977,7 +979,7 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
         // outcome, and it is the DETECTOR that resets it on every pass (its guards doc G-01)
         // while the shooter's integrate ends the slot in the same step. This rig has no
         // detector, so the property cannot be stated here; it is pinned end to end by
-        // HitRouting.ProjectilePointBlankFollowUpWindow (`hitTickCount() == 1`) and by
+        // HitRouting.ProjectilePointBlankHitStunsOnce (`hitTickCount() == 1`) and by
         // HitDetection.Projectile.AShotEndingOnThePreJumpTickIsRoutedOnceAcrossAHardResync.
     }
 
@@ -1018,6 +1020,12 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
 // ran last"): the detector produces the outcome in this same pass and routing reads it, so the
 // table has no subject. Its Skip section is re-homed below and its other rows become the same
 // one-line statement: whatever the step kind, the outcome of this pass is routed.
+// [og-attackstatetransition-cleanup task 4] BRANCH 4 IS GONE. A blocked projectile no longer recoils
+// its shooter (user ruling 2026-10-03), so routing writes nothing for a BlockedByGuard outcome and
+// `wasProjectileBlockedThisTick` left the slice. The block column now pins the opposite: on every
+// step kind a blocked shot leaves its shooter's slice untouched (the slot itself still ends with
+// endReason 4 in the projectile integrate, which this rig does not run). The shooter of the block
+// moved from character 1 to character 0, so the hit on character 1 cannot mask it.
 // ---------------------------------------------------------------------------
 TEST_CASE("HitRouting.ProjectileOutcomeIsRoutedWhateverTheStepKind",
           "[SimulatableBrawler][HitRouting]")
@@ -1025,15 +1033,17 @@ TEST_CASE("HitRouting.ProjectileOutcomeIsRoutedWhateverTheStepKind",
     using namespace hitRoutingTests;
     constexpr std::uint32_t L = 12u;
 
-    struct Routed { bool hit; bool blocked; };
-    // Character 0 shoots character 1 (branch 3); character 1's own shot is blocked (branch 4).
+    struct Routed { bool hit; bool blockRoutedNothing; };
+    // Character 0 shoots character 1 (branch 3); character 0's other shot is blocked (no branch).
     auto routeOnce = [](const SimulationTimeStep& step)
     {
         FRoutingRig rig;
         rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
-        rig.raiseProjectileBlock(1u);
+        rig.raiseProjectileBlock(0u);
         rig.routeStep(step);
-        return Routed{ rig.inbound(1u).wasHitThisTick, rig.inbound(1u).wasProjectileBlockedThisTick };
+        const brawlerInboundHit::DerivedState& shooter = rig.inbound(0u);
+        return Routed{ rig.inbound(1u).wasHitThisTick,
+                       !shooter.wasHitThisTick && !shooter.wasGuardBlockedThisTick };
     };
 
     struct Kind { const char* name; SimulationTimeStep step; };
@@ -1049,9 +1059,9 @@ TEST_CASE("HitRouting.ProjectileOutcomeIsRoutedWhateverTheStepKind",
     for (const Kind& kind : kinds)
     {
         const Routed on = routeOnce(kind.step);
-        INFO(kind.name << ": hit=" << on.hit << " blocked=" << on.blocked);
+        INFO(kind.name << ": hit=" << on.hit << " blockRoutedNothing=" << on.blockRoutedNothing);
         CHECK(on.hit);
-        CHECK(on.blocked);
+        CHECK(on.blockRoutedNothing);
     }
 
     // And nothing is routed from a slot the pass found nothing for, on any of them.
@@ -1061,7 +1071,7 @@ TEST_CASE("HitRouting.ProjectileOutcomeIsRoutedWhateverTheStepKind",
         rig.routeStep(kind.step);
         INFO(kind.name << " with no outcome");
         CHECK_FALSE(rig.inbound(1u).wasHitThisTick);
-        CHECK_FALSE(rig.inbound(1u).wasProjectileBlockedThisTick);
+        CHECK_FALSE(rig.inbound(1u).wasGuardBlockedThisTick);
     }
 }
 
@@ -1396,61 +1406,51 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
 }
 
 // ===========================================================================
-// ⭐⭐ [movement-sim task 87] THE PROJECTILE HALF OF TASK 86'S CLAIM, MEASURED.
+// [movement-sim task 87] A POINT-BLANK PROJECTILE HIT, END TO END: routed once, a stun in place,
+// for the authored dwell.
 //
-// THE CLAIM the authored 0.65 s exists to make, for the projectile: *a point-blank Hadouken
-// leaves the shooter time to land a left/right before the target recovers.* Task 86 pinned
-// that claim for the MELEE stun only (HitRouting.StunHitFiresOnce), and its reviewer showed
-// what that left open: every projectile assertion in this file is RELATIONAL against
-// `m_projectileHitReaction.lockoutDuration`, so setting that literal back to 0.3f passed the
-// ENTIRE suite. This case is the behavioural half of the fix (finding N-4); the one-line
-// absolute pin is in HitRouting.ProjectileHitStunsInPlace above.
+// ⚠ RETIRED HALF [og-attackstatetransition-cleanup task 4, user ruling 2026-10-04]. Until that
+// task this case was HitRouting.ProjectilePointBlankFollowUpWindow, and its second rig pinned
+// task 87's claim that a point-blank Hadouken HIT leaves its shooter time to land a left/right
+// swing before the target's 0.65 s stun ends. It was a tripwire: a retune of the commitment, the
+// swing wind-up or the projectile speed turned it red. Task 4 raised the Hadouken commitment from
+// 0.3 s (18 ticks) to 0.875 s (53 ticks) on every shot, as the punish window for a blocked shot,
+// and that made the combo 32 ticks short: the shooter Idle on tick 54, its fresh swing connecting
+// on tick 73, the stun over on tick 41. The user chose to DROP the combo and to keep both the
+// 53-tick lock and the 0.65 s stun, so the follow-up rig went with the claim. It was NOT inverted
+// into a "the combo cannot happen" pin: the combo was given up as a cost, not made a requirement,
+// and the two numbers that rule it out are already pinned absolutely
+// (DAttack.AttackTransitions.CommitmentIs45Ticks, and the 0.65 line in
+// HitRouting.ProjectileHitStunsInPlace). See DAttackMachineSimulation-rationale.md §15.
+// ⚠ [og-attackstatetransition-cleanup task 6, user 2026-10-04] The lock is now 0.74167 s (45
+// ticks). The combo is still out: re-measured with the retired rig, the shooter is Idle on tick
+// 46 and its swing connects on tick 65, 24 ticks after the stun ended on 41. It would need a
+// lock of at most 20 ticks.
 //
-// ⛔⛔ THE STUN STAYS HAND-AUTHORED (user ruling 2026-09-21). Nothing here computes a
-// required lockout from getDuration(), swingTickCount() or a keyframe time. Like task 86's,
-// this is a TRIPWIRE: retune the Hadouken commitment, the swing wind-up or the projectile
-// speed and it goes RED and tells a human to re-choose the number by hand.
+// WHAT IS LEFT is the shot alone, which never depended on the combo: the hit is routed on exactly
+// one tick (the end-to-end pin BrawlerProjectileHitDetection-guards.md G-01's poison record
+// names), the slot ends with endReason 2 on the contact tick, the target enters HitFlinch on that
+// tick, never moves, and stays stunned for the authored lockoutDuration, measured in ticks.
 //
-// ⭐⭐ THE MEASURED TIMELINE, read off this case's own INFO lines (60 Hz, fire on tick 1):
-//     tick  1  the Hadouken fires; the pool spawns slot 0 at x = 60 cm (spawnForwardOffset)
-//     tick  2  the shot connects -- its FIRST live tick -- and the target flinches on 2
-//     tick 19  the shooter is back in Idle (the flat 0.3 s Hadouken commitment, 18 ticks)
-//     tick 20  the held button starts a FRESH sequence 0
-//     tick 38  that swing's first damaging tick -- the follow-up CONNECTS
-//   ⇒ the window the stun must cover is 38 - 2 = 36 ticks = 0.600 s.
-//   The authored 0.65 s ends the flinch on tick 41, so the margin is THREE ticks.
+// ⭐ WHY POINT-BLANK. The shot is born 60 cm ahead (spawnForwardOffset), and its 40 cm collider
+// touches the target's 42 cm capsule at 82 cm of separation, so one centimetre outside the melee
+// annulus the two already overlap when the slot spawns and the hit lands on the shot's first live
+// tick: the shortest flight the geometry admits. (The annulus bound itself was chosen for the
+// retired follow-up, whose swing had to be able to reach the target.)
+//
 // ⚠ [og-netcode-v2-field-defects task 17, user ruling 2026-09-24] THE FLINCH MOVED ONE TICK
-//   EARLIER: 3 -> 2, and the flinch now ends on 41, not 42, so the slack went 4 -> 3. The contact
-//   tick (2) and the slot's endTick (2) did not move. brawlerHitDetection's projectile pass checks
-//   the slot at its closed-form position on the step's OWN tick, in that step's pre-integrate
-//   pass, and routes the hit in the same pass, so the target reacts in integrate(2). Before, the
-//   shooter's integrate(2) detected it and the reaction waited for the next step's routing. The
-//   routed sample moved from 2 to 1 as well: this rig's sample t holds the pass run at the end of
-//   tick t, which is pre(t+1).
+//   EARLIER: 3 -> 2, and it now ends on 41, not 42. The contact tick (2) and the slot's endTick (2)
+//   did not move. brawlerHitDetection's projectile pass checks the slot at its closed-form position
+//   on the step's OWN tick, in that step's pre-integrate pass, and routes the hit in the same pass,
+//   so the target reacts in integrate(2). The routed sample moved from 2 to 1 as well: this rig's
+//   sample t holds the pass run at the end of tick t, which is pre(t+1).
 //
-// ⛔ THAT MAKES THE POINT-BLANK PROJECTILE THE BINDING CASE, not the melee one, and it is
-//   the reverse of what impl/design_stun_followup_window.md section 2 derived by hand
-//   (0.504 s, ~8 ticks of slack). The recovery half of that derivation is CONFIRMED here to
-//   the tick -- Idle at fire+18, fresh swing at fire+19, damaging at fire+37. What it got
-//   wrong is the FLIGHT: it took the travel to be 90/800 = 0.113 s from the shooter's centre,
-//   but the shot is born 60 cm ahead (spawnForwardOffset) and its 40 cm collider touches the
-//   target's 42 cm capsule at 82 cm of separation -- so at point-blank the two are ALREADY
-//   overlapping when the slot spawns and the hit lands on the first tick it is queried.
-//   ⭐ The closer the target, the LONGER the stun must be, and this is the shortest flight
-//   the geometry admits.
-//
-// ⚠ POINT-BLANK IS BOUNDED BY THE MELEE ANNULUS, NOT BY THE SHOT. The radial's gate is
-//   `hitDistance > getAttackCircle().getInnerRadius()`, STRICTLY, so a target seated on the
-//   inner radius can be shot but never followed up, and the claim would not be expressible.
-//   One centimetre outside it is therefore the worst case that can be stated at all.
-//
-// ⚠ WHAT THIS ARM STILL CANNOT SEE, beyond the four limits listed at the harness: the
+// ⚠ WHAT THIS CASE STILL CANNOT SEE, beyond the four limits listed at the harness: the
 //   overlap is a 2-D circle test against the target's CURRENT position, which is exact for
 //   this geometry (the shot flies at z = 50, the target capsule spans z 10..202) and would
-//   not be for a target on a ledge; and the shooter never moves, so nothing here says what
-//   happens if the target walks out of the annulus while the shot is in the air.
+//   not be for a target on a ledge.
 // ===========================================================================
-TEST_CASE("HitRouting.ProjectilePointBlankFollowUpWindow", "[SimulatableBrawler][HitRouting]")
+TEST_CASE("HitRouting.ProjectilePointBlankHitStunsOnce", "[SimulatableBrawler][HitRouting]")
 {
     using namespace hitRoutingTests;
     using namespace hitRoutingTests::endToEnd;
@@ -1458,8 +1458,8 @@ TEST_CASE("HitRouting.ProjectilePointBlankFollowUpWindow", "[SimulatableBrawler]
     // The Hadouken cannot be fired on tick 0: a slot's `spawnTick == 0` IS its free marker.
     constexpr int kFireTick = 1;
 
-    // --- RIG A: the shot alone. Nothing follows it up, so the flinch it ends on is the PURE
-    //     dwell of the projectile's own stun -- the number rig B's slack is measured against.
+    // The shot alone. Nothing follows it up, so the flinch it ends on is the PURE dwell of the
+    // projectile's own stun.
     FEndToEndRig shotRig;
     const float pointBlank = shotRig.staticData.m_attackCircle.getInnerRadius() + 1.f;
     shotRig.setTargetDistance(pointBlank);
@@ -1513,8 +1513,8 @@ TEST_CASE("HitRouting.ProjectilePointBlankFollowUpWindow", "[SimulatableBrawler]
                 == Catch::Approx(0.f).margin(1e-4f));
     }
 
-    // THE DWELL, measured from the hit tick, against the authored spec -- and then against the
-    // literal, which is the pin review finding N-4 asked for in behavioural form.
+    // THE DWELL, measured from the hit tick, against the authored spec. The absolute 0.65 pin is
+    // in HitRouting.ProjectileHitStunsInPlace.
     const HitReactionSpec& spec = shotRig.staticData.m_projectileHitReaction;
     const float stunSpan = float(leftFlinchAt - projectileHitAt) * kDt;
     INFO("stun span from the hit tick " << stunSpan << " s against an authored "
@@ -1522,61 +1522,6 @@ TEST_CASE("HitRouting.ProjectilePointBlankFollowUpWindow", "[SimulatableBrawler]
     REQUIRE(spec.kind == HitReactionKind::Stun);
     REQUIRE(stunSpan >= spec.lockoutDuration);
     REQUIRE(stunSpan <= spec.lockoutDuration + 3.f * kDt);
-
-    // --- RIG B: the same shot, then the button HELD through the shooter's own recovery.
-    FEndToEndRig followUpRig;
-    followUpRig.setTargetDistance(pointBlank);
-    followUpRig.hadoukenOnTick       = kFireTick;
-    followUpRig.followUpHoldFromTick = kFireTick + 5;   // after the hit, during the commitment
-    followUpRig.followUpStick        = glm::vec2(0.f, -1.f);   // -> kRightSequenceId
-    followUpRig.run(120);
-
-    int          shotHitAt      = -1;
-    int          idleAt         = -1;
-    int          followUpAt     = -1;
-    unsigned int followUpSeq    = InvalidAttackSequenceId;
-    int          followUpHitAt  = -1;
-    for (const TickSample& s : followUpRig.samples)
-    {
-        if (shotHitAt < 0 && s.wasHitThisTick)        shotHitAt = int(s.tick);
-        if (shotHitAt < 0) continue;
-        if (idleAt < 0 && s.attackerMachine == DAttackState::Idle)
-            idleAt = int(s.tick);
-        if (idleAt >= 0 && followUpAt < 0 && s.attackerMachine == DAttackState::Attacking)
-        {
-            followUpAt  = int(s.tick);
-            followUpSeq = s.radialSequence;
-        }
-        if (followUpAt >= 0 && followUpHitAt < 0 && s.wasHitThisTick)
-            followUpHitAt = int(s.tick);
-    }
-
-    INFO("follow-up trace " << followUpRig.trace(std::size_t(kFireTick), 45u));
-    INFO("shot hit at tick " << shotHitAt << "; shooter Idle at " << idleAt
-         << "; fresh swing at " << followUpAt << " (sequence " << followUpSeq
-         << "); its first damaging tick " << followUpHitAt
-         << "; the stun measured above ended at tick " << leftFlinchAt);
-
-    // THE PATH: the two rigs saw the same shot, the shooter ran its Hadouken commitment out,
-    // dropped to Idle, and the held button started a FRESH left/right swing there.
-    REQUIRE(shotHitAt == projectileHitAt);
-    REQUIRE(idleAt > shotHitAt);
-    REQUIRE(followUpAt == idleAt + 1);
-    REQUIRE(isRealAttackSequence(followUpSeq));
-    REQUIRE(followUpSeq == dAttackDirection::kRightSequenceId);
-    REQUIRE(followUpHitAt > followUpAt);
-
-    // ⭐⭐ THE ASSERTION THIS CASE EXISTS FOR: on the tick the follow-up lands, the defender is
-    // STILL STUNNED by the PROJECTILE. `targetMachine` is sampled after that tick's integrate,
-    // which consumed the PREVIOUS tick's inbound slice, so this reads the first hit's dwell and
-    // cannot be contaminated by the second.
-    REQUIRE(followUpRig.samples[std::size_t(followUpHitAt)].targetMachine
-            == DAttackState::HitFlinch);
-
-    // ...and the same statement as a NUMBER, so the margin is visible when it shrinks.
-    // `leftFlinchAt` comes from rig A, which has no follow-up, so it is the pure dwell.
-    INFO("slack = " << (leftFlinchAt - followUpHitAt) << " tick(s)");
-    REQUIRE(followUpHitAt < leftFlinchAt);
 }
 
 // ===========================================================================

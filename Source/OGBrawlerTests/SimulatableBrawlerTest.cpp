@@ -582,15 +582,17 @@ TEST_CASE("DAttack.SimulatableBrawler.DerivedStateIsOffWire", "[DAttack][Simulat
     //    through get<>/edit<> rather than through member names.
     simulatableBrawler::AllState allState;
     allState.editDerivedState().edit<brawlerInboundHit::DerivedState>().wasHitThisTick = true;
+    // [og-attackstatetransition-cleanup task 4] wasProjectileBlockedThisTick left the slice; the
+    // second bool this pin carries is now wasGuardBlockedThisTick.
     allState.editDerivedState()
-        .edit<brawlerInboundHit::DerivedState>().wasProjectileBlockedThisTick = true;
+        .edit<brawlerInboundHit::DerivedState>().wasGuardBlockedThisTick = true;
     allState.editDerivedState()
         .edit<brawlerProjectileSimulation::DerivedState>().hits.push_back({});
 
     const simulatableBrawler::AllState vizCopy = allState;
     REQUIRE(vizCopy.getDerivedState().get<brawlerInboundHit::DerivedState>().wasHitThisTick);
     REQUIRE(vizCopy.getDerivedState()
-                .get<brawlerInboundHit::DerivedState>().wasProjectileBlockedThisTick);
+                .get<brawlerInboundHit::DerivedState>().wasGuardBlockedThisTick);
     REQUIRE(vizCopy.getDerivedState()
                 .get<brawlerProjectileSimulation::DerivedState>().hits.size() == 1u);
 
