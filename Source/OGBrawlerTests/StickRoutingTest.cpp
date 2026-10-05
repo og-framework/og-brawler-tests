@@ -5,9 +5,16 @@
 
 #include "OGBrawler/DAttackMachineSimulationRuntimeTweakables.h"
 #include "OGBrawler/InputMapping/StickRouting.h"
+#include "OGBrawler/DAttackCamera.h"
+#include "OGBrawler/DAttackDirectionClassifier.h"
+#include "OGBrawler/InputSequence/GameMotions.h"
+#include "OGBrawler/InputSequence/InputSequence.h"
+#include "glm/trigonometric.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 namespace stickRoutingTest
 {
@@ -210,6 +217,254 @@ TEST_CASE("StickRouting: SetVariable accepts AimRelativeSwapped and keeps the le
 
 	CHECK(dAttackMachineSimulation::SetVariable("MovementScheme", "3"));
 	CHECK(dAttackMachineSimulation::g_movementScheme.load() == MovementScheme::CameraRelative);
+}
+
+glm::vec3 cameraForwardFromDegrees(float pitchBelowHorizonDeg, float yawDeg)
+{
+	const float pitch = glm::radians(pitchBelowHorizonDeg);
+	const float yaw = glm::radians(yawDeg);
+	return { std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), -std::sin(pitch) };
+}
+
+TEST_CASE("StickRouting: cameraLookAim in AimRelative with BlockLook held is the flattened unit camera forward",
+	"[SimulatableBrawler][StickRouting][CameraLookAim]")
+{
+	using dInput::stickRouting::cameraLookAim;
+
+	struct Row { float pitchDeg; float yawDeg; float scale; };
+	for (const Row row : { Row{ 60.f, 0.f, 1.f }, Row{ 30.f, 45.f, 1.f }, Row{ 80.f, -135.f, 1.f },
+			Row{ 10.f, 170.f, 1.f }, Row{ 45.f, 90.f, 900.f }, Row{ 20.f, -60.f, 0.05f } })
+	{
+		CAPTURE(row.pitchDeg, row.yawDeg, row.scale);
+		const glm::vec3 forward = row.scale * cameraForwardFromDegrees(row.pitchDeg, row.yawDeg);
+		const std::optional<glm::vec3> aim = cameraLookAim(MovementScheme::AimRelative, true, forward);
+		REQUIRE(aim.has_value());
+		CHECK(aim->z == 0.f);
+		CHECK(glm::length(*aim) == Catch::Approx(1.f).margin(1e-6));
+		CHECK(aim->x == Catch::Approx(std::cos(glm::radians(row.yawDeg))).margin(1e-5));
+		CHECK(aim->y == Catch::Approx(std::sin(glm::radians(row.yawDeg))).margin(1e-5));
+	}
+}
+
+TEST_CASE("StickRouting: cameraLookAim applies to AimRelative with BlockLook held only, not to AimRelativeSwapped",
+	"[SimulatableBrawler][StickRouting][CameraLookAim]")
+{
+	using dInput::stickRouting::cameraLookAim;
+
+	const glm::vec3 forward = cameraForwardFromDegrees(60.f, 30.f);
+	for (const MovementScheme scheme : { MovementScheme::CameraRelative, MovementScheme::AimRelative,
+			MovementScheme::MoveRelativeAim, MovementScheme::AimRelativeSwapped })
+	{
+		for (const bool blockLookHeld : { false, true })
+		{
+			CAPTURE(static_cast<uint32_t>(scheme), blockLookHeld);
+			const bool expected = blockLookHeld && scheme == MovementScheme::AimRelative;
+			CHECK(cameraLookAim(scheme, blockLookHeld, forward).has_value() == expected);
+		}
+	}
+}
+
+TEST_CASE("StickRouting: cameraLookAim aims at the orbit camera's steepest pitch and falls back for a camera with no horizontal forward",
+	"[SimulatableBrawler][StickRouting][CameraLookAim]")
+{
+	using dInput::stickRouting::cameraLookAim;
+	using dInput::stickRouting::kMinCameraLookAimHorizontalLength;
+
+	const glm::vec3 steepest = cameraForwardFromDegrees(dAttackCameraBehaviour::kHardPitchMaxDeg, 25.f);
+	CHECK(glm::length(glm::vec2(steepest.x, steepest.y)) > 10.f * kMinCameraLookAimHorizontalLength);
+	const std::optional<glm::vec3> aim = cameraLookAim(MovementScheme::AimRelative, true, steepest);
+	REQUIRE(aim.has_value());
+	CHECK(glm::length(*aim) == Catch::Approx(1.f).margin(1e-6));
+	CHECK(aim->x == Catch::Approx(std::cos(glm::radians(25.f))).margin(1e-5));
+
+	CHECK_FALSE(cameraLookAim(MovementScheme::AimRelative, true, glm::vec3(0.f, 0.f, -1.f)).has_value());
+	CHECK_FALSE(cameraLookAim(MovementScheme::AimRelative, true, glm::vec3(0.f, 0.f, 0.f)).has_value());
+	CHECK_FALSE(cameraLookAim(MovementScheme::AimRelative, true,
+		glm::vec3(0.5f * kMinCameraLookAimHorizontalLength, 0.f, -1.f)).has_value());
+}
+
+TEST_CASE("StickRouting: with the camera-look aim, the projectile's back step is a move opposite to the camera forward",
+	"[SimulatableBrawler][StickRouting][CameraLookAim]")
+{
+	using dInput::stickRouting::cameraLookAim;
+
+	const glm::vec3 forward = cameraForwardFromDegrees(60.f, 40.f);
+	const std::optional<glm::vec3> aim = cameraLookAim(MovementScheme::AimRelative, true, forward);
+	REQUIRE(aim.has_value());
+
+	const glm::vec3 oppositeCameraForward = -*aim;
+	const glm::vec3 alongCameraForward = *aim;
+	const glm::vec3 screenRight(aim->y, -aim->x, 0.f);
+	const float epsilon = dAttackDirection::kMoveMagnitudeEpsilon;
+	CHECK(inputSequence::stickMatchesStep(oppositeCameraForward, *aim, kBackShortcutStep, epsilon));
+	CHECK_FALSE(inputSequence::stickMatchesStep(alongCameraForward, *aim, kBackShortcutStep, epsilon));
+	CHECK_FALSE(inputSequence::stickMatchesStep(screenRight, *aim, kBackShortcutStep, epsilon));
+}
+
+constexpr float kAimDeadzone = 0.2f;
+
+TEST_CASE("StickRouting: the latch tests use the shipped stick deadzones",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	CHECK(dAttackMachineSimulation::g_moveStickDeadzone.load() == kMoveDeadzone);
+	CHECK(dAttackMachineSimulation::g_aimStickDeadzone.load() == kAimDeadzone);
+}
+
+TEST_CASE("StickRouting: a resting stick at or below its deadzone neither sets nor clears the gamepad latch",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	using dInput::stickRouting::lastInputWasGamepadAfterStick;
+
+	for (const float deadzone : { kMoveDeadzone, kAimDeadzone })
+	{
+		for (const glm::vec2 drift : { glm::vec2(0.01f, 0.f), glm::vec2(-0.02f, 0.03f), glm::vec2(0.05f, -0.05f),
+				glm::vec2(0.f, -0.1f), glm::vec2(0.5f * deadzone, -0.5f * deadzone), glm::vec2(0.f, -deadzone),
+				glm::vec2(-deadzone, 0.f) })
+		{
+			CAPTURE(deadzone, drift.x, drift.y);
+			CHECK_FALSE(lastInputWasGamepadAfterStick(false, drift, deadzone));
+			CHECK(lastInputWasGamepadAfterStick(true, drift, deadzone));
+		}
+	}
+}
+
+TEST_CASE("StickRouting: a stick past its deadzone sets the gamepad latch",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	using dInput::stickRouting::lastInputWasGamepadAfterStick;
+
+	for (const float deadzone : { kMoveDeadzone, kAimDeadzone })
+	{
+		for (const glm::vec2 stick : { glm::vec2(0.f, -1.f), glm::vec2(0.7f, 0.7f), glm::vec2(-1.f, 0.f),
+				glm::vec2(1.01f * deadzone, 0.f), glm::vec2(0.f, -1.01f * deadzone), glm::vec2(0.8f * deadzone, 0.8f * deadzone) })
+		{
+			CAPTURE(deadzone, stick.x, stick.y);
+			CHECK(lastInputWasGamepadAfterStick(false, stick, deadzone));
+			CHECK(lastInputWasGamepadAfterStick(true, stick, deadzone));
+		}
+	}
+}
+
+TEST_CASE("StickRouting: a WASD move clears the gamepad latch, a D-pad move sets it, and a release leaves it",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	using dInput::stickRouting::lastInputWasGamepadAfterMoveKeys;
+
+	for (const glm::vec2 keys : { glm::vec2(0.f, -1.f), glm::vec2(1.f, 0.f), glm::vec2(-1.f, 1.f), glm::vec2(0.f, 1.f) })
+	{
+		CAPTURE(keys.x, keys.y);
+		CHECK_FALSE(lastInputWasGamepadAfterMoveKeys(true, keys, false));
+		CHECK_FALSE(lastInputWasGamepadAfterMoveKeys(false, keys, false));
+		CHECK(lastInputWasGamepadAfterMoveKeys(false, keys, true));
+		CHECK(lastInputWasGamepadAfterMoveKeys(true, keys, true));
+	}
+	for (const bool latch : { false, true })
+	{
+		CAPTURE(latch);
+		CHECK(lastInputWasGamepadAfterMoveKeys(latch, glm::vec2(0.f, 0.f), false) == latch);
+		CHECK(lastInputWasGamepadAfterMoveKeys(latch, glm::vec2(0.f, 0.f), true) == latch);
+	}
+}
+
+TEST_CASE("StickRouting: the first cursor sample only sets the anchor",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	using dInput::stickRouting::CursorLatch;
+	using dInput::stickRouting::lastInputWasGamepadAfterCursor;
+
+	for (const bool latch : { false, true })
+	{
+		CAPTURE(latch);
+		const CursorLatch result = lastInputWasGamepadAfterCursor(latch, std::nullopt, glm::vec2(640.f, 360.f));
+		CHECK(result.lastInputWasGamepad == latch);
+		REQUIRE(result.anchor.has_value());
+		CHECK(*result.anchor == glm::vec2(640.f, 360.f));
+	}
+}
+
+TEST_CASE("StickRouting: the cursor clears the gamepad latch once it is kCursorLatchMinPixels from its anchor, and jitter does not",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	using dInput::stickRouting::CursorLatch;
+	using dInput::stickRouting::kCursorLatchMinPixels;
+	using dInput::stickRouting::lastInputWasGamepadAfterCursor;
+
+	STATIC_REQUIRE(kCursorLatchMinPixels == 8.f);
+	const glm::vec2 start(640.f, 360.f);
+
+	CursorLatch jitter{ true, start };
+	for (int frame = 0; frame < 120; ++frame)
+	{
+		const float offset = (frame % 2 == 0) ? 3.f : -3.f;
+		jitter = lastInputWasGamepadAfterCursor(jitter.lastInputWasGamepad, jitter.anchor, start + glm::vec2(offset, -offset));
+		CAPTURE(frame);
+		CHECK(jitter.lastInputWasGamepad);
+		CHECK(jitter.anchor == std::optional<glm::vec2>(start));
+	}
+
+	CursorLatch slow{ true, start };
+	for (int pixel = 1; pixel <= 10; ++pixel)
+	{
+		slow = lastInputWasGamepadAfterCursor(slow.lastInputWasGamepad, slow.anchor, start + glm::vec2(0.f, static_cast<float>(pixel)));
+		CAPTURE(pixel);
+		CHECK(slow.lastInputWasGamepad == (pixel < 8));
+	}
+	CHECK(slow.anchor == std::optional<glm::vec2>(start + glm::vec2(0.f, 10.f)));
+}
+
+TEST_CASE("StickRouting: while the latch says keyboard and mouse, the cursor anchor follows the cursor",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	using dInput::stickRouting::CursorLatch;
+	using dInput::stickRouting::lastInputWasGamepadAfterCursor;
+
+	const CursorLatch moved = lastInputWasGamepadAfterCursor(false, glm::vec2(100.f, 100.f), glm::vec2(103.f, 98.f));
+	CHECK_FALSE(moved.lastInputWasGamepad);
+	CHECK(moved.anchor == std::optional<glm::vec2>(glm::vec2(103.f, 98.f)));
+
+	const CursorLatch padTookOver = lastInputWasGamepadAfterCursor(true, moved.anchor, glm::vec2(106.f, 98.f));
+	CHECK(padTookOver.lastInputWasGamepad);
+	CHECK(padTookOver.anchor == moved.anchor);
+}
+
+TEST_CASE("StickRouting: WASD held beside a drifting pad stays keyboard and mouse, frame after frame",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	using dInput::stickRouting::lastInputWasGamepadAfterMoveKeys;
+	using dInput::stickRouting::lastInputWasGamepadAfterStick;
+
+	const glm::vec2 leftDrift(0.03f, -0.02f);
+	const glm::vec2 rightDrift(-0.02f, 0.04f);
+	bool latch = true;
+	for (int frame = 0; frame < 120; ++frame)
+	{
+		latch = lastInputWasGamepadAfterMoveKeys(latch, glm::vec2(0.f, -1.f), false);
+		latch = lastInputWasGamepadAfterStick(latch, leftDrift, kMoveDeadzone);
+		latch = lastInputWasGamepadAfterStick(latch, rightDrift, kAimDeadzone);
+		CAPTURE(frame);
+		CHECK_FALSE(latch);
+	}
+}
+
+TEST_CASE("StickRouting: moving the mouse beside a drifting pad clears the gamepad latch, and the drift does not set it again",
+	"[SimulatableBrawler][StickRouting][GamepadLatch]")
+{
+	using dInput::stickRouting::CursorLatch;
+	using dInput::stickRouting::lastInputWasGamepadAfterCursor;
+	using dInput::stickRouting::lastInputWasGamepadAfterStick;
+
+	const glm::vec2 leftDrift(0.03f, -0.02f);
+	const glm::vec2 rightDrift(-0.02f, 0.04f);
+	CursorLatch latch{ true, glm::vec2(640.f, 360.f) };
+	for (int frame = 1; frame <= 60; ++frame)
+	{
+		bool lastInputWasGamepad = lastInputWasGamepadAfterStick(latch.lastInputWasGamepad, leftDrift, kMoveDeadzone);
+		lastInputWasGamepad = lastInputWasGamepadAfterStick(lastInputWasGamepad, rightDrift, kAimDeadzone);
+		latch = lastInputWasGamepadAfterCursor(lastInputWasGamepad, latch.anchor,
+			glm::vec2(640.f + 2.f * static_cast<float>(frame), 360.f));
+		CAPTURE(frame);
+		CHECK(latch.lastInputWasGamepad == (frame < 4));
+	}
 }
 
 } // namespace stickRoutingTest

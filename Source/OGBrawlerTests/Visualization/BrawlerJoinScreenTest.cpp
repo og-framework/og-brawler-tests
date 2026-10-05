@@ -691,9 +691,9 @@ TEST_CASE("JoinScreen.TheFailedStatusLineUsesTheAttemptsAddressAndTheServersText
 TEST_CASE("JoinScreen.TheLocalCoopHintNamesTheBoundKeysAndStatesNoLimit",
           "[BrawlerJoinScreen][JoinScreenText]")
 {
-    CHECK(localCoopHintText() == "After joining: Tab adds a local player, Insert removes one");
+    CHECK(localCoopHintText() == "After joining: Tab adds a local player, End removes one");
     CHECK(std::string(kLocalCoopKeyNames.addPlayer) == "Tab");
-    CHECK(std::string(kLocalCoopKeyNames.removePlayer) == "Insert");
+    CHECK(std::string(kLocalCoopKeyNames.removePlayer) == "End");
 }
 
 TEST_CASE("JoinScreen.TheLocalPlayerLimitNoticeStatesTheLimitAndFadesAfterItsWindow",

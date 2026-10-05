@@ -5,11 +5,8 @@
 #include "catch_amalgamated.hpp"
 
 #include "OGBrawler/DAttackCamera.h"
-#include "OGSimulation/DPID.h"
 
-#include "glm/gtc/constants.hpp"
-#include "glm/gtc/quaternion.hpp"
-#include "glm/trigonometric.hpp"
+#include "glm/vec2.hpp"
 
 #include <cmath>
 #include <vector>
@@ -23,154 +20,148 @@
 
 namespace dAttackCameraIsoSeedTest
 {
-constexpr float kDt = 1.f / 60.f;
+using dAttackCameraBehaviour::OrbitCameraInput;
+using dAttackCameraBehaviour::OrbitCameraSettings;
+using dAttackCameraBehaviour::OrbitCameraState;
+
+constexpr float kDts[] = { 1.f / 30.f, 1.f / 60.f, 1.f / 100.f, 1.f / 144.f, 1.f / 240.f };
 constexpr float kIsoPitchDegrees = -60.f;
-constexpr float kLegacyTargetPitch = 0.8f;
+constexpr float kLegacyTargetPitchDegrees = 45.8366f;
 constexpr float kFullBoomLength = 900.f;
-constexpr int kTicks = 600;
-
-DPIDSettings productionPitchPidSettings()
-{
-    return DPIDSettings(0.03f, 0.01f, 0.01f);
-}
-
-float boomPitch(const DAttackCameraState& state)
-{
-    return glm::eulerAngles(glm::quat_cast(state.getCameraBoomTransform())).y;
-}
-
-float boomYaw(const DAttackCameraState& state)
-{
-    return glm::eulerAngles(glm::quat_cast(state.getCameraBoomTransform())).z;
-}
-
-DAttackCameraState seededState(float pitch, float yaw)
-{
-    DAttackCameraState state;
-    state.setCameraBoomTransform(glm::mat4_cast(glm::quat(glm::vec3(0.f, pitch, yaw))));
-    state.setCameraBoomLength(kFullBoomLength);
-    return state;
-}
+constexpr float kLookSeconds = 5.25f;
 
 struct LookRun
 {
     std::vector<float> pitches;
     std::vector<float> lengths;
+    OrbitCameraState final;
 };
 
-LookRun runHorizontalLook(DAttackCameraState& state, float targetPitch, int ticks)
+LookRun runHorizontalLook(float dt, OrbitCameraState state, float targetDeg, float seconds)
 {
-    const DAttackCameraInput input(glm::vec3(0.f), glm::vec2(1.f, 0.f), /*blockLook*/ true,
-                                   targetPitch, productionPitchPidSettings());
+    const OrbitCameraSettings settings;
+    const OrbitCameraInput input{ true, glm::vec2(0.f), glm::vec2(1.f, 0.f), targetDeg };
     LookRun run;
-    for (int tick = 0; tick < ticks; ++tick)
+    const long frames = std::lround(seconds / dt);
+    for (long frame = 0; frame < frames; ++frame)
     {
-        dAttackCameraBehaviour::integrate(kDt, input, state);
-        run.pitches.push_back(boomPitch(state));
-        run.lengths.push_back(state.getCameraBoomLength());
+        state = dAttackCameraBehaviour::integrate(dt, input, settings, state);
+        run.pitches.push_back(state.pitchDeg);
+        run.lengths.push_back(dAttackCameraBehaviour::boomLength(state.pitchDeg, targetDeg, settings));
     }
+    run.final = state;
     return run;
 }
 
-void requireHoldsTargetAtFullLength(DAttackCameraState& state, float targetPitch)
+void requireHoldsTargetAtFullLength(const OrbitCameraState& seed, float targetDeg)
 {
-    const float yawBefore = boomYaw(state);
-    const LookRun run = runHorizontalLook(state, targetPitch, kTicks);
-
-    float worstPitchError = 0.f;
-    float shortestLength = kFullBoomLength;
-    for (int tick = 0; tick < kTicks; ++tick)
+    for (const float dt : kDts)
     {
-        worstPitchError = std::fmax(worstPitchError, std::fabs(run.pitches[tick] - targetPitch));
-        shortestLength = std::fmin(shortestLength, run.lengths[tick]);
+        const LookRun run = runHorizontalLook(dt, seed, targetDeg, kLookSeconds);
+        float worstPitchError = 0.f;
+        float shortestLength = kFullBoomLength;
+        for (std::size_t frame = 0; frame < run.pitches.size(); ++frame)
+        {
+            worstPitchError = std::fmax(worstPitchError, std::fabs(run.pitches[frame] - targetDeg));
+            shortestLength = std::fmin(shortestLength, run.lengths[frame]);
+        }
+        INFO("fps " << 1.f / dt << " target " << targetDeg << " worst pitch error " << worstPitchError
+                    << " shortest length " << shortestLength << " yaw " << seed.yawDeg << " -> " << run.final.yawDeg);
+        REQUIRE(worstPitchError == 0.f);
+        REQUIRE(shortestLength == kFullBoomLength);
+        REQUIRE(std::fabs(std::remainder(run.final.yawDeg - seed.yawDeg, 360.f)) > 1.f);
     }
-    INFO("target " << targetPitch << " worst pitch error " << worstPitchError
-                   << " shortest length " << shortestLength);
-    REQUIRE(worstPitchError < 1e-3f);
-    REQUIRE(shortestLength == Catch::Approx(kFullBoomLength).margin(0.5f));
-    REQUIRE(std::fabs(boomYaw(state) - yawBefore) > 0.01f);
 }
 } // namespace dAttackCameraIsoSeedTest
 
 using namespace dAttackCameraIsoSeedTest;
 
-TEST_CASE("DAttackCamera.IsoTargetPitchStaysInsideTheOpenQuarterTurn", "[DAttack][CameraIsoSeed]")
+TEST_CASE("DAttackCamera.IsoTargetPitchStaysInsideThePitchLimits", "[DAttack][CameraIsoSeed]")
 {
-    const float target = dAttackCameraBehaviour::targetPitchFromUEPitchDegrees(kIsoPitchDegrees);
-    INFO("iso pitch -60 deg -> target " << target);
-    REQUIRE(target == Catch::Approx(glm::pi<float>() / 3.f).margin(1e-6f));
-    REQUIRE(dAttackCameraBehaviour::targetPitchFromUEPitchDegrees(-45.f)
-            == Catch::Approx(glm::pi<float>() / 4.f).margin(1e-6f));
+    const OrbitCameraSettings settings;
+    CHECK(dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(kIsoPitchDegrees, settings) == 60.f);
+    CHECK(dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(-45.f, settings) == 45.f);
 
     const float inputs[] = { 30.f, 0.f, -0.5f, -1.f, -60.f, -89.f, -90.f, -120.f, -180.f, 400.f, -400.f };
     for (const float uePitch : inputs)
     {
-        const float clamped = dAttackCameraBehaviour::targetPitchFromUEPitchDegrees(uePitch);
-        INFO("ue pitch " << uePitch << " -> target " << clamped);
-        REQUIRE(clamped > 0.f);
-        REQUIRE(clamped < glm::half_pi<float>());
+        const float pitch = dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(uePitch, settings);
+        INFO("ue pitch " << uePitch << " -> " << pitch << " deg below the horizon");
+        CHECK(pitch >= dAttackCameraBehaviour::kPitchMinDeg);
+        CHECK(pitch <= dAttackCameraBehaviour::kPitchMaxDeg);
     }
-    REQUIRE(dAttackCameraBehaviour::targetPitchFromUEPitchDegrees(30.f)
-            == Catch::Approx(glm::radians(dAttackCameraBehaviour::kMinTargetPitchDegrees)));
-    REQUIRE(dAttackCameraBehaviour::targetPitchFromUEPitchDegrees(-90.f)
-            == Catch::Approx(glm::radians(dAttackCameraBehaviour::kMaxTargetPitchDegrees)));
+    CHECK(dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(30.f, settings) == dAttackCameraBehaviour::kPitchMinDeg);
+    CHECK(dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(-90.f, settings) == dAttackCameraBehaviour::kPitchMaxDeg);
+
+    OrbitCameraSettings narrow;
+    narrow.pitchMinDeg = 30.f;
+    narrow.pitchMaxDeg = 50.f;
+    CHECK(dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(kIsoPitchDegrees, narrow) == 50.f);
+    CHECK(dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(-10.f, narrow) == 30.f);
 }
 
 TEST_CASE("DAttackCamera.IsoSeedHoldsPitchAndFullLengthUnderHorizontalLook", "[DAttack][CameraIsoSeed]")
 {
-    const float target = dAttackCameraBehaviour::targetPitchFromUEPitchDegrees(kIsoPitchDegrees);
-    const float yaws[] = { 0.f, glm::quarter_pi<float>(), -2.4f, 3.1f };
-    for (const float yaw : yaws)
+    const OrbitCameraSettings settings;
+    const float target = dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(kIsoPitchDegrees, settings);
+    const float isoYaws[] = { 0.f, 45.f, -137.5f, 180.f, 400.f };
+    for (const float isoYaw : isoYaws)
     {
-        INFO("seed yaw " << yaw);
-        DAttackCameraState state = seededState(target, yaw);
-        REQUIRE(boomPitch(state) == Catch::Approx(target).margin(1e-5f));
-        requireHoldsTargetAtFullLength(state, target);
+        INFO("iso yaw " << isoYaw);
+        const OrbitCameraState seed = dAttackCameraBehaviour::seedFromUERotation(kIsoPitchDegrees, isoYaw, settings);
+        CHECK(seed.pitchDeg == target);
+        CHECK(seed.holdoffSeconds == 0.f);
+        CHECK(std::fabs(std::remainder(seed.yawDeg - isoYaw, 360.f)) < 1e-4f);
+        CHECK(std::fabs(seed.yawDeg) <= 180.f);
+        CHECK(dAttackCameraBehaviour::boomLength(seed.pitchDeg, target, settings) == kFullBoomLength);
+        requireHoldsTargetAtFullLength(seed, target);
     }
 }
 
-TEST_CASE("DAttackCamera.OffTargetSeedConvergesToTheIsoPitchNotTheLegacyTarget", "[DAttack][CameraIsoSeed]")
+TEST_CASE("DAttackCamera.OffTargetSeedConvergesToTheIsoPitch", "[DAttack][CameraIsoSeed]")
 {
-    const float target = dAttackCameraBehaviour::targetPitchFromUEPitchDegrees(kIsoPitchDegrees);
-    const float startPitches[] = { 0.3f, 1.3f };
-    for (const float start : startPitches)
+    const OrbitCameraSettings settings;
+    const float target = dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(kIsoPitchDegrees, settings);
+    const float startPitches[] = { 17.1887f, 74.4845f };
+    for (const float dt : kDts)
     {
-        DAttackCameraState state = seededState(start, 0.f);
-        const LookRun run = runHorizontalLook(state, target, kTicks);
-        const float finalPitch = run.pitches.back();
-        INFO("start " << start << " pitch after 1 s " << run.pitches[59] << " after 5 s " << run.pitches[299]
-                      << " final " << finalPitch << " target " << target);
-        REQUIRE(finalPitch == Catch::Approx(target).margin(0.01f));
-        REQUIRE(std::fabs(finalPitch - kLegacyTargetPitch) > 0.2f);
-        REQUIRE(run.lengths.back() == Catch::Approx(kFullBoomLength).margin(5.f));
+        for (const float start : startPitches)
+        {
+            const LookRun run = runHorizontalLook(dt, OrbitCameraState{ 0.f, start, 0.f }, target, 4.f);
+            float furthestPast = 0.f;
+            for (const float pitch : run.pitches)
+                furthestPast = std::fmax(furthestPast, (pitch - target) * (start < target ? 1.f : -1.f));
+            INFO("fps " << 1.f / dt << " start " << start << " final " << run.final.pitchDeg << " target " << target);
+            CHECK(run.final.pitchDeg == Catch::Approx(target).margin(0.05f));
+            CHECK(std::fabs(run.final.pitchDeg - kLegacyTargetPitchDegrees) > 10.f);
+            CHECK(furthestPast <= 0.f);
+            CHECK(run.lengths.back() == Catch::Approx(kFullBoomLength).margin(5.f));
+        }
     }
 }
 
 #if OG_ISO_SEED_TEST_HAS_UNREAL_MATH
 TEST_CASE("DAttackCamera.UnrealIsoRotatorSeedReadsAsTheTargetPitch", "[DAttack][CameraIsoSeed]")
 {
-    const float target = dAttackCameraBehaviour::targetPitchFromUEPitchDegrees(kIsoPitchDegrees);
-    const double actorYaws[] = { 0.0, 90.0, -37.0, 180.0 };
-    const double isoYaws[] = { 0.0, 45.0 };
-    for (const double actorYaw : actorYaws)
+    const OrbitCameraSettings settings;
+    const float target = dAttackCameraBehaviour::pitchDegFromUEPitchDegrees(kIsoPitchDegrees, settings);
+    const double isoYaws[] = { 0.0, 45.0, -137.5, 180.0 };
+    for (const double isoYaw : isoYaws)
     {
-        for (const double isoYaw : isoYaws)
-        {
-            const FQuat relative = FRotator(0.0, actorYaw, 0.0).Quaternion().Inverse()
-                                 * FRotator(kIsoPitchDegrees, isoYaw, 0.0).Quaternion();
-            const glm::quat rawCopy(static_cast<float>(relative.W), static_cast<float>(relative.X),
-                                    static_cast<float>(relative.Y), static_cast<float>(relative.Z));
-            DAttackCameraState state;
-            state.setCameraBoomTransform(glm::mat4_cast(rawCopy));
-            state.setCameraBoomLength(kFullBoomLength);
-
-            const glm::vec3 euler = glm::eulerAngles(glm::quat_cast(state.getCameraBoomTransform()));
-            INFO("actor yaw " << actorYaw << " iso yaw " << isoYaw << " euler (" << euler.x << ", "
-                              << euler.y << ", " << euler.z << ") target " << target);
-            REQUIRE(euler.y == Catch::Approx(target).margin(1e-4f));
-            REQUIRE(euler.x == Catch::Approx(0.f).margin(1e-4f));
-            requireHoldsTargetAtFullLength(state, target);
-        }
+        const FRotator iso(kIsoPitchDegrees, isoYaw, 0.0);
+        const OrbitCameraState seed = dAttackCameraBehaviour::seedFromUERotation(
+            static_cast<float>(iso.Pitch), static_cast<float>(iso.Yaw), settings);
+        const FRotator boom(-seed.pitchDeg, seed.yawDeg, 0.f);
+        const FVector isoForward = iso.Vector();
+        const FVector boomForward = boom.Vector();
+        INFO("iso yaw " << isoYaw << " seed (" << seed.yawDeg << ", " << seed.pitchDeg << ") iso forward ("
+                        << isoForward.X << ", " << isoForward.Y << ", " << isoForward.Z << ") boom forward ("
+                        << boomForward.X << ", " << boomForward.Y << ", " << boomForward.Z << ")");
+        CHECK(seed.pitchDeg == target);
+        CHECK(boomForward.Equals(isoForward, 1e-5));
+        CHECK(boom.Quaternion().Equals(iso.Quaternion(), 1e-5));
+        CHECK(boomForward.Z == Catch::Approx(-std::sqrt(3.0) / 2.0).margin(1e-5));
+        requireHoldsTargetAtFullLength(seed, target);
     }
 }
 #endif

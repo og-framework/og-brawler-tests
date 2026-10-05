@@ -35,12 +35,11 @@
 // overload in any include set, and the radial case below still pins the behaviour.
 #include "OGBrawler/BrawlerHitDetectionSystem.h"
 
-// ⚠ DAttackCamera's three sites are in a .cpp, NOT a header — they are compiled once,
-// inside the OGBrawler module, with an include set no test TU can influence. The camera
-// cases below therefore pin BEHAVIOUR through the exported `dAttackCameraBehaviour::
-// integrate` symbol rather than lookup context. That is strictly the more valuable half
-// anyway: it is what a Godot/Jolt port would break.
-#include "OGBrawler/DAttackCamera.h"
+// [og-attackstatetransition-cleanup task 8] The three DAttackCamera cases (formerly numbered 2, 3 and
+// 4, DAttackAbs.Camera*) RETIRED with the PID camera they pinned: `dAttackCameraBehaviour::integrate`
+// was replaced by a pure orbit camera, and none of the three sites survives. The new camera keeps
+// `glm::abs` on every float, and its behaviour tests (DAttackOrbitCameraTest.cpp) drive leftward
+// yaw and sub-1-degree steps, which a truncating integer overload would zero.
 
 #include "catch_amalgamated.hpp"
 #include "OGBrawler/DAttackCircle.h"
@@ -48,7 +47,6 @@
 #include "OGBrawler/DAttackSequenceId.h"
 #include "OGBrawler/BrawlerProjectileSimulation.h"
 #include "OGBrawler/CollisionCategoryConstants.h"
-#include "OGSimulation/DPID.h"
 #include "OGSimulation/SimulationComposite.h"
 #include "OGSimulation/SimulationDependencies.h"
 #include "OGSimulation/PhysicsBodyAdapter.h"
@@ -230,39 +228,6 @@ static RadialTickResult radialTick(float hitZ, float halfThickness)
 }
 
 // ===========================================================================
-// CAMERA RIG — one dAttackCameraBehaviour::integrate tick.
-//
-// Everything the three camera sites decide is readable from public getters on
-// DAttackCameraState, so no transform round-trip is needed to observe them:
-//   * :42 and :45 both land in editPitchPIDState().setAdjustment(...)
-//   * :55 lands in setCameraBoomLength(...)
-//
-// The PID is pure-proportional (p=1, i=0, d=0), so its adjustment is exactly the
-// error `targetPitch - currentPitch` and every number below is closed form.
-// ===========================================================================
-
-struct CameraTickResult
-{
-    float adjustment = 0.f;
-    float boomLength = 0.f;
-};
-
-static CameraTickResult cameraTick(const glm::vec2& mouseAxis, float startPitch, float targetPitch)
-{
-    const DPIDSettings pidSettings(1.f, 0.f, 0.f);
-    const DAttackCameraInput input(glm::vec3(0.f), mouseAxis, /*blockLook*/ true,
-                                   targetPitch, pidSettings);
-
-    DAttackCameraState state;
-    state.setCameraBoomTransform(glm::mat4_cast(glm::quat(glm::vec3(0.f, startPitch, 0.f))));
-
-    dAttackCameraBehaviour::integrate(kDt, input, state);
-
-    return CameraTickResult{ state.getPitchPIDState().getAdjustment(),
-                             state.getCameraBoomLength() };
-}
-
-// ===========================================================================
 // MACHINE RIG — one dAttackMachineSimulation::integrate tick from Idle with the
 // left attack held, which is the shortest path into the anonymous-namespace
 // setRadialSimulationInitialConditions() where the :167 site lives. The site's
@@ -366,102 +331,6 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
         INFO("bodyHits = " << r.bodyHits << " (float overload: 0, int overload: 1)");
         REQUIRE(r.bodyHits == 0u);
     }
-}
-
-// ===========================================================================
-// ⭐ 2. DAttackCamera.cpp:45 — `abs(normalizedCameraAxis.x) - abs(normalizedCameraAxis.y)`
-//
-// THE OTHER HIGHEST-RISK SITE, and the one with no float-side escape hatch:
-// `normalizedCameraAxis` is a NORMALIZED glm::vec2, so BOTH components are in [-1,1]
-// by construction and an integer overload truncates BOTH to 0. The scale factor
-// becomes 0 - 0 = 0 and the pitch PID adjustment is multiplied to nothing on EVERY
-// frame — the camera's pitch control silently stops working, with no NaN, no assert
-// and no discontinuity to notice.
-//
-// Fixture: mouse axis (0.8, 0.6) — already unit length, so cameraAxis == its own
-// normalization and |x| > |y|, which is what routes past the :42 branch into this one.
-// Start pitch 0.6, target 1.0, p=1 -> the PID adjustment entering the line is 0.4.
-//   float overload: 0.4 * (0.8 - 0.6) = 0.08
-//   int overload:   0.4 * (0   - 0  ) = 0
-// Margin 0.08 against a 1e-4 tolerance — 800x.
-//
-// ⚠ Independent of :42 by construction: |x| < |y| is false under the float overload
-// and `0 < 0` is false under the integer one, so BOTH send this fixture down the else
-// branch. This case measures :45 alone.
-// ===========================================================================
-
-TEST_CASE("DAttackAbs.CameraPitchAdjustmentScalesByAxisMagnitudes", "[DAttack][AbsQualification]")
-{
-    using namespace dattackabstests;
-
-    const CameraTickResult r = cameraTick(glm::vec2(0.8f, 0.6f), /*startPitch*/ 0.6f,
-                                          /*targetPitch*/ 1.f);
-    INFO("adjustment = " << r.adjustment << " (float overload: 0.08, int overload: 0)");
-    REQUIRE(r.adjustment == Catch::Approx(0.08f).margin(kEps));
-
-    // Stated as an assertion rather than a comment: the whole hazard is that the int
-    // overload makes this identically zero, and zero is also what a lot of other
-    // breakage looks like.
-    REQUIRE(r.adjustment != Catch::Approx(0.f).margin(kEps));
-}
-
-// ===========================================================================
-// 3. DAttackCamera.cpp:42 — `abs(cameraAxis.x) < abs(cameraAxis.y)`
-//
-// The branch that decides whether a mostly-VERTICAL stick/mouse gesture suppresses the
-// pitch adjustment entirely. `cameraAxis` is normalized one line earlier in every
-// reachable path, so both magnitudes are in [0,1] and an integer overload compares
-// `0 < 0` — always false. The suppression branch becomes UNREACHABLE and a vertical
-// gesture starts scaling the adjustment by a negative factor instead of zeroing it.
-//
-// Fixture: mouse axis (0.6, 0.8) — |x| < |y|.
-//   float overload: takes the suppression branch -> adjustment = 0
-//   int overload:   falls through to :45 -> 0.4 * (0.6 - 0.8) = -0.08
-// Margin 0.08, and a SIGN change on top of it.
-// ===========================================================================
-
-TEST_CASE("DAttackAbs.CameraAxisDominanceComparesMagnitudes", "[DAttack][AbsQualification]")
-{
-    using namespace dattackabstests;
-
-    const CameraTickResult r = cameraTick(glm::vec2(0.6f, 0.8f), /*startPitch*/ 0.6f,
-                                          /*targetPitch*/ 1.f);
-    INFO("adjustment = " << r.adjustment << " (float overload: 0, int overload: -0.08)");
-    REQUIRE(r.adjustment == Catch::Approx(0.f).margin(kEps));
-
-    // The mirrored fixture, so "0" above cannot be an artefact of a rig that never
-    // writes an adjustment at all. Same tick, |x| > |y|, non-zero result.
-    const CameraTickResult dominantX = cameraTick(glm::vec2(0.8f, 0.6f), 0.6f, 1.f);
-    REQUIRE(dominantX.adjustment == Catch::Approx(0.08f).margin(kEps));
-}
-
-// ===========================================================================
-// 4. DAttackCamera.cpp:55 — `abs(clampedPitch)`
-//
-// `clampedPitch` is `std::clamp(currentPitch, 0.f, targetPitch)` — already non-negative,
-// so the `abs` is defensive rather than load-bearing. It is still the same portability
-// hazard: an integer overload truncates it, and for the sub-1-radian pitches this camera
-// actually uses that means distanceFactor collapses to 1 and the boom snaps to its
-// minimum length on every frame.
-//
-// Fixture: currentPitch 0.6 rad, targetPitch 1.0 rad.
-//   float overload: distanceFactor = 1 - 0.6/1.0 = 0.4 -> boom = 900 - 500*0.4 = 700
-//   int overload:   distanceFactor = 1 -   0/1.0 = 1.0 -> boom = 900 - 500*1.0 = 400
-// Margin 300 world units.
-//
-// This assertion also transitively pins the euler round-trip the fixture depends on: a
-// boom length of 700 is only reachable if the seeded transform really reads back as a
-// 0.6 rad pitch.
-// ===========================================================================
-
-TEST_CASE("DAttackAbs.CameraBoomLengthTracksFractionalPitch", "[DAttack][AbsQualification]")
-{
-    using namespace dattackabstests;
-
-    const CameraTickResult r = cameraTick(glm::vec2(0.8f, 0.6f), /*startPitch*/ 0.6f,
-                                          /*targetPitch*/ 1.f);
-    INFO("boomLength = " << r.boomLength << " (float overload: 700, int overload: 400)");
-    REQUIRE(r.boomLength == Catch::Approx(700.f).margin(1e-2f));
 }
 
 // ===========================================================================

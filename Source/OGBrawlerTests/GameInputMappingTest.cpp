@@ -82,6 +82,53 @@ TEST_CASE("GameInputMapping: Key_0 selects AimRelativeSwapped",
 	CHECK(keysOf(ctx, dInput::gameMapping::SetSchemeAimRelativeSwapped) == std::vector<KeyId>{ KeyId::Key_0 });
 }
 
+TEST_CASE("GameInputMapping: BlockLook is bound to Key_5 and gamepad Y only, and LT and Left Alt are free",
+	"[SimulatableBrawler][GameInputMapping]")
+{
+	const MappingContext ctx = dInput::gameMapping::buildDefaultContext();
+
+	CHECK(dInput::gameMapping::BlockLook.valueType == dInput::ActionValueType::Boolean);
+	CHECK(keysOf(ctx, dInput::gameMapping::BlockLook) == std::vector<KeyId>{ KeyId::Key_5, KeyId::Gamepad_FaceTop });
+
+	for (const KeyId key : { KeyId::Key_5, KeyId::Gamepad_FaceTop })
+	{
+		CAPTURE(static_cast<int>(key));
+		const std::vector<KeyUse> uses = usesOf(ctx, key);
+		REQUIRE(uses.size() == 1);
+		CHECK(uses[0].action == &dInput::gameMapping::BlockLook);
+		CHECK(uses[0].modifier == KeyModifier::None);
+	}
+
+	for (const KeyId key : { KeyId::Key_LeftAlt, KeyId::Gamepad_LeftTriggerAxis, KeyId::Gamepad_LeftTrigger })
+	{
+		CAPTURE(static_cast<int>(key));
+		CHECK(usesOf(ctx, key).empty());
+	}
+}
+
+TEST_CASE("GameInputMapping: Key_8 selects AimRelative",
+	"[SimulatableBrawler][GameInputMapping]")
+{
+	const MappingContext ctx = dInput::gameMapping::buildDefaultContext();
+
+	const std::vector<KeyUse> uses = usesOf(ctx, KeyId::Key_8);
+	REQUIRE(uses.size() == 1);
+	CHECK(uses[0].action == &dInput::gameMapping::SetSchemeAimRelative);
+	CHECK(uses[0].modifier == KeyModifier::None);
+	CHECK(keysOf(ctx, dInput::gameMapping::SetSchemeAimRelative) == std::vector<KeyId>{ KeyId::Key_8 });
+}
+
+TEST_CASE("GameInputMapping: the four scheme switches are the digit keys 7, 8, 9 and 0, one key each",
+	"[SimulatableBrawler][GameInputMapping]")
+{
+	const MappingContext ctx = dInput::gameMapping::buildDefaultContext();
+
+	CHECK(keysOf(ctx, dInput::gameMapping::SetSchemeCameraRelative) == std::vector<KeyId>{ KeyId::Key_7 });
+	CHECK(keysOf(ctx, dInput::gameMapping::SetSchemeAimRelative) == std::vector<KeyId>{ KeyId::Key_8 });
+	CHECK(keysOf(ctx, dInput::gameMapping::SetSchemeMoveRelativeAim) == std::vector<KeyId>{ KeyId::Key_9 });
+	CHECK(keysOf(ctx, dInput::gameMapping::SetSchemeAimRelativeSwapped) == std::vector<KeyId>{ KeyId::Key_0 });
+}
+
 } // namespace gameInputMappingTest
 
 #endif // WITH_LOW_LEVEL_TESTS
