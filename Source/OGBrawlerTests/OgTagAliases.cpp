@@ -45,6 +45,6 @@
 // Appending the tag in a LATER diff than the cases would have left those eight green,
 // passing, and never executed by anything CI runs.
 CATCH_REGISTER_TAG_ALIAS("[@og]",
-    "[DAttack],[CharacterViz],[SimulatableBrawler],[SimulationComposite],[SimulationIntegrationExecutor],[SimulationNetSync],[SimulationReconciliation],[InputSequence],[BrawlerProjectile],[InputPackaging],[PacketBudget],[attackdirection],[BrawlerMovement],[BrawlerRingout],[BrawlerJoinScreen]")
+    "[DAttack],[CharacterViz],[SimulatableBrawler],[SimulationComposite],[SimulationIntegrationExecutor],[SimulationNetSync],[SimulationReconciliation],[InputSequence],[BrawlerProjectile],[InputPackaging],[PacketBudget],[attackdirection],[BrawlerMovement],[BrawlerRingout],[BrawlerJoinScreen],[BrawlerInputSnapshot],[BrawlerTargetViz]")
 
 #endif // WITH_LOW_LEVEL_TESTS
