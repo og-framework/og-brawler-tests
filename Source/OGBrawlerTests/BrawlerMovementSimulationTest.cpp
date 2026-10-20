@@ -2899,7 +2899,7 @@ namespace movementTests
 // differed. So the shipped `{42, 96}` capsule's bottom tip is at `centre.z - 96`.
 //
 // THE SELECTION RULE IS A TRANSCRIPTION, NOT A HYPOTHESIS. It is copied from
-// `Source/OGSimulationUnreal/ChaosSpatialQueryAdapter.cpp::sweep`:
+// `Plugins/OGSimulation/Source/OGSimulationUnreal/ChaosSpatialQueryAdapter.cpp::sweep`:
 //     :543-544  `localParams.bFindInitialOverlaps = true;`
 //     :562-563  "An initial overlap comes back with Time == 0, so it naturally wins."
 //     :564-571  the minimum-`Time`-over-blocking-hits loop
