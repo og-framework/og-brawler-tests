@@ -1280,7 +1280,7 @@ TEST_CASE("Scoreboard.ItClearsBothShippedSurfacesAtTheRuledDefaults",
 	//    session". THAT WAS FALSE. It is corrected in place rather than quietly dropped,
 	//    because a claim in a test file is read as a verified fact and this one was an
 	//    assumption. `kPreDietCharacterCap == 4` is ADVISORY, not enforced: its own fence
-	//    in `SimulationManagerUImpl.cpp` (grep `PreDietCap`) says so in as many words --
+	//    in `BrawlerRosterUImpl.cpp` (grep `PreDietCap`) says so in as many words --
 	//    "WARNING, not Log, and not an assert: an over-cap session still RUNS - report, do
 	//    not crash." It logs and proceeds, so a 5th character registers. Nothing else in
 	//    `Source/OGBrawlerUnreal` rejects a join either (`ApproveLogin|PreLogin|MaxPlayers`

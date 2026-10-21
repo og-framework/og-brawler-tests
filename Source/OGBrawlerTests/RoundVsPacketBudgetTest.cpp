@@ -215,7 +215,7 @@ namespace
 
     // The join-alone character bound. DERIVED here rather than typed: it is the largest
     // N whose join-alone round still fits. Until og-syncedInput-rework task 3 the runtime
-    // fence (`ASimulationManagerUImpl::kPreDietCharacterCap`, 4) mirrored this value; the
+    // fence (`BrawlerRosterUImpl::kPreDietCharacterCap`, 4) mirrored this value; the
     // 82 -> 44 B entry stride moved it to 11 and the runtime cap was retained at 4 (lifting
     // it is unscheduled: og-netcode-v2-input-relay item 40 closed on 2026-10-03).
     constexpr std::uint32_t largestFittingCharacterCountUnderJoin()
@@ -601,7 +601,7 @@ TEST_CASE("PacketBudget: the shipped round leaves the margin the PIE gate is set
 //    the suite.
 //
 // ⛔ ITEM 40 WAS TO REPLACE THIS WHOLE SECTION with the post-diet table (its AC 2), and
-// delete `ASimulationManagerUImpl::kPreDietCharacterCap` with it; their joint absence is
+// delete `BrawlerRosterUImpl::kPreDietCharacterCap` with it; their joint absence is
 // the "cap lifted" statement, and there is no flag to flip. [og-syncedInput-rework task 3]
 // Item 40 closed on 2026-10-03 without doing either, so lifting the cap is unscheduled.
 //
@@ -683,9 +683,9 @@ TEST_CASE("PacketBudget: the join-alone bound is 11 characters, and N = 12 cross
     }
 
     // The bound, derived by walking the same inequality rather than typed. Until
-    // og-syncedInput-rework task 3 the runtime fence `ASimulationManagerUImpl::kPreDietCharacterCap`
+    // og-syncedInput-rework task 3 the runtime fence `BrawlerRosterUImpl::kPreDietCharacterCap`
     // mirrored this value; it is retained at 4 while this bound is 11 (that constant's
-    // derivation tag D-01, in SimulationManagerUImpl-rationale.md's pre-diet cap section,
+    // derivation tag D-01, in BrawlerRosterUImpl-rationale.md's pre-diet cap section,
     // records the split). A pure-C++ target cannot see a UCLASS.
     // [og-syncedInput-rework task 3, 2026-10-03] 4 -> 11.
     REQUIRE(largestFittingCharacterCountUnderJoin() == 11u);

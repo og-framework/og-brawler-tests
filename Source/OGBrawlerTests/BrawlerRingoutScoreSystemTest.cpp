@@ -61,7 +61,7 @@ namespace ringoutScoreTests
 
 namespace ringout = brawlerRingout;
 
-// Four characters is the pre-diet cap (`ASimulationManagerUImpl::kPreDietCharacterCap`), the
+// Four characters is the pre-diet cap (`BrawlerRosterUImpl::kPreDietCharacterCap`), the
 // session size the packet budget underwrites. It is NOT the largest legal session: the cap only
 // warns, and since og-brawler-uploadtosteam T18 the spawn table (`brawlerRingout::kMaxSpawnPoints`)
 // places 8. The award has no size-dependent path, so four with two diers covers its cases.
