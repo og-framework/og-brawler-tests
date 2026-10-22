@@ -189,7 +189,7 @@ TEST_CASE("Ringout.Types.WireSlicesAndTheDeadBit", "[BrawlerRingout]")
     REQUIRE(ringout::kFlagDead == 1u);
 
     // Eight characters, by user ruling (og-brawler-uploadtosteam T18) — no longer the pre-diet
-    // cap of 4, which `SimulationManagerUImpl.h` asserts stays at or below this.
+    // cap of 4, which `OGBrawlerSimulationManager.h` asserts stays at or below this.
     REQUIRE(ringout::kMaxSpawnPoints == 8u);
 
     // A fresh character is alive, with no countdown armed.
@@ -399,7 +399,7 @@ TEST_CASE("Ringout.APendingTeleportSuppressesDeathDetection", "[BrawlerRingout]"
     rig.setBodyZ(rig.belowThePlane());
 
     // A teleport is pending, so the position ring-out can see is about to be REPLACED. This
-    // is the shape `SimulationManagerUImpl` leaves a character in at registration: it seeds
+    // is the shape `OGBrawlerSimulationManager` leaves a character in at registration: it seeds
     // the movement teleport from the capsule pose before the movement sub-sim has integrated
     // once.
     rig.movementIc.teleportPending = 1u;
@@ -424,7 +424,7 @@ TEST_CASE("Ringout.APendingTeleportSuppressesDeathDetection", "[BrawlerRingout]"
 // ===========================================================================
 // ⛔⛔ THE AUTHORITY'S SPAWN-SLOT TABLE (task 3).
 //
-// These cases exist because `SimulationManagerUImpl.cpp` — the UE module file that CALLS the
+// These cases exist because `OGBrawlerSimulationManager.cpp` — the UE module file that CALLS the
 // allocator — is unreachable from this target. The task's own acceptance criteria demand a
 // DEMONSTRATION of two properties, so the logic lives in the engine-free header and the UE
 // layer holds nothing but the two calls. What follows is that demonstration.
@@ -652,7 +652,7 @@ TEST_CASE("Ringout.SpawnSlots.CharactersFiveToEightGetDistinctSlotsAndRespawnWit
 // complaint). User ruling 2026-09-13: respawn slot N is PLAYER START N.
 //
 // ⛔ THE UE HALF OF THAT — the `TActorIterator<APlayerStart>` walk and the one-time write into
-// `m_staticData.m_ringoutStaticData` in `BeginPlay` — lives in `SimulationManagerUImpl.cpp`,
+// `m_staticData.m_ringoutStaticData` in `BeginPlay` — lives in `OGBrawlerSimulationManager.cpp`,
 // which this target CANNOT REACH. That is exactly why the POLICY is a pure function in
 // `BrawlerRingoutSimulation.h` and these cases exist: the three properties that can go wrong
 // silently (order-dependence, an empty level, a short level) are asserted here rather than
@@ -965,7 +965,7 @@ TEST_CASE("Ringout.SpawnPoints.ALevelSeededTableIsWhereTheRespawnLands", "[Brawl
     Rig a;
     Rig b;
 
-    // What `ASimulationManagerUImpl::BeginPlay` does once, before any integrate: overwrite the
+    // What `AOGBrawlerSimulationManager::BeginPlay` does once, before any integrate: overwrite the
     // authored points in `StaticData` with the level's.
     a.sd.spawnPoints = levelTable;
     b.sd.spawnPoints = levelTable;

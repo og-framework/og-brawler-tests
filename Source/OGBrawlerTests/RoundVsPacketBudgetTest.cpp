@@ -87,7 +87,7 @@ namespace
     // `MaxPacketHandlerBits` (encryption, packet handlers) can only LOWER it. The
     // authority logs the real pair once per session as
     //   [PacketBudget] usableSingleBunchBytes=%d handlerBits=%d
-    // (Warning-level, one-shot, first client connection — SimulationManagerUImpl).
+    // (Warning-level, one-shot, first client connection — OGBrawlerSimulationManager).
     // If that line ever reports a value BELOW this literal, this literal is
     // optimistic and must be lowered here, in the same change that observes it.
     // T37 published ~975 B for the same quantity; that figure does not reproduce

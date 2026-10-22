@@ -25,7 +25,7 @@
 // local character, and a HELD-CONSTANT input for a remote proxy.
 //
 // Structural limitation, stated up front so no one over-reads a green run: this
-// tree cannot link UE, so SimmableUpdateComponent.cpp (the translation unit that
+// tree cannot link UE, so OGBrawlerSimulatableComponent.cpp (the translation unit that
 // applies the rule) is NOT compiled here. What is verified is the rule itself plus
 // its composition against the real visualize() signature. That the component calls
 // it with the right two arguments is verified by inspection and in PIE — the same
