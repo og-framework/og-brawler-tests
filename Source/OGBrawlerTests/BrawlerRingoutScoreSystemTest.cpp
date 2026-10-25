@@ -61,7 +61,7 @@ namespace ringoutScoreTests
 
 namespace ringout = brawlerRingout;
 
-// Four characters is the pre-diet cap (`ASimulationManagerUImpl::kPreDietCharacterCap`), the
+// Four characters is the pre-diet cap (`BrawlerRosterUImpl::kPreDietCharacterCap`), the
 // session size the packet budget underwrites. It is NOT the largest legal session: the cap only
 // warns, and since og-brawler-uploadtosteam T18 the spawn table (`brawlerRingout::kMaxSpawnPoints`)
 // places 8. The award has no size-dependent path, so four with two diers covers its cases.
@@ -189,7 +189,7 @@ struct FScoreRig
 // That is the whole point: the gate is no longer a statement inside `ScoreSystem` that a rig
 // could bypass by calling the hook directly, it is a branch in the executor, and a rig that
 // called `system.postIntegrate` would drive straight past it and pass against an unguarded
-// build. The type alias below is the same four template arguments `SimulationManagerUImpl.h`
+// build. The type alias below is the same four template arguments `OGBrawlerSimulationManager.h`
 // instantiates, minus the sibling systems.
 struct FExecRig
 {
@@ -250,7 +250,7 @@ struct FExecRig
 
 // ============================================================================================
 // THE CONCEPT. The executor's own requires-clause would reject a non-conforming system too —
-// but it would reject it inside `SimulationManagerUImpl.h`, a UE module file this target cannot
+// but it would reject it inside `OGBrawlerSimulationManager.h`, a UE module file this target cannot
 // compile, so the diagnostic would surface only in an Editor build. Asserted here (and at the
 // class in its own header) so it surfaces in the LLT target as well.
 // ============================================================================================

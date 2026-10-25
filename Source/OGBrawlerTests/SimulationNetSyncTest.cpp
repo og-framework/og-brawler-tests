@@ -228,7 +228,7 @@ static_assert(
 // SimulatableOwnerTraits specialization for SimulatableBrawler, using mock
 // owners for isolated unit tests in the DAttack module.
 // NOTE: This specialization is only defined within this translation unit.
-// The real specialization (USimmableUpdateComponent) lives in SimmableUpdateComponent.h.
+// The real specialization (UOGBrawlerSimulatableComponent) lives in OGBrawlerSimulatableComponent.h.
 // ---------------------------------------------------------------------------
 template <>
 struct SimulatableOwnerTraits<SimulatableBrawler>

@@ -576,7 +576,7 @@ TEST_CASE("DAttack.SimulatableBrawler.DerivedStateIsOffWire", "[DAttack][Simulat
                                    brawlerRingout::DerivedState>>);
 
     // 5. THE COPY STILL CARRIES THE SCRATCH. AllState is copied wholesale every
-    //    render step by SimmableUpdateComponent's updateVizState(), and the viz
+    //    render step by OGBrawlerSimulatableComponent's updateVizState(), and the viz
     //    reads the radial and projectile slices out of that copy. A naked class
     //    gave memberwise copy for free; this pins that the tuple does the same,
     //    through get<>/edit<> rather than through member names.

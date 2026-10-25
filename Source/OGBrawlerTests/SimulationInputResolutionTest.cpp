@@ -228,7 +228,7 @@ static_assert(
 // SimulatableOwnerTraits specialization for SimulatableBrawler, using mock
 // owners for isolated unit tests in the DAttack module.
 // NOTE: This specialization is only defined within this translation unit.
-// The real specialization (USimmableUpdateComponent) lives in SimmableUpdateComponent.h.
+// The real specialization (UOGBrawlerSimulatableComponent) lives in OGBrawlerSimulatableComponent.h.
 // ---------------------------------------------------------------------------
 template <>
 struct SimulatableOwnerTraits<SimulatableBrawler>
@@ -2504,7 +2504,7 @@ TEST_CASE("DAttack.SimulationNetSync.ProxyPredictionAndResimResolveTheSameTickId
 //
 // Both named remote-proxy viz consumers move off the correction-input channel in
 // this task: BrawlerVisualizationInputSource's REMOTE branch, and the
-// SimmableUpdateComponent site that feeds it (which used to pass
+// OGBrawlerSimulatableComponent site that feeds it (which used to pass
 // SimulationReconciliation::getLatestInput). The UE call site itself is not
 // linkable here; what IS linkable — and what actually carries the semantics — is
 // the netsync accessor that replaces the source, and the pure rule that consumes

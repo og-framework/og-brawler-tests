@@ -195,7 +195,7 @@ using Detection = brawlerHitDetection::System<OrderSwapPhysics, OrderSwapQuery>;
 
 // The production systems phases for these two systems: the SAME executor type the manager
 // instantiates, with detection handed THIS rig's fakes through the piecewise constructor, exactly
-// as SimulationManagerUImpl hands it the Chaos adapters. Firing order is template order.
+// as OGBrawlerSimulationManager hands it the Chaos adapters. Firing order is template order.
 struct FOrderSwapRig
 {
     using Exec = SimulationSystemsExecutor<SimulatableList<SimulatableBrawler>,
@@ -631,7 +631,7 @@ TEST_CASE("HitDetection.ExecutorFiresDetectionWithTheAdaptersItWasConstructedWit
 }
 
 // ---------------------------------------------------------------------------
-// The ordering pin the manager's BrawlerSystemsExec static_asserts on (SimulationManagerUImpl.h).
+// The ordering pin the manager's BrawlerSystemsExec static_asserts on (OGBrawlerSimulationManager.h).
 // The UE layer is not compiled into this suite, so the TRAIT is proved here, both arms: the
 // shipped order reads true, the reversed and the missing orders read false.
 // ---------------------------------------------------------------------------
