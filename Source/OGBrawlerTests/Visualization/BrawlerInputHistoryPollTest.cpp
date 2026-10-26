@@ -28,6 +28,7 @@
 
 #include "OGBrawler/BrawlerInputHistoryVisualizationPoll.h"
 #include "OGBrawler/BrawlerInputPackaging.h"
+#include "OGSimulation/SimulationFrame.h"
 #include "OGBrawler/BrawlerMotionMatching.h"
 #include "OGBrawler/InputSequence/InputSequence.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
@@ -70,12 +71,12 @@ static simulatableBrawler::PlayerInput makeCapture(glm::vec3 aimDirection,
 // Aim along +X, so a world move along +X is Forward and along +Y is right-of-aim.
 static simulatableBrawler::PlayerInput forwardCapture()
 {
-	return makeCapture(glm::vec3(1.f, 0.f, 0.f), glm::vec2(1.f, 0.f), glm::vec3(1.f, 0.f, 0.f));
+	return makeCapture(glm::vec3(0.f, 0.f, -1.f), glm::vec2(1.f, 0.f), glm::vec3(0.f, 0.f, -1.f));
 }
 
 static simulatableBrawler::PlayerInput backCapture()
 {
-	return makeCapture(glm::vec3(1.f, 0.f, 0.f), glm::vec2(-1.f, 0.f), glm::vec3(-1.f, 0.f, 0.f));
+	return makeCapture(glm::vec3(0.f, 0.f, -1.f), glm::vec2(-1.f, 0.f), glm::vec3(0.f, 0.f, 1.f));
 }
 
 // ---------------------------------------------------------------------------
@@ -228,9 +229,9 @@ TEST_CASE("Poll.TheGlyphClassifiesTheSameStickFieldTheMatcherDoes",
 	// point the same way, so a poll reading the wrong one passes every other test here.
 	// inputSequence::matchSequence classifies a history entry on moveDirectionWorld.
 	const simulatableBrawler::PlayerInput capture = makeCapture(
-		/*aimDirection*/       glm::vec3(1.f, 0.f, 0.f),
+		/*aimDirection*/       glm::vec3(0.f, 0.f, -1.f),
 		/*moveStick*/          glm::vec2(0.f, 1.f),
-		/*moveDirectionWorld*/ glm::vec3(-1.f, 0.f, 0.f));
+		/*moveDirectionWorld*/ glm::vec3(0.f, 0.f, 1.f));
 
 	const CaptureRowFields fields =
 		brawlerInputHistoryVisualization::captureRowFieldsOf(capture, kDeadzone);
@@ -240,13 +241,13 @@ TEST_CASE("Poll.TheGlyphClassifiesTheSameStickFieldTheMatcherDoes",
 
 	// And the stick field, if it had been read, would have said something else entirely.
 	CHECK(brawlerInputHistoryVisualization::directionBucketOf(
-	          capture.moveStick, glm::vec3(1.f, 0.f, 0.f), kDeadzone)
+	          capture.moveStick, glm::vec3(0.f, 0.f, -1.f), kDeadzone)
 	      != DirectionBucket::Back);
 
 	// Cross-checked against the matcher's own expression rather than against a literal.
 	const std::optional<float> matcherAngle = inputSequence::aimRelativeAngle(
-		glm::vec2(capture.moveDirectionWorld.x, capture.moveDirectionWorld.y),
-		glm::vec3(capture.aimDirection.x, capture.aimDirection.y, 0.f),
+		simFrame::forwardRight(capture.moveDirectionWorld),
+		simFrame::flatten(capture.aimDirection),
 		kDeadzone);
 
 	REQUIRE(matcherAngle.has_value());
@@ -266,7 +267,7 @@ TEST_CASE("Poll.TheRowFieldsAreExactlyTheTwoThePanelDraws",
 			const bool rightAttack = (combination & 0b10) != 0;
 
 			const simulatableBrawler::PlayerInput capture = makeCapture(
-				glm::vec3(1.f, 0.f, 0.f), glm::vec2(1.f, 0.f), glm::vec3(1.f, 0.f, 0.f),
+				glm::vec3(0.f, 0.f, -1.f), glm::vec2(1.f, 0.f), glm::vec3(0.f, 0.f, -1.f),
 				leftAttack, rightAttack);
 
 			const CaptureRowFields fields = brawlerInputHistoryVisualization::captureRowFieldsOf(
@@ -286,7 +287,7 @@ TEST_CASE("Poll.TheRowFieldsAreExactlyTheTwoThePanelDraws",
 		// split a row for a reason no one reading the panel could see.
 		const simulatableBrawler::PlayerInput plain   = forwardCapture();
 		const simulatableBrawler::PlayerInput matched = makeCapture(
-			glm::vec3(1.f, 0.f, 0.f), glm::vec2(1.f, 0.f), glm::vec3(1.f, 0.f, 0.f),
+			glm::vec3(0.f, 0.f, -1.f), glm::vec2(1.f, 0.f), glm::vec3(0.f, 0.f, -1.f),
 			false, false, inputSequence::kHadoukenActionId);
 
 		// The two captures really do differ; it is the ROW that ignores the difference.

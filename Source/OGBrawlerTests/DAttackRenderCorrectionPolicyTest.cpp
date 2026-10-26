@@ -20,6 +20,7 @@
 #include "OGSimulation/SimulationDependencies.h"
 #include "OGSimulation/SimulationObjectStorage.h"
 #include "OGSimulation/StepHooks.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
@@ -64,11 +65,11 @@ namespace dAttackRenderCorrectionPolicyTest
     constexpr int kFrames = 20;
     constexpr int kCorrectedSwingStep = 8;
     constexpr double kAlpha = 0.5;
-    constexpr float kWalkCmPerSecond = 100.f;
-    const glm::vec3 kAttachment(0.f, 0.f, 30.f);
-    const glm::vec3 kCapsuleStart(500.f, 200.f, 90.f);
-    const glm::vec3 kAimForward(1.f, 0.f, 0.f);
-    const glm::vec3 kAimLeft(0.f, 1.f, 0.f);
+    constexpr float kWalkSpeed = 1.f;
+    constexpr glm::vec3 kAttachment = glm::vec3(0.f, 0.3f, -0.f);
+    constexpr glm::vec3 kCapsuleStart = glm::vec3(2.f, 0.9f, -5.f);
+    constexpr glm::vec3 kAimForward = glm::vec3(0.f, 0.f, -1.f);
+    constexpr glm::vec3 kAimLeft = glm::vec3(1.f, 0.f, -0.f);
     constexpr uint8_t kSnapInRootFrame = static_cast<uint8_t>(RenderCorrectionMode::SnapInRootFrame);
 
     struct Pose
@@ -103,7 +104,7 @@ namespace dAttackRenderCorrectionPolicyTest
         using namespace dAttackRadialSimulation;
         InitialConditions ic{};
         ic.initialAimAngle = 0.f;
-        ic.initialAimRotationAxis = glm::vec3(0.f, 0.f, 1.f);
+        ic.initialAimRotationAxis = glm::vec3(-0.f, -1.f, 0.f);
         ic.activeAttackSequence = icSequence;
         State state{};
         state.currenSequenceId = stateSequence;
@@ -149,8 +150,8 @@ namespace dAttackRenderCorrectionPolicyTest
 
     double bladeElevationDegrees(const glm::quat& rotation)
     {
-        const glm::vec3 blade = rotation * glm::vec3(1.f, 0.f, 0.f);
-        const double z = std::clamp(static_cast<double>(blade.z) / static_cast<double>(glm::length(blade)), -1.0, 1.0);
+        const glm::vec3 blade = rotation * glm::vec3(0.f, 0.f, -1.f);
+        const double z = std::clamp(static_cast<double>(simFrame::height(blade)) / static_cast<double>(glm::length(blade)), -1.0, 1.0);
         return std::asin(z) * 180.0 / std::numbers::pi;
     }
 
@@ -169,7 +170,7 @@ namespace dAttackRenderCorrectionPolicyTest
 
     glm::dvec3 offsetFromCapsule(const Snapshot& snapshot, uint8_t declarationIndex)
     {
-        return glm::dvec3(bodyOf(snapshot, declarationIndex).positionCm) - glm::dvec3(bodyOf(snapshot, kCapsule).positionCm);
+        return glm::dvec3(bodyOf(snapshot, declarationIndex).position) - glm::dvec3(bodyOf(snapshot, kCapsule).position);
     }
 
     struct Rig
@@ -200,7 +201,7 @@ namespace dAttackRenderCorrectionPolicyTest
             const glm::quat start = radialRotationFromIntegrate(staticData.m_attackSimulationStaticData, 0u,
                 InvalidAttackSequenceId);
             const float angle = swingSequence().getAngle(static_cast<float>(swingStep) * kDt) - swingSequence().getInitialAngle();
-            return glm::angleAxis(angle, glm::vec3(0.f, 0.f, 1.f)) * start;
+            return glm::angleAxis(angle, glm::vec3(-0.f, -1.f, 0.f)) * start;
         }
 
         glm::quat guardRotation(const glm::vec3& aim) const
@@ -304,7 +305,7 @@ TEST_CASE("DAttack.RenderCorrection.ASwingLearnedFromACorrectionDrawsTheBladeInI
 {
     using namespace dAttackRenderCorrectionPolicyTest;
     Rig rig;
-    const glm::vec3 corrected = kCapsuleStart + glm::vec3(2.f, 0.f, 0.f);
+    const glm::vec3 corrected = kCapsuleStart + glm::vec3(0.f, 0.f, -0.02f);
     const glm::quat guardForward = rig.guardRotation(kAimForward);
 
     BrawlerPoses shown;
@@ -377,21 +378,21 @@ TEST_CASE("DAttack.RenderCorrection.TheGuardFacesTheCorrectedAimFromTheFirstCorr
 TEST_CASE("DAttack.RenderCorrection.TheWeaponAndTheGuardKeepTheirOffsetFromTheSmoothedCapsule", "[DAttack]")
 {
     using namespace dAttackRenderCorrectionPolicyTest;
-    const glm::vec3 capsuleError(40.f, 0.f, 0.f);
-    const glm::vec3 ownError(40.f - kWalkCmPerSecond * kDt, 0.f, 0.f);
-    REQUIRE(ownError.x == Catch::Approx(38.333).margin(1e-3));
+    const glm::vec3 capsuleError = glm::vec3(0.f, 0.f, -0.4f);
+    const glm::vec3 ownError = glm::vec3(0.f, 0.f, -(0.4f - kWalkSpeed * kDt));
+    REQUIRE(simFrame::forwardRight(ownError).x == Catch::Approx(0.38333).margin(1e-5));
 
     const auto runOnce = [&](bool smoothEveryBody) {
         Rig rig;
         const glm::quat idle = rig.idleRadialRotation();
         const glm::quat guardForward = rig.guardRotation(kAimForward);
         const auto capsuleAt = [&](int tickIndex) {
-            return kCapsuleStart + glm::vec3(kWalkCmPerSecond * kDt * static_cast<float>(tickIndex), 0.f, 0.f);
+            return kCapsuleStart + glm::vec3(0.f, 0.f, -(kWalkSpeed * kDt * static_cast<float>(tickIndex)));
         };
         const auto posesAt = [&](int tickIndex) {
             BrawlerPoses poses;
             poses.capsule = capsuleAt(tickIndex);
-            poses.capsuleVelocity = glm::vec3(kWalkCmPerSecond, 0.f, 0.f);
+            poses.capsuleVelocity = glm::vec3(0.f, 0.f, -kWalkSpeed);
             poses.radial = Pose{ capsuleAt(tickIndex - 1) + kAttachment, idle };
             poses.guard = Pose{ capsuleAt(tickIndex - 1) + kAttachment, guardForward };
             return poses;
@@ -410,7 +411,7 @@ TEST_CASE("DAttack.RenderCorrection.TheWeaponAndTheGuardKeepTheirOffsetFromTheSm
     checkBodyFlags(policy.front().supplied);
     CHECK(policy.front().summary.policySnaps == 2u);
     CHECK(policy.front().summary.smoothedBodies == 1u);
-    CHECK(policy.front().summary.maxPolicySnapCm == Catch::Approx(ownError.x).margin(1e-3));
+    CHECK(policy.front().summary.maxPolicySnap == Catch::Approx(simFrame::forwardRight(ownError).x).margin(1e-5));
     double worstWeapon = 0.0;
     double worstGuard = 0.0;
     double largestCapsuleOffset = 0.0;
@@ -419,26 +420,26 @@ TEST_CASE("DAttack.RenderCorrection.TheWeaponAndTheGuardKeepTheirOffsetFromTheSm
         const Frame& frame = policy[frameIndex];
         const double weapon = glm::length(offsetFromCapsule(frame.rendered, kRadial) - offsetFromCapsule(frame.supplied, kRadial));
         const double guard = glm::length(offsetFromCapsule(frame.rendered, kGuard) - offsetFromCapsule(frame.supplied, kGuard));
-        const double capsuleOffset = glm::length(glm::dvec3(bodyOf(frame.rendered, kCapsule).positionCm)
-            - glm::dvec3(bodyOf(frame.supplied, kCapsule).positionCm));
+        const double capsuleOffset = glm::length(glm::dvec3(bodyOf(frame.rendered, kCapsule).position)
+            - glm::dvec3(bodyOf(frame.supplied, kCapsule).position));
         worstWeapon = std::max(worstWeapon, weapon);
         worstGuard = std::max(worstGuard, guard);
         largestCapsuleOffset = std::max(largestCapsuleOffset, capsuleOffset);
         INFO("frame " << frameIndex + 1 << " capsule drawn " << capsuleOffset << " cm off its pose; weapon offset error "
                       << weapon << " cm, guard offset error " << guard << " cm");
-        CHECK(weapon <= 1e-3);
-        CHECK(guard <= 1e-3);
+        CHECK(weapon <= 1e-5);
+        CHECK(guard <= 1e-5);
 
         const RenderBody& capsule = bodyOf(frame.rendered, kCapsule);
         const RenderBody& reference = bodyOf(smoothed[frameIndex].rendered, kCapsule);
-        CHECK(std::memcmp(&capsule.positionCm, &reference.positionCm, sizeof(capsule.positionCm)) == 0);
+        CHECK(std::memcmp(&capsule.position, &reference.position, sizeof(capsule.position)) == 0);
         CHECK(std::memcmp(&capsule.rotation, &reference.rotation, sizeof(capsule.rotation)) == 0);
     }
     INFO("worst weapon " << worstWeapon << " cm, worst guard " << worstGuard << " cm, largest capsule offset "
                          << largestCapsuleOffset << " cm");
-    CHECK(largestCapsuleOffset > 30.0);
-    CHECK(worstWeapon <= 1e-3);
-    CHECK(worstGuard <= 1e-3);
+    CHECK(largestCapsuleOffset > 0.3);
+    CHECK(worstWeapon <= 1e-5);
+    CHECK(worstGuard <= 1e-5);
 }
 
 #endif

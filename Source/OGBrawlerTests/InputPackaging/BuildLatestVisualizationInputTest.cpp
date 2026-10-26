@@ -27,9 +27,9 @@
 TEST_CASE("Visualization input carries the live continuous fields", "[InputPackaging][VisualizationInput]")
 {
 	MockInputSource src;
-	src.aimDirection       = glm::vec3(0.6f, -0.8f, 0.f);
+	src.aimDirection       = glm::vec3(-0.8f, 0.f, -0.6f);
 	src.moveStick          = glm::vec2(0.25f, -0.75f);
-	src.moveDirectionWorld = glm::vec3(-0.5f, 0.5f, 0.f);
+	src.moveDirectionWorld = glm::vec3(0.5f, 0.f, 0.5f);
 
 	const simulatableBrawler::PlayerInput viz =
 		simulatableBrawler::makeVisualizationPlayerInput(
@@ -45,9 +45,9 @@ TEST_CASE("Visualization input carries the live continuous fields", "[InputPacka
 TEST_CASE("Visualization input leaves every discrete field neutral", "[InputPackaging][VisualizationInput]")
 {
 	MockInputSource src;
-	src.aimDirection       = glm::vec3(1.f, 0.f, 0.f);
+	src.aimDirection       = glm::vec3(0.f, 0.f, -1.f);
 	src.moveStick          = glm::vec2(1.f, 1.f);
-	src.moveDirectionWorld = glm::vec3(1.f, 0.f, 0.f);
+	src.moveDirectionWorld = glm::vec3(0.f, 0.f, -1.f);
 
 	// The mock also holds discrete state, and it is deliberately set to the
 	// "everything pressed" extreme — the visualization packer has no way to read
@@ -74,18 +74,18 @@ TEST_CASE("Continuous read reflects a changed source on every call", "[InputPack
 	// source at different moments must reflect the source's current value, with no
 	// caching or tick quantization in between.
 	MockInputSource src;
-	src.aimDirection = glm::vec3(0.f, 1.f, 0.f);
+	src.aimDirection = glm::vec3(1.f, 0.f, -0.f);
 
 	const simulatableBrawler::ContinuousInputFields first =
 		simulatableBrawler::readContinuousInputFields(src);
 
-	src.aimDirection = glm::vec3(0.f, -1.f, 0.f);
+	src.aimDirection = glm::vec3(-1.f, 0.f, -0.f);
 
 	const simulatableBrawler::ContinuousInputFields second =
 		simulatableBrawler::readContinuousInputFields(src);
 
-	REQUIRE(first.aimDirection  == glm::vec3(0.f, 1.f, 0.f));
-	REQUIRE(second.aimDirection == glm::vec3(0.f, -1.f, 0.f));
+	REQUIRE(first.aimDirection  == glm::vec3(1.f, 0.f, -0.f));
+	REQUIRE(second.aimDirection == glm::vec3(-1.f, 0.f, -0.f));
 	REQUIRE(src.readCount == 2);
 }
 

@@ -9,6 +9,7 @@
 #include "OGBrawler/DAttackDirectionClassifier.h"
 #include "OGBrawler/InputSequence/GameMotions.h"
 #include "OGBrawler/InputSequence/InputSequence.h"
+#include "OGSimulation/SimulationFrame.h"
 #include "glm/trigonometric.hpp"
 
 #include <cmath>
@@ -223,7 +224,7 @@ glm::vec3 cameraForwardFromDegrees(float pitchBelowHorizonDeg, float yawDeg)
 {
 	const float pitch = glm::radians(pitchBelowHorizonDeg);
 	const float yaw = glm::radians(yawDeg);
-	return { std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), -std::sin(pitch) };
+	return glm::vec3(std::cos(pitch) * std::sin(yaw), -std::sin(pitch), -(std::cos(pitch) * std::cos(yaw)));
 }
 
 TEST_CASE("StickRouting: cameraLookAim in AimRelative with BlockLook held is the flattened unit camera forward",
@@ -239,10 +240,10 @@ TEST_CASE("StickRouting: cameraLookAim in AimRelative with BlockLook held is the
 		const glm::vec3 forward = row.scale * cameraForwardFromDegrees(row.pitchDeg, row.yawDeg);
 		const std::optional<glm::vec3> aim = cameraLookAim(MovementScheme::AimRelative, true, forward);
 		REQUIRE(aim.has_value());
-		CHECK(aim->z == 0.f);
+		CHECK(simFrame::height(*aim) == 0.f);
 		CHECK(glm::length(*aim) == Catch::Approx(1.f).margin(1e-6));
-		CHECK(aim->x == Catch::Approx(std::cos(glm::radians(row.yawDeg))).margin(1e-5));
-		CHECK(aim->y == Catch::Approx(std::sin(glm::radians(row.yawDeg))).margin(1e-5));
+		CHECK(simFrame::forwardRight(*aim).x == Catch::Approx(std::cos(glm::radians(row.yawDeg))).margin(1e-5));
+		CHECK(simFrame::forwardRight(*aim).y == Catch::Approx(std::sin(glm::radians(row.yawDeg))).margin(1e-5));
 	}
 }
 
@@ -271,16 +272,16 @@ TEST_CASE("StickRouting: cameraLookAim aims at the orbit camera's steepest pitch
 	using dInput::stickRouting::kMinCameraLookAimHorizontalLength;
 
 	const glm::vec3 steepest = cameraForwardFromDegrees(dAttackCameraBehaviour::kHardPitchMaxDeg, 25.f);
-	CHECK(glm::length(glm::vec2(steepest.x, steepest.y)) > 10.f * kMinCameraLookAimHorizontalLength);
+	CHECK(glm::length(simFrame::forwardRight(steepest)) > 10.f * kMinCameraLookAimHorizontalLength);
 	const std::optional<glm::vec3> aim = cameraLookAim(MovementScheme::AimRelative, true, steepest);
 	REQUIRE(aim.has_value());
 	CHECK(glm::length(*aim) == Catch::Approx(1.f).margin(1e-6));
-	CHECK(aim->x == Catch::Approx(std::cos(glm::radians(25.f))).margin(1e-5));
+	CHECK(simFrame::forwardRight(*aim).x == Catch::Approx(std::cos(glm::radians(25.f))).margin(1e-5));
 
-	CHECK_FALSE(cameraLookAim(MovementScheme::AimRelative, true, glm::vec3(0.f, 0.f, -1.f)).has_value());
+	CHECK_FALSE(cameraLookAim(MovementScheme::AimRelative, true, glm::vec3(0.f, -1.f, -0.f)).has_value());
 	CHECK_FALSE(cameraLookAim(MovementScheme::AimRelative, true, glm::vec3(0.f, 0.f, 0.f)).has_value());
 	CHECK_FALSE(cameraLookAim(MovementScheme::AimRelative, true,
-		glm::vec3(0.5f * kMinCameraLookAimHorizontalLength, 0.f, -1.f)).has_value());
+		glm::vec3(0.f, -1.f, -(0.5f * kMinCameraLookAimHorizontalLength))).has_value());
 }
 
 TEST_CASE("StickRouting: with the camera-look aim, the projectile's back step is a move opposite to the camera forward",
@@ -294,11 +295,46 @@ TEST_CASE("StickRouting: with the camera-look aim, the projectile's back step is
 
 	const glm::vec3 oppositeCameraForward = -*aim;
 	const glm::vec3 alongCameraForward = *aim;
-	const glm::vec3 screenRight(aim->y, -aim->x, 0.f);
+	const glm::vec3 screenRight = simFrame::fromForwardRight(
+		glm::vec2(simFrame::forwardRight(*aim).y, -simFrame::forwardRight(*aim).x), 0.f);
 	const float epsilon = dAttackDirection::kMoveMagnitudeEpsilon;
 	CHECK(inputSequence::stickMatchesStep(oppositeCameraForward, *aim, kBackShortcutStep, epsilon));
 	CHECK_FALSE(inputSequence::stickMatchesStep(alongCameraForward, *aim, kBackShortcutStep, epsilon));
 	CHECK_FALSE(inputSequence::stickMatchesStep(screenRight, *aim, kBackShortcutStep, epsilon));
+}
+
+const glm::vec2 kWStick(0.f, -1.f);
+const glm::vec2 kDStick(1.f, 0.f);
+
+void checkCameraRelative(float yawDeg, const glm::vec2& stick, const glm::vec3& expected)
+{
+	const glm::vec3 camForward = cameraForwardFromDegrees(50.f, yawDeg);
+	const glm::vec3 moved =
+		dInput::stickRouting::cameraRelativeDirection(camForward, simFrame::fromForwardRight(stick, 0.f));
+	CAPTURE(yawDeg, stick.x, stick.y, moved.x, moved.y, moved.z, expected.x, expected.y, expected.z);
+	CHECK(moved.x == Catch::Approx(expected.x).margin(1e-5));
+	CHECK(moved.y == Catch::Approx(expected.y).margin(1e-5));
+	CHECK(moved.z == Catch::Approx(expected.z).margin(1e-5));
+}
+
+TEST_CASE("StickRouting: cameraRelativeDirection moves W along the camera's flattened forward, at four camera yaws",
+	"[SimulatableBrawler][StickRouting][CameraRelativeDirection]")
+{
+	for (const float yawDeg : { 0.f, 45.f, 180.f, -120.f })
+	{
+		const float yaw = glm::radians(yawDeg);
+		checkCameraRelative(yawDeg, kWStick, glm::vec3(std::sin(yaw), 0.f, -std::cos(yaw)));
+	}
+}
+
+TEST_CASE("StickRouting: cameraRelativeDirection moves D along the camera's right, at four camera yaws",
+	"[SimulatableBrawler][StickRouting][CameraRelativeDirection]")
+{
+	for (const float yawDeg : { 0.f, 45.f, 180.f, -120.f })
+	{
+		const float yaw = glm::radians(yawDeg);
+		checkCameraRelative(yawDeg, kDStick, glm::vec3(std::cos(yaw), 0.f, std::sin(yaw)));
+	}
 }
 
 constexpr float kAimDeadzone = 0.2f;

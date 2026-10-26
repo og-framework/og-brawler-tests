@@ -58,6 +58,7 @@
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <algorithm>
 #include <array>
@@ -124,7 +125,7 @@ struct FRoutingRig
         auto& ic = brawler(id).editAllState().editState()
             .edit<dAttackRadialSimulation::InitialConditions>();
         ic.initialAimAngle = angleRadians;
-        ic.initialAimRotationAxis = glm::vec3(0.f, 0.f, axisZ);
+        ic.initialAimRotationAxis = glm::vec3(-0.f, -axisZ, 0.f);
     }
 
     // Raise a radial DAMAGING hit from `attackerId` onto `targetId`, the way
@@ -199,7 +200,7 @@ struct FRoutingRig
         auto& slot = brawler(shooterId).editAllState().editState()
             .edit<brawlerProjectileSimulation::State>().slots[1];
         slot.spawnTick = 1u;
-        slot.spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+        slot.spawnDir  = glm::vec3(0.f, 0.f, -1.f);
         brawler(shooterId).editAllState().editDerivedState()
             .edit<brawlerProjectileSimulation::DerivedState>().detectedThisTick[1].outcome =
                 brawlerProjectileSimulation::SlotOutcome::BlockedByGuard;
@@ -278,12 +279,12 @@ constexpr std::uint32_t kProjectileSlots  =
 // The capsule half height the production movement StaticData is authored against. Seating the
 // target at halfHeight + rideHeight is the steady state: the vertical channel is then
 // identically zero and the whole of the target's velocity is the knockback.
-constexpr float kCapsuleHalfHeight = 96.f;
+constexpr float kCapsuleHalfHeight = 0.96f;
 
 // The attacker's weapon sits at the origin for the whole run (see the mock), so a target 150 cm
 // out along +X is inside the production annulus (inner 90, outer 300) and exactly on the swing
 // plane. 0.30 s into the swing is 18 ticks; the design's arithmetic is quoted against it.
-constexpr float        kTargetDistance = 150.f;
+constexpr float        kTargetDistance = 1.5f;
 constexpr std::uint32_t kHitTick       = 18u;
 
 // ⛔⛔ [movement-sim task 86] WHY THE RIG SCHEDULES THE OVERLAP AT ALL, and it is a real
@@ -361,7 +362,7 @@ struct SwingQueryAdapter
                           QueryVolumeId{ kProjectileVolume + slot }) == volumeIds.end())
                 continue;
             const glm::vec3& p = projectilePos[slot];
-            return (glm::length(glm::vec2(p.x, p.y) - targetXY) <= projectileContactRadius)
+            return (glm::length(simFrame::forwardRight(p) - targetXY) <= projectileContactRadius)
                  ? projectileReport : SpatialQueryReport{};
         }
         return SpatialQueryReport{};
@@ -494,16 +495,16 @@ struct FEndToEndRig
                                 + staticData.m_movementStaticData.snapDistance;
         query.ground.blocked     = true;
         query.ground.fraction    = staticData.m_movementStaticData.rideHeight / probeLength;
-        query.ground.normal      = glm::vec3(0.f, 0.f, 1.f);
+        query.ground.normal      = glm::vec3(0.f, 1.f, -0.f);
         query.ground.impactPoint =
-            glm::vec3(0.f, 0.f, -staticData.m_movementStaticData.rideHeight);
+            simFrame::withHeight(glm::vec3(0.f), -staticData.m_movementStaticData.rideHeight);
 
         const float seatZ = kCapsuleHalfHeight + staticData.m_movementStaticData.rideHeight;
-        setPosition(0u, glm::vec3(0.f, 0.f, seatZ));
-        setPosition(1u, glm::vec3(kTargetDistance, 0.f, seatZ));
+        setPosition(0u, simFrame::withHeight(glm::vec3(0.f), seatZ));
+        setPosition(1u, glm::vec3(0.f, seatZ, -kTargetDistance));
 
         SpatialQueryHit hit{};
-        hit.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+        hit.objectPosition   = glm::vec3(0.f, 0.f, -kTargetDistance);
         hit.bodyId           = BodyId{ kTargetRoot };
         hit.rootBodyId       = BodyId{ kTargetRoot };
         hit.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -532,7 +533,7 @@ struct FEndToEndRig
         query.projectileContactRadius = staticData.m_projectileStaticData.colliderRadius
                                       + staticData.m_movementStaticData.capsuleRadius;
         SpatialQueryHit projectileHit{};
-        projectileHit.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+        projectileHit.objectPosition   = glm::vec3(0.f, 0.f, -kTargetDistance);
         projectileHit.bodyId           = BodyId{ kTargetRoot };
         projectileHit.rootBodyId       = BodyId{ kTargetRoot };
         projectileHit.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -547,9 +548,9 @@ struct FEndToEndRig
     void setTargetDistance(float distance)
     {
         const float seatZ = kCapsuleHalfHeight + staticData.m_movementStaticData.rideHeight;
-        setPosition(1u, glm::vec3(distance, 0.f, seatZ));
-        query.radialReport.hits[0].objectPosition     = glm::vec3(distance, 0.f, 0.f);
-        query.projectileReport.hits[0].objectPosition = glm::vec3(distance, 0.f, 0.f);
+        setPosition(1u, glm::vec3(0.f, seatZ, -distance));
+        query.radialReport.hits[0].objectPosition     = glm::vec3(0.f, 0.f, -distance);
+        query.projectileReport.hits[0].objectPosition = glm::vec3(0.f, 0.f, -distance);
     }
 
     StorageView<SimulatableBrawler> view()
@@ -578,7 +579,7 @@ struct FEndToEndRig
 
     void run(int tickCount)
     {
-        const glm::vec3 aim(1.f, 0.f, 0.f);
+        const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
         // [movement-sim task 86] The swing the overlap schedule hangs off. -1 == no swing is
         // active, so the weapon reaches nothing. For every case that starts exactly one swing on
         // tick 0 this evaluates to `tick >= 18` on every tick -- what this rig did before.
@@ -595,7 +596,7 @@ struct FEndToEndRig
             // task 17).
             const glm::vec3 targetPos = brawler(1u).getAllState().getState()
                 .get<brawlerMovementSimulation::State>().bodyState.position;
-            query.targetXY = glm::vec2(targetPos.x, targetPos.y);
+            query.targetXY = simFrame::forwardRight(targetPos);
 
             const SimulationTimeStep pre(reducingTick, false, false, false, kDt);
             detection.preIntegrate(pre, view(), staticData);
@@ -631,7 +632,7 @@ struct FEndToEndRig
                 && ((t == 0 && (hadoukenOnTick < 0 || meleeOnTickZeroWithHadouken)) || followUp);
             const glm::vec2 stick = (t == 0) ? attackerStick
                                   : (followUp ? followUpStick : glm::vec2(0.f));
-            const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
+            const glm::vec3 moveWorld = simFrame::fromForwardRight(stick, 0.f);
 
             const simulatableBrawler::PlayerInput attackerInput = brawlerTestInputs::make({
                 .aimDirection       = aim,
@@ -778,7 +779,7 @@ TEST_CASE("HitRouting.PerAttackReactionTableIsAuthoritative",
     {
         rig.clearRadialHits(0u);
         rig.setPosition(0u, glm::vec3(0.f, 0.f, 0.f));
-        rig.setPosition(1u, glm::vec3(100.f, 0.f, 0.f));
+        rig.setPosition(1u, glm::vec3(0.f, 0.f, -1.f));
         rig.setSequence(0u, row.sequenceId);
         rig.raiseRadialHit(0u, 1u);
         rig.route(7u);
@@ -795,7 +796,7 @@ TEST_CASE("HitRouting.PerAttackReactionTableIsAuthoritative",
 
         if (row.kind == HitReactionKind::Knockback)
         {
-            REQUIRE(slice.knockbackSpeed == Catch::Approx(spec.knockbackSpeed).margin(1e-4f));
+            REQUIRE(slice.knockbackSpeed == Catch::Approx(spec.knockbackSpeed).margin(1e-6f));
             // ⭐⭐ THE DWELL IS DERIVED HERE, FROM THE SAME STATIC DATA. This is the row the
             // whole ownership argument exists for: `knockbackSpeed / launchDecel`, floored by the
             // authored lockout, computed by the actor that sees both numbers.
@@ -865,8 +866,8 @@ TEST_CASE("HitRouting.KnockbackDirectionFromPositionsWithAimFallback",
     //    must not appear anywhere in the answer: the knockback is XY-only by ruling.
     {
         FRoutingRig rig;
-        rig.setPosition(0u, glm::vec3(10.f, 20.f, 0.f));
-        rig.setPosition(1u, glm::vec3(40.f, 60.f, 500.f));
+        rig.setPosition(0u, glm::vec3(0.2f, 0.f, -0.1f));
+        rig.setPosition(1u, glm::vec3(0.6f, 5.f, -0.4f));
         rig.setSequence(0u, dAttackDirection::kRightSequenceId);
         rig.raiseRadialHit(0u, 1u);
         rig.route(3u);
@@ -886,8 +887,8 @@ TEST_CASE("HitRouting.KnockbackDirectionFromPositionsWithAimFallback",
     for (const float axisZ : { 1.f, -1.f })
     {
         FRoutingRig rig;
-        rig.setPosition(0u, glm::vec3(5.f, 5.f, 0.f));
-        rig.setPosition(1u, glm::vec3(5.f, 5.f, 90.f));   // identical XY, different height
+        rig.setPosition(0u, glm::vec3(0.05f, 0.f, -0.05f));
+        rig.setPosition(1u, glm::vec3(0.05f, 0.9f, -0.05f));   // identical XY, different height
         rig.setSequence(0u, dAttackDirection::kRightSequenceId);
         rig.setAim(0u, glm::radians(30.f), axisZ);
         rig.raiseRadialHit(0u, 1u);
@@ -941,8 +942,8 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
         FRoutingRig rig;
         REQUIRE(rig.staticData.m_projectileHitReaction.kind == HitReactionKind::Stun);
         rig.setPosition(0u, glm::vec3(0.f));
-        rig.setPosition(1u, glm::vec3(300.f, 0.f, 0.f));
-        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 1.f, 0.f));
+        rig.setPosition(1u, glm::vec3(0.f, 0.f, -3.f));
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, -0.f));
         rig.route(13u);
 
         const brawlerInboundHit::DerivedState& slice = rig.inbound(1u);
@@ -990,22 +991,22 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
     {
         FRoutingRig rig;
         rig.staticData.m_projectileHitReaction =
-            HitReactionSpec{ HitReactionKind::Knockback, 1200.f, 0.f };
+            HitReactionSpec{ HitReactionKind::Knockback, 12.f, 0.f };
         rig.setPosition(0u, glm::vec3(0.f));
-        rig.setPosition(1u, glm::vec3(300.f, 0.f, 0.f));   // +X apart...
-        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 1.f, 0.f));  // ...but fired along +Y
+        rig.setPosition(1u, glm::vec3(0.f, 0.f, -3.f));   // +X apart...
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, -0.f));  // ...but fired along +Y
         rig.route(13u);
 
         const brawlerInboundHit::DerivedState& slice = rig.inbound(1u);
         INFO("flipped spec: dir=(" << slice.hitDirectionXY.x << ", " << slice.hitDirectionXY.y
              << ") dwell=" << slice.flinchDuration);
         REQUIRE(slice.reactionKind == HitReactionKind::Knockback);
-        REQUIRE(slice.knockbackSpeed == Catch::Approx(1200.f).margin(1e-4f));
+        REQUIRE(slice.knockbackSpeed == Catch::Approx(12.f).margin(1e-6f));
         REQUIRE(slice.hitDirectionXY.x == Catch::Approx(0.f).margin(1e-5f));
         REQUIRE(slice.hitDirectionXY.y == Catch::Approx(1.f).margin(1e-5f));
         // ...and the dwell is derived from the flipped speed, not from the shipped 2000.
         REQUIRE(slice.flinchDuration
-                == Catch::Approx(1200.f / rig.launchDecel()).margin(1e-6f));
+                == Catch::Approx(12.f / rig.launchDecel()).margin(1e-6f));
     }
 }
 
@@ -1038,7 +1039,7 @@ TEST_CASE("HitRouting.ProjectileOutcomeIsRoutedWhateverTheStepKind",
     auto routeOnce = [](const SimulationTimeStep& step)
     {
         FRoutingRig rig;
-        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 0.f, -1.f));
         rig.raiseProjectileBlock(0u);
         rig.routeStep(step);
         const brawlerInboundHit::DerivedState& shooter = rig.inbound(0u);
@@ -1163,9 +1164,9 @@ TEST_CASE("HitRouting.KnockbackTravelThroughRoutingIsTheClosedForm",
     REQUIRE(spec.kind == HitReactionKind::Knockback);
     INFO("knockbackSpeed " << rig.knockbackSpeed() << ", launchDecel " << rig.launchDecel()
          << " -> closed form " << (rig.knockbackSpeed() * rig.knockbackSpeed()
-                                   / (2.f * rig.launchDecel())) << " cm");
+                                   / (2.f * rig.launchDecel())) << " m");
     REQUIRE(rig.knockbackSpeed() * rig.knockbackSpeed() / (2.f * rig.launchDecel())
-            == Catch::Approx(500.f).margin(1e-3f));
+            == Catch::Approx(5.f).margin(1.0000001e-5f));
 
     // --- WHAT HAPPENED, read off the trace. ---
     const glm::vec3 start = rig.samples[kHitTick].targetPosition;
@@ -1182,10 +1183,10 @@ TEST_CASE("HitRouting.KnockbackTravelThroughRoutingIsTheClosedForm",
             && s.targetMachine != DAttackState::HitFlinch)
             leftFlinchAt = int(s.tick);
     }
-    const glm::vec2 displacement(end.x - start.x, end.y - start.y);
+    const glm::vec2 displacement = simFrame::forwardRight(end) - simFrame::forwardRight(start);
     const float travel = glm::length(displacement);
 
-    INFO("travel " << travel << " cm (" << (travel / 100.f) << " m); direction ("
+    INFO("travel " << travel << " m; direction ("
          << (travel > 0.f ? displacement.x / travel : 0.f) << ", "
          << (travel > 0.f ? displacement.y / travel : 0.f) << ")");
     INFO("HitFlinch entered at tick " << enteredFlinchAt << " (" << (enteredFlinchAt * kDt)
@@ -1211,7 +1212,7 @@ TEST_CASE("HitRouting.KnockbackTravelThroughRoutingIsTheClosedForm",
     //    than tuned away: whether the lockout should outlast the slide is the user's knob.
     //    ⛔ Task 27's rig could not see this at all -- it holds HitFlinch by hand for as long as
     //    the case ticks, so the hand-off never happens there.
-    REQUIRE(travel == Catch::Approx(rig.closedFormTravel()).margin(1.f));
+    REQUIRE(travel == Catch::Approx(rig.closedFormTravel()).margin(0.01f));
 
     // 2. THE LOCKOUT IS 0.5 s FROM THE HIT, not 0.5 s from the end of the swing. The dwell is
     //    the resolver's own max(lockoutDuration, knockbackSpeed / launchDecel), read from the
@@ -1295,8 +1296,8 @@ TEST_CASE("HitRouting.StunHitFiresOnce", "[SimulatableBrawler][HitRouting]")
     for (const TickSample& s : rig.samples)
     {
         INFO("tick " << s.tick);
-        REQUIRE(glm::length(glm::vec2(s.targetVelocity.x, s.targetVelocity.y))
-                == Catch::Approx(0.f).margin(1e-4f));
+        REQUIRE(glm::length(simFrame::forwardRight(s.targetVelocity))
+                == Catch::Approx(0.f).margin(1e-6f));
     }
 
     // =======================================================================
@@ -1461,7 +1462,7 @@ TEST_CASE("HitRouting.ProjectilePointBlankHitStunsOnce", "[SimulatableBrawler][H
     // The shot alone. Nothing follows it up, so the flinch it ends on is the PURE dwell of the
     // projectile's own stun.
     FEndToEndRig shotRig;
-    const float pointBlank = shotRig.staticData.m_attackCircle.getInnerRadius() + 1.f;
+    const float pointBlank = shotRig.staticData.m_attackCircle.getInnerRadius() + 0.01f;
     shotRig.setTargetDistance(pointBlank);
     shotRig.hadoukenOnTick = kFireTick;
     shotRig.run(120);
@@ -1483,8 +1484,8 @@ TEST_CASE("HitRouting.ProjectilePointBlankHitStunsOnce", "[SimulatableBrawler][H
     INFO("shot: fired on tick " << kFireTick << ", spawnTick "
          << shotRig.samples[std::size_t(kFireTick)].projectileSpawnTick
          << ", spawn x " << shotRig.samples[std::size_t(kFireTick)].projectilePos.x
-         << " cm, target at " << pointBlank << " cm, contact radius "
-         << shotRig.query.projectileContactRadius << " cm");
+         << " m, target at " << pointBlank << " m, contact radius "
+         << shotRig.query.projectileContactRadius << " m");
     INFO("shot: routed hit on tick " << projectileHitAt << "; HitFlinch " << enteredFlinchAt
          << " -> " << leftFlinchAt << "; routing fired on " << shotRig.hitTickCount()
          << " tick(s)");
@@ -1509,8 +1510,8 @@ TEST_CASE("HitRouting.ProjectilePointBlankHitStunsOnce", "[SimulatableBrawler][H
     for (const TickSample& s : shotRig.samples)
     {
         INFO("tick " << s.tick);
-        REQUIRE(glm::length(glm::vec2(s.targetVelocity.x, s.targetVelocity.y))
-                == Catch::Approx(0.f).margin(1e-4f));
+        REQUIRE(glm::length(simFrame::forwardRight(s.targetVelocity))
+                == Catch::Approx(0.f).margin(1e-6f));
     }
 
     // THE DWELL, measured from the hit tick, against the authored spec. The absolute 0.65 pin is
@@ -1574,9 +1575,9 @@ TEST_CASE("HitRouting.KnockbackDirectionIsTheSwingTangentWithFallback",
     {
         FRoutingRig rig;
         rig.setPosition(0u, glm::vec3(0.f, 0.f, 0.f));
-        rig.setPosition(1u, glm::vec3(300.f, 400.f, 0.f));
+        rig.setPosition(1u, glm::vec3(4.f, 0.f, -3.f));
         rig.setSequence(0u, dAttackDirection::kRightSequenceId);
-        rig.raiseRadialHit(0u, 1u, /*swingTangent*/ glm::vec3(0.f, 0.f, 1.f));
+        rig.raiseRadialHit(0u, 1u, /*swingTangent*/ glm::vec3(0.f, 1.f, -0.f));
         rig.route(9u);
 
         const glm::vec2 actual = rig.inbound(1u).hitDirectionXY;
@@ -1618,7 +1619,7 @@ TEST_CASE("HitRouting.ProjectileOnFlinchLaunchesElseStuns", "[SimulatableBrawler
              << " speed=" << onFlinch.knockbackSpeed << " lockout=" << onFlinch.lockoutDuration);
         REQUIRE(onFlinch.kind == HitReactionKind::Knockback);
         // Retyped 2000.f -> 1789.f for the user's d20fa81 (og-netcode-v2-field-defects task 28).
-        REQUIRE(onFlinch.knockbackSpeed == Catch::Approx(1789.f).margin(1e-4f));
+        REQUIRE(onFlinch.knockbackSpeed == Catch::Approx(17.89f).margin(1e-6f));
         REQUIRE(onFlinch.lockoutDuration == Catch::Approx(0.f).margin(1e-6f));
     }
 
@@ -1644,9 +1645,9 @@ TEST_CASE("HitRouting.ProjectileOnFlinchLaunchesElseStuns", "[SimulatableBrawler
     {
         FRoutingRig rig;
         rig.setPosition(0u, glm::vec3(0.f));
-        rig.setPosition(1u, glm::vec3(300.f, 0.f, 0.f));
+        rig.setPosition(1u, glm::vec3(0.f, 0.f, -3.f));
         rig.setMachineState(1u, row.state, row.priorReaction);
-        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 1.f, 0.f));
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, -0.f));
         rig.route(13u);
 
         const brawlerInboundHit::DerivedState& slice = rig.inbound(1u);
@@ -1659,7 +1660,7 @@ TEST_CASE("HitRouting.ProjectileOnFlinchLaunchesElseStuns", "[SimulatableBrawler
         {
             // Relational: block 1 is the one absolute pin on the speed.
             const HitReactionSpec& onFlinch = rig.staticData.m_projectileHitOnFlinchReaction;
-            REQUIRE(slice.knockbackSpeed == Catch::Approx(onFlinch.knockbackSpeed).margin(1e-4f));
+            REQUIRE(slice.knockbackSpeed == Catch::Approx(onFlinch.knockbackSpeed).margin(1e-6f));
             REQUIRE(slice.hitDirectionXY.x == Catch::Approx(0.f).margin(1e-5f));
             REQUIRE(slice.hitDirectionXY.y == Catch::Approx(1.f).margin(1e-5f));
             // The dwell resolves as the melee knockback's does: max(lockout 0, speed / launchDecel).
@@ -1685,7 +1686,7 @@ TEST_CASE("HitRouting.ProjectileOnFlinchLaunchesElseStuns", "[SimulatableBrawler
         FRoutingRig rig;
         rig.setMachineState(0u, DAttackState::HitFlinch, HitReactionKind::Knockback);
         rig.setMachineState(1u, DAttackState::Idle, HitReactionKind::Stun);
-        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 0.f, -1.f));
         rig.route(13u);
         REQUIRE(rig.inbound(1u).reactionKind == HitReactionKind::Stun);
     }
@@ -1737,11 +1738,11 @@ TEST_CASE("HitRouting.ProjectileOnFlinchSameTickStaysAStun", "[SimulatableBrawle
     {
         FRoutingRig rig;
         rig.setPosition(0u, glm::vec3(0.f));
-        rig.setPosition(1u, glm::vec3(100.f, 0.f, 0.f));
+        rig.setPosition(1u, glm::vec3(0.f, 0.f, -1.f));
         rig.setMachineState(1u, DAttackState::Idle, HitReactionKind::Stun);
         rig.setSequence(0u, dAttackDirection::kRightSequenceId);
         rig.raiseRadialHit(0u, 1u);
-        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 0.f, -1.f));
         rig.route(19u);
 
         const brawlerInboundHit::DerivedState& slice = rig.inbound(1u);
@@ -1758,14 +1759,14 @@ TEST_CASE("HitRouting.ProjectileOnFlinchSameTickStaysAStun", "[SimulatableBrawle
     {
         FRoutingRig rig;
         rig.setPosition(0u, glm::vec3(0.f));
-        rig.setPosition(1u, glm::vec3(100.f, 0.f, 0.f));
+        rig.setPosition(1u, glm::vec3(0.f, 0.f, -1.f));
         rig.setMachineState(1u, DAttackState::HitFlinch, HitReactionKind::Knockback);
-        rig.raiseProjectileHit(0u, 1u, glm::vec3(1.f, 0.f, 0.f));
+        rig.raiseProjectileHit(0u, 1u, glm::vec3(0.f, 0.f, -1.f));
         rig.route(20u);
         REQUIRE(rig.inbound(1u).reactionKind == HitReactionKind::Knockback);
         REQUIRE(rig.inbound(1u).knockbackSpeed
                 == Catch::Approx(rig.staticData.m_projectileHitOnFlinchReaction.knockbackSpeed)
-                       .margin(1e-4f));
+                       .margin(1e-6f));
     }
 }
 
@@ -1837,7 +1838,7 @@ TEST_CASE("HitRouting.ProjectileOnStunnedTargetLaunchesEndToEnd", "[SimulatableB
     // (+X, away from the shooter).
     const float onFlinchSpeed = rig.staticData.m_projectileHitOnFlinchReaction.knockbackSpeed;
     REQUIRE(shot.reactionKind == HitReactionKind::Knockback);
-    REQUIRE(shot.knockbackSpeed == Catch::Approx(onFlinchSpeed).margin(1e-4f));
+    REQUIRE(shot.knockbackSpeed == Catch::Approx(onFlinchSpeed).margin(1e-6f));
     REQUIRE(shot.hitDirectionXY.x == Catch::Approx(1.f).margin(1e-5f));
     REQUIRE(shot.hitDirectionXY.y == Catch::Approx(0.f).margin(1e-5f));
 
@@ -1846,8 +1847,8 @@ TEST_CASE("HitRouting.ProjectileOnStunnedTargetLaunchesEndToEnd", "[SimulatableB
     INFO("after: velocity (" << after.targetVelocity.x << ", " << after.targetVelocity.y
          << ") machine " << int(after.targetMachine));
     REQUIRE(after.targetMachine == DAttackState::HitFlinch);
-    REQUIRE(after.targetVelocity.x == Catch::Approx(onFlinchSpeed).margin(1.f));
-    REQUIRE(after.targetVelocity.y == Catch::Approx(0.f).margin(1e-3f));
+    REQUIRE(simFrame::forwardRight(after.targetVelocity).x == Catch::Approx(onFlinchSpeed).margin(0.01f));
+    REQUIRE(simFrame::forwardRight(after.targetVelocity).y == Catch::Approx(0.f).margin(1.0000001e-5f));
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

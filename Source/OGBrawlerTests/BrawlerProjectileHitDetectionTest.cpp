@@ -57,6 +57,7 @@
 #include "OGSimulation/SpatialQueryAdapter.h"
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <algorithm>
 #include <cmath>
@@ -89,11 +90,11 @@ inline QueryVolumeId projectileVolume(unsigned int brawler, std::uint32_t slot) 
 inline BodyId        rootOf(unsigned int brawler) { return BodyId{ brawler == 0u ? kShooterRoot : kTargetRoot }; }
 
 // A guard that faces the shooter exactly when the shot travels along -blockingAim().
-inline glm::vec3 blockingAim()   { return glm::vec3(-std::cos(0.5f), -std::sin(0.5f), 0.f); }
+inline glm::vec3 blockingAim()   { return glm::vec3(-std::sin(0.5f), 0.f, std::cos(0.5f)); }
 inline glm::vec3 shotDirection() { return -blockingAim(); }
-inline glm::vec3 turnedAwayAim() { return glm::vec3(1.f, 0.f, 0.f); }
+inline glm::vec3 turnedAwayAim() { return glm::vec3(0.f, 0.f, -1.f); }
 
-inline bool isParked(const glm::mat4& m) { return m[3].z < -1000.f; }
+inline bool isParked(const glm::mat4& m) { return simFrame::height(glm::vec3(m[3])) < -10.f; }
 
 struct ProjectilePhysics
 {
@@ -143,7 +144,7 @@ struct ProjectileQuery
         if (targetContact && volume < kVolume + kSlots)
         {
             SpatialQueryHit body{};
-            body.objectPosition   = glm::vec3(0.f, 0.f, 50.f);
+            body.objectPosition   = glm::vec3(0.f, 0.5f, -0.f);
             body.bodyId           = BodyId{ kTargetRoot };
             body.rootBodyId       = BodyId{ kTargetRoot };
             body.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -225,7 +226,7 @@ struct Rig
         staticData.m_movementStaticData.drivesBody = false;
         query.physics = &phys;
         // The projectile's collider against a projectile body (PhysicsSetup::body, a 30 cm sphere).
-        query.projectileContact = staticData.m_projectileStaticData.colliderRadius + 30.f;
+        query.projectileContact = staticData.m_projectileStaticData.colliderRadius + 0.3f;
 
         storage.add<SimulatableBrawler>(0u, SimulatableBrawler(staticData));
         storage.add<SimulatableBrawler>(1u, SimulatableBrawler(staticData));
@@ -265,7 +266,7 @@ struct Rig
     void park(BodyId body)
     {
         glm::mat4 m(1.f);
-        m[3] = glm::vec4(0.f, 0.f, brawlerProjectileSimulation::kParkZ, 1.f);
+        m[3] = glm::vec4(simFrame::withHeight(glm::vec3(0.f), brawlerProjectileSimulation::kParkHeight), 1.f);
         phys.setBodyTransform(body, m);
     }
 
@@ -322,7 +323,7 @@ struct Rig
         if (t == 0u && stunTargetOnTickZero)
             seedStun();
 
-        const auto shooterInput = makeInput(glm::vec3(1.f, 0.f, 0.f), 0u);
+        const auto shooterInput = makeInput(glm::vec3(0.f, 0.f, -1.f), 0u);
         const auto targetInput  = makeInput(targetAim,
             targetHoldsGuard ? brawlerMovementSimulation::kInputFlagHoldGuard : std::uint8_t(0u));
         auto integrateShooterNow = [&]()
@@ -405,7 +406,7 @@ inline ArmResult runOrderSwapArm(Order order, std::uint32_t C)
         rig.query.targetContact = t >= C;
         rig.step(t);
         if (t == spawn)
-            rig.launch(0u, spawn, glm::vec3(-400.f, 0.f, 50.f), shotDirection());
+            rig.launch(0u, spawn, glm::vec3(0.f, 0.5f, 4.f), shotDirection());
     }
     ArmResult r;
     r.endReason   = rig.at(C + 3u).endReason[0];
@@ -514,12 +515,12 @@ TEST_CASE("HitDetection.Projectile.CancelEndsBothShotsOnTheSameTickInBothOrders"
         rig.targetHoldsGuard = false;
         rig.targetAim = turnedAwayAim();
         constexpr std::uint32_t spawn = 10u;
-        constexpr float halfGap = 200.f;
-        const float stepCm = rig.staticData.m_projectileStaticData.projectileSpeed * kDt;
+        constexpr float halfGap = 2.f;
+        const float stepLength = rig.staticData.m_projectileStaticData.projectileSpeed * kDt;
         CancelResult result;
         for (std::uint32_t t = spawn + 1u; t < spawn + 60u && result.firstContact == 0u; ++t)
         {
-            const float separation = 2.f * halfGap - stepCm * float(2u * (t - spawn) - 1u);
+            const float separation = 2.f * halfGap - stepLength * float(2u * (t - spawn) - 1u);
             if (separation <= rig.query.projectileContact)
                 result.firstContact = t;
         }
@@ -529,8 +530,8 @@ TEST_CASE("HitDetection.Projectile.CancelEndsBothShotsOnTheSameTickInBothOrders"
             rig.step(t);
             if (t == spawn)
             {
-                rig.launch(0u, spawn, glm::vec3(-halfGap, 0.f, 50.f), glm::vec3( 1.f, 0.f, 0.f));
-                rig.launch(1u, spawn, glm::vec3( halfGap, 0.f, 50.f), glm::vec3(-1.f, 0.f, 0.f));
+                rig.launch(0u, spawn, glm::vec3(0.f, 0.5f, halfGap), glm::vec3(0.f, 0.f, -1.f));
+                rig.launch(1u, spawn, glm::vec3(0.f, 0.5f, -halfGap), glm::vec3(0.f, 0.f, 1.f));
             }
         }
         result.last = rig.samples.back();
@@ -587,7 +588,7 @@ TEST_CASE("HitDetection.Projectile.AShotEndingOnThePreJumpTickIsRoutedOnceAcross
         rig.query.targetContact = t >= L;
         rig.step(t);
         if (t == L - 4u)
-            rig.launch(0u, L - 4u, glm::vec3(-400.f, 0.f, 50.f), glm::vec3(1.f, 0.f, 0.f));
+            rig.launch(0u, L - 4u, glm::vec3(0.f, 0.5f, 4.f), glm::vec3(0.f, 0.f, -1.f));
     }
     rig.query.targetContact = false;
     for (std::uint32_t t = X; t <= X + 2u; ++t)
@@ -625,7 +626,7 @@ TEST_CASE("HitDetection.Projectile.ThePassQueriesTheShotAtItsClosedFormPositionO
     {
         rig.step(t);
         if (t == S)
-            rig.launch(0u, S, glm::vec3(-400.f, 0.f, 50.f), glm::vec3(1.f, 0.f, 0.f));
+            rig.launch(0u, S, glm::vec3(0.f, 0.5f, 4.f), glm::vec3(0.f, 0.f, -1.f));
     }
     rig.step(S + 1u);
     rig.step(S + 2u);
@@ -691,7 +692,7 @@ TEST_CASE("HitDetection.Projectile.AnUnintegratedShooterRoutesItsShotOnce",
         for (std::uint32_t t = 0u; t < S - 2u; ++t)
             rig.step(t);
         // The replay's un-restored frontier state: a shot launched on S, already in contact.
-        rig.launch(0u, S, glm::vec3(-400.f, 0.f, 50.f), glm::vec3(1.f, 0.f, 0.f));
+        rig.launch(0u, S, glm::vec3(0.f, 0.5f, 4.f), glm::vec3(0.f, 0.f, -1.f));
         rig.query.targetContact = true;
         rig.step(S - 2u, /*integrateShooter*/ false, true, StepKind::Normal, /*resim*/ true);
         rig.step(S - 1u, /*integrateShooter*/ false, true, StepKind::Normal, /*resim*/ true);
@@ -717,7 +718,7 @@ TEST_CASE("HitDetection.Projectile.AnUnintegratedShooterRoutesItsShotOnce",
             rig.step(t, /*integrateShooter*/ false);   // not registered here yet
         // An earlier resim anchored at or after R restored the proxy from its correction; the
         // server's State carried a live shot spawned on S < R. `launch` writes that slot.
-        rig.launch(0u, S, glm::vec3(-400.f, 0.f, 50.f), glm::vec3(1.f, 0.f, 0.f));
+        rig.launch(0u, S, glm::vec3(0.f, 0.5f, 4.f), glm::vec3(0.f, 0.f, -1.f));
         rig.query.targetContact = true;
         rig.step(A,      /*integrateShooter*/ false, true, StepKind::Normal, /*resim*/ true);   // NoSlot
         rig.step(A + 1u, /*integrateShooter*/ false, true, StepKind::Normal, /*resim*/ true);   // NoSlot

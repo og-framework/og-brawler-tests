@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 #if WITH_LOW_LEVEL_TESTS
 
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
@@ -12,6 +14,7 @@
 #include "OGBrawler/BrawlerMovementSimulation.h"
 #include "OGSimulation/RelayedInputRingCodec.h"
 #include "OGSimulation/InputRedundancyBundleCodec.h"
+#include "OGSimulation/SimulationFrame.h"
 #include "BrawlerTestInputs.h"
 
 namespace syncedPlayerInputTest
@@ -88,8 +91,20 @@ struct ByteBuffer
 
 constexpr std::uint32_t kSyncedBytes = 39u;
 
+constexpr std::array<std::uint8_t, 4> floatBytes(float value)
+{
+    return std::bit_cast<std::array<std::uint8_t, 4>>(value);
+}
+
+static_assert(floatBytes(1.f)[2] == 0x80u && floatBytes(1.f)[3] == 0x3Fu && floatBytes(0.f)[3] == 0x00u,
+    "floatBytes must give the little-endian IEEE bytes the wire serializes");
+
+constexpr std::array<std::uint8_t, 4> kZeroAimX = floatBytes(simFrame::kUp.x);
+constexpr std::array<std::uint8_t, 4> kZeroAimY = floatBytes(simFrame::kUp.y);
+constexpr std::array<std::uint8_t, 4> kZeroAimZ = floatBytes(simFrame::kUp.z);
+
 constexpr std::uint8_t kSyncedZeroBytes[kSyncedBytes] = {
-    0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x80u,0x3Fu,
+    kZeroAimX[0],kZeroAimX[1],kZeroAimX[2],kZeroAimX[3], kZeroAimY[0],kZeroAimY[1],kZeroAimY[2],kZeroAimY[3], kZeroAimZ[0],kZeroAimZ[1],kZeroAimZ[2],kZeroAimZ[3],
     0x00u, 0x00u,
     0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u,
     0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u, 0x00u,0x00u,0x00u,0x00u,
@@ -138,11 +153,11 @@ void requireEveryFieldEqual(const SyncedPlayerInput& actual, const SyncedPlayerI
 SyncedPlayerInput richInput()
 {
     return SyncedPlayerInput{
-        .aimDirection       = glm::vec3(0.25f, -0.5f, 0.75f),
+        .aimDirection       = glm::vec3(-0.5f, 0.75f, -0.25f),
         .attackLeft         = true,
         .attackRight        = true,
         .moveStick          = glm::vec2(0.5f, -0.25f),
-        .moveDirectionWorld = glm::vec3(-0.75f, 0.5f, 0.125f),
+        .moveDirectionWorld = glm::vec3(0.5f, 0.125f, 0.75f),
         .triggeredActionId  = 7u,
         .flags              = brawlerMovementSimulation::kInputFlagHoldGuard,
     };
@@ -176,7 +191,7 @@ TEST_CASE("SimulatableBrawler.SyncedPlayerInput.ZeroSerializesToTheCapturedBytes
 TEST_CASE("SimulatableBrawler.SyncedPlayerInput.ZeroIsNotValueInitialised",
           "[SimulatableBrawler][SyncedPlayerInput]")
 {
-    REQUIRE(SyncedPlayerInput::zero().aimDirection == glm::vec3(0.f, 0.f, 1.f));
+    REQUIRE(SyncedPlayerInput::zero().aimDirection == glm::vec3(0.f, 1.f, -0.f));
     REQUIRE(SyncedPlayerInput{}.aimDirection == glm::vec3(0.f, 0.f, 0.f));
     REQUIRE_FALSE(sameInput(SyncedPlayerInput::zero(), SyncedPlayerInput{}));
     REQUIRE(firstDifference(serialize(SyncedPlayerInput{}), kSyncedZeroBytes, kSyncedBytes) != -1);

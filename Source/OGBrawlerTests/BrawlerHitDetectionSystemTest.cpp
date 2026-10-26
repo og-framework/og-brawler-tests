@@ -69,6 +69,7 @@
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
 #include "OGSimulation/SimulationSerialization.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -91,7 +92,7 @@ constexpr std::uint32_t kRadialVolume     = 7u;
 
 // The attacker's weapon sits at the origin (identity transform); the target 150 cm out along
 // +X is inside the production annulus (inner 90, outer 300) and on the swing plane.
-constexpr float kTargetDistance = 150.f;
+constexpr float kTargetDistance = 1.5f;
 
 // The measured field timeline: contact 24 ticks into the attacker's seq-0 swing.
 constexpr int kContactSwingTick = 24;
@@ -101,9 +102,9 @@ constexpr int kContactSwingTick = 24;
 // 0.5 rad off the line (inside [shieldAngle 0.25, pi/2)) with cross(n, g).z = sin(0.5) > 0 --
 // the seq 0/2 side. Written as an AIM because the guard sub-sim builds its transform from the
 // target's aim input, which is the path a player's stick takes.
-inline glm::vec3 blockingAim()   { return glm::vec3(-std::cos(0.5f), -std::sin(0.5f), 0.f); }
+inline glm::vec3 blockingAim()   { return glm::vec3(-std::sin(0.5f), 0.f, std::cos(0.5f)); }
 // A guard facing AWAY from the attacker: td = pi, outside the outer gate, never blocks.
-inline glm::vec3 turnedAwayAim() { return glm::vec3(1.f, 0.f, 0.f); }
+inline glm::vec3 turnedAwayAim() { return glm::vec3(0.f, 0.f, -1.f); }
 
 struct OrderSwapPhysics
 {
@@ -143,7 +144,7 @@ struct OrderSwapQuery
             return report;
 
         SpatialQueryHit body{};
-        body.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+        body.objectPosition   = glm::vec3(0.f, 0.f, -kTargetDistance);
         body.bodyId           = BodyId{ kTargetRoot };
         body.rootBodyId       = BodyId{ kTargetRoot };
         body.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -152,7 +153,7 @@ struct OrderSwapQuery
         if (guardShapeEnabled)
         {
             SpatialQueryHit guard{};
-            guard.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+            guard.objectPosition   = glm::vec3(0.f, 0.f, -kTargetDistance);
             guard.bodyId           = BodyId{ kTargetGuardBody };
             guard.rootBodyId       = BodyId{ kTargetRoot };
             guard.objectCategories = CollisionCategories::single(collisionCategory::guard);
@@ -237,7 +238,7 @@ struct FOrderSwapRig
     static simulatableBrawler::PlayerInput makeInput(const glm::vec3& aim, bool attackLeft,
                                                      const glm::vec2& stick, std::uint8_t flags)
     {
-        const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
+        const glm::vec3 moveWorld = simFrame::fromForwardRight(stick, 0.f);
         return brawlerTestInputs::make({ .aimDirection       = aim,
                                          .attackLeft         = attackLeft,
                                          .moveStick          = stick,
@@ -321,7 +322,7 @@ inline int measureFirstIdleTick()
 {
     FOrderSwapRig rig;
     seedStun(rig);
-    const auto idleAttacker = FOrderSwapRig::makeInput(glm::vec3(1.f, 0.f, 0.f), false, glm::vec2(0.f), 0u);
+    const auto idleAttacker = FOrderSwapRig::makeInput(glm::vec3(0.f, 0.f, -1.f), false, glm::vec2(0.f), 0u);
     const auto target = FOrderSwapRig::makeInput(blockingAim(), false, glm::vec2(0.f),
                                                  brawlerMovementSimulation::kInputFlagHoldGuard);
     for (int t = 0; t < 200; ++t)
@@ -351,7 +352,7 @@ inline Arm runArm(Order order, const Scenario& scenario, int contactTick)
     Arm arm;
     arm.contactTick = contactTick;
     const int pressTick = contactTick - kContactSwingTick;
-    const glm::vec3 attackerAim(1.f, 0.f, 0.f);
+    const glm::vec3 attackerAim = glm::vec3(0.f, 0.f, -1.f);
     for (int t = 0; t <= contactTick + scenario.extraTicksAfterContact; ++t)
     {
         const bool press = scenario.attackerSwings && t == pressTick;
@@ -489,7 +490,7 @@ TEST_CASE("HitDetection.GuardBlockRoutesThroughTheInboundSlice",
 
     const int T = 40;
     FOrderSwapRig rig;
-    const glm::vec3 attackerAim(1.f, 0.f, 0.f);
+    const glm::vec3 attackerAim = glm::vec3(0.f, 0.f, -1.f);
     auto attackerInput = [&](int t)
     {
         const bool press = t == T - kContactSwingTick;
@@ -600,7 +601,7 @@ TEST_CASE("HitDetection.ExecutorFiresDetectionWithTheAdaptersItWasConstructedWit
     REQUIRE(&rig.exec.get<Detection>().queryAdapter()   == &rig.query);
     REQUIRE(&rig.exec.get<Detection>().physicsAdapter() == &rig.phys);
 
-    const glm::vec3 attackerAim(1.f, 0.f, 0.f);
+    const glm::vec3 attackerAim = glm::vec3(0.f, 0.f, -1.f);
     const auto idleTarget = FOrderSwapRig::makeInput(turnedAwayAim(), false, glm::vec2(0.f), 0u);
     const auto press   = FOrderSwapRig::makeInput(attackerAim, true,  glm::vec2(0.f, -1.f), 0u);
     const auto release = FOrderSwapRig::makeInput(attackerAim, false, glm::vec2(0.f), 0u);

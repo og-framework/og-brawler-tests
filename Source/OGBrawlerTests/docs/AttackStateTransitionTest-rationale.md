@@ -25,12 +25,12 @@ which is still in the old comment convention.
 
 * **Ticks start at 1.** A projectile slot whose `spawnTick` is 0 reads as free, so a shot on tick 0
   could not be told apart from no shot.
-* **The input.** `aim` (east by default), `moveWorld` and `moveStick` persist across ticks; `tick`
+* **The input.** `aim` (forward by default), `moveWorld` and `moveStick` persist across ticks; `tick`
   takes the two buttons and the matcher's `triggeredActionId` for that tick. `holdStick(angle)` sets
   the stick at an aim-relative angle in the convention of `InputSequence.h` (0 is the aim, `+π/2`
   is right of it, `π` is dead-back); `holdStickOffBack(offset)` is `holdStick(π + offset)`.
-  `moveStick` is set to the XY of `moveWorld`, so the classifier's magnitude gate and the matcher's
-  read agree.
+  `moveStick` is set to the forward and right components of `moveWorld`, so the classifier's
+  magnitude gate and the matcher's read agree.
 * **The inbound slice is cleared after every tick**, the one-shot reset the routing pass performs in
   production. A case that delivers a hit or a block writes the slice before its tick.
 * **`dt`** (task 4) is a rig member, `1.f / 60.f` by default. `tick` and `commitmentTicks` use it, so a
@@ -86,7 +86,7 @@ passes: a slot lives 53 ticks, so at the 45-tick period two shots are in flight 
 | `DAttack.AttackTransitions.ReleaseStopsFire` | release after the second shot: `Attacking` with the sentinel until exactly one period after it, then `Idle`, no further shot; stick moved 30° off dead-back with attack 2 held: no shot, and the sentinel is left on the commitment's last tick | the first section failed (no second shot); the second passed |
 | `DAttack.AttackTransitions.HeldFromIdleFires` | `Idle`, no matcher action, back + attack 2 held: fires on that tick, end tick = tick + period | failed: sequence 4 |
 | `DAttack.AttackTransitions.BackConeIsTheMatchersCone` | 15° off dead-back (inside the matcher's π/8, outside the classifier's 10° backpedal cone, both asserted) fires; 30° off gives the classified swing; both sides | failed: the 15° rows gave the classified side swing |
-| `DAttack.AttackTransitions.StickMatchesStepAtTheBoundaries` | `inputSequence::stickMatchesStep` 0.1° inside and outside the tolerance on both sides, below and above the deadzone, the zero stick, an aim with a Z component, a stick with a Z component, an aim with no XY | passed (it tests the new predicate only) |
+| `DAttack.AttackTransitions.StickMatchesStepAtTheBoundaries` | `inputSequence::stickMatchesStep` 0.1° inside and outside the tolerance on both sides, below and above the deadzone, the zero stick, an aim with a vertical component, a stick with a vertical component, an aim with no horizontal part | passed (it tests the new predicate only) |
 | `DAttack.AttackTransitions.StickMatchesStepIsTheMatchersPerFrameTest` | motion 3 of `kGameMotions` is exactly `kBackShortcutStep` (Back, π/8, 8); for every whole degree around a tilted aim, a one-entry `inputSequence::matchSequence` on motion 3 matches exactly when the predicate does, and the sweep has both outcomes | passed |
 
 The last two pass on both sides of the change by construction: they pin the predicate and its

@@ -27,6 +27,7 @@
 #include "OGSimulation/SimulationObjectStorage.h"
 #include "OGSimulation/SimulatableList.h"
 #include "OGSimulation/StorageView.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <algorithm>
 #include <cmath>
@@ -72,8 +73,9 @@ inline float degrees(float d)
 
 inline glm::vec3 stickAt(const glm::vec3& aim, float aimRelativeAngle)
 {
-    const glm::vec3 forward = glm::normalize(glm::vec3(aim.x, aim.y, 0.f));
-    const glm::vec3 right(forward.y, -forward.x, 0.f);
+    const glm::vec3 forward = glm::normalize(simFrame::flatten(aim));
+    const glm::vec3 right = simFrame::fromForwardRight(
+        glm::vec2(simFrame::forwardRight(forward).y, -simFrame::forwardRight(forward).x), 0.f);
     return std::cos(aimRelativeAngle) * forward + std::sin(aimRelativeAngle) * right;
 }
 
@@ -100,7 +102,7 @@ struct FAttackRig
     MockSpatialQueryAdapter                     queryAdapter;
 
     float         dt = kDt;
-    glm::vec3     aim{ 1.f, 0.f, 0.f };
+    glm::vec3     aim = glm::vec3(0.f, 0.f, -1.f);
     glm::vec3     moveWorld{ 0.f, 0.f, 0.f };
     glm::vec2     moveStick{ 0.f, 0.f };
     std::uint32_t nextTick = 1u;
@@ -166,7 +168,7 @@ struct FAttackRig
     void holdStick(float aimRelativeAngle)
     {
         moveWorld = stickAt(aim, aimRelativeAngle);
-        moveStick = glm::vec2(moveWorld.x, moveWorld.y);
+        moveStick = simFrame::forwardRight(moveWorld);
     }
 
     void holdStickOffBack(float offsetFromBack)
@@ -257,8 +259,8 @@ struct FAttackRig
             .edit<brawlerProjectileSimulation::DerivedState>().detectedThisTick[lastBlockedSlot];
         detected.outcome            = brawlerProjectileSimulation::SlotOutcome::BlockedByGuard;
         detected.struckRootBodyId   = BodyId{ 2 };
-        detected.targetRootPosition = slot.spawnPos + slot.spawnDir * 300.f;
-        detected.objectPosition     = detected.targetRootPosition - slot.spawnDir * 40.f;
+        detected.targetRootPosition = slot.spawnPos + slot.spawnDir * 3.f;
+        detected.objectPosition     = detected.targetRootPosition - slot.spawnDir * 0.4f;
         routing.preIntegrate(step, view(), staticData);
     }
 
@@ -574,7 +576,7 @@ TEST_CASE("DAttack.AttackTransitions.StickMatchesStepAtTheBoundaries", "[DAttack
     using namespace attackTransitionTests;
     using inputSequence::stickMatchesStep;
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
     const float tolerance = kBackShortcutStep.angleTolerance;
     const float margin = degrees(0.1f);
     constexpr float kDeadzone = 0.2f;
@@ -593,9 +595,9 @@ TEST_CASE("DAttack.AttackTransitions.StickMatchesStepAtTheBoundaries", "[DAttack
     CHECK_FALSE(stickMatchesStep(deadBack * 0.1f, aim, kBackShortcutStep, kDeadzone));
     CHECK(stickMatchesStep(deadBack * 0.1f, aim, kBackShortcutStep, 0.05f));
     CHECK_FALSE(stickMatchesStep(glm::vec3(0.f), aim, kBackShortcutStep, dAttackDirection::kMoveMagnitudeEpsilon));
-    CHECK(stickMatchesStep(deadBack, glm::normalize(glm::vec3(1.f, 0.f, -1.f)), kBackShortcutStep, kDeadzone));
-    CHECK(stickMatchesStep(deadBack + glm::vec3(0.f, 0.f, 5.f), aim, kBackShortcutStep, kDeadzone));
-    CHECK_FALSE(stickMatchesStep(deadBack, glm::vec3(0.f, 0.f, 1.f), kBackShortcutStep, kDeadzone));
+    CHECK(stickMatchesStep(deadBack, glm::normalize(glm::vec3(0.f, -1.f, -1.f)), kBackShortcutStep, kDeadzone));
+    CHECK(stickMatchesStep(deadBack + glm::vec3(0.f, 5.f, -0.f), aim, kBackShortcutStep, kDeadzone));
+    CHECK_FALSE(stickMatchesStep(deadBack, glm::vec3(0.f, 1.f, -0.f), kBackShortcutStep, kDeadzone));
 }
 
 TEST_CASE("DAttack.AttackTransitions.StickMatchesStepIsTheMatchersPerFrameTest", "[DAttack][AttackTransitions]")
@@ -612,7 +614,7 @@ TEST_CASE("DAttack.AttackTransitions.StickMatchesStepIsTheMatchersPerFrameTest",
     CHECK(kBackShortcutStep.angleTolerance == backShortcut.steps[0].angleTolerance);
     CHECK(kBackShortcutStep.maxGapFrames == backShortcut.steps[0].maxGapFrames);
 
-    const glm::vec3 aim = glm::normalize(glm::vec3(0.6f, -0.8f, -0.3f));
+    const glm::vec3 aim = glm::normalize(glm::vec3(-0.8f, -0.3f, -0.6f));
     constexpr float kDeadzone = 0.2f;
     constexpr std::uint32_t kTick = 40u;
     const std::vector<inputSequence::MotionCommand> onlyBackShortcut{ backShortcut };
@@ -889,11 +891,11 @@ TEST_CASE("DAttack.AttackTransitions.FollowUpPressIsTheClassifiedSideWithoutProj
     CHECK(followUpSequenceFor(kHadoukenSequenceSentinel, dAttackDirection::kLeftSequenceId) == InvalidAttackSequenceId);
     CHECK(followUpSequenceFor(kHadoukenSequenceSentinel, dAttackDirection::kRightSequenceId) == InvalidAttackSequenceId);
 
-    const glm::vec3 aim = glm::normalize(glm::vec3(0.6f, -0.8f, -0.3f));
+    const glm::vec3 aim = glm::normalize(glm::vec3(-0.8f, -0.3f, -0.6f));
     auto view = [&](float aimRelativeAngle, bool attackLeft, bool attackRight, std::uint32_t action = 0u) {
         const glm::vec3 stick = stickAt(aim, aimRelativeAngle);
         return PlayerInputView{ .aimDirection = aim, .attackLeft = attackLeft, .attackRight = attackRight,
-                                .moveDirection = glm::vec2(stick.x, stick.y), .moveDirectionWorld = stick,
+                                .moveDirection = simFrame::forwardRight(stick), .moveDirectionWorld = stick,
                                 .triggeredActionId = action };
     };
 
@@ -1160,4 +1162,4 @@ TEST_CASE("DAttack.AttackTransitions.CommitmentLeavesThePunishWindow", "[DAttack
     }
 }
 
-#endif // WITH_LOW_LEVEL_TESTS
+#endif

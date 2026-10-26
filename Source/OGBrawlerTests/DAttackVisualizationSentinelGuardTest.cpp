@@ -98,7 +98,7 @@ TEST_CASE("DAttack.VizSentinelGuard.RadialVisualizeNoCrash", "[DAttack]")
 
     dAttackRadialVisualization::State vizState;
     dAttackRadialVisualization::Input<MockRenderer, MockLogger> input(
-        1.f / 60.f, glm::vec3(1.f, 0.f, 0.f), renderer, logger);
+        1.f / 60.f, glm::vec3(0.f, 0.f, -1.f), renderer, logger);
 
     dAttackRadialVisualization::visualize(
         input, fx.state, fx.ic, fx.derived, fx.staticData, vizState);
@@ -122,7 +122,7 @@ TEST_CASE("DAttack.VizSentinelGuard.RadialVisualize2NoCrash", "[DAttack]")
 
     dAttackRadialVisualization::State vizState;
     dAttackRadialVisualization::Input<MockRenderer, MockLogger> input(
-        1.f / 60.f, glm::vec3(1.f, 0.f, 0.f), renderer, logger);
+        1.f / 60.f, glm::vec3(0.f, 0.f, -1.f), renderer, logger);
 
     dAttackRadialVisualization::visualize2(
         input, fx.state, fx.ic, fx.derived, fx.staticData, vizState);
@@ -146,11 +146,11 @@ TEST_CASE("DAttack.VizSentinelGuard.AimVisualizeNoCrash", "[DAttack]")
     dAttackAimVisualization::State vizState;
     dAttackAimVisualization::Input<MockRenderer, MockLogger> input(
         1.f / 60.f,
-        glm::vec3(1.f, 0.f, 0.f),   // aimDirection (non-degenerate)
+        glm::vec3(0.f, 0.f, -1.f),   // aimDirection (non-degenerate)
         renderer,
         logger,
         glm::vec2(1.f, 0.f),        // moveDirection
-        glm::vec3(1.f, 0.f, 0.f));  // moveDirectionWorld
+        glm::vec3(0.f, 0.f, -1.f));  // moveDirectionWorld
 
     dAttackAimVisualization::visualize(
         input, fx.state, fx.ic, fx.derived, fx.staticData, vizState);

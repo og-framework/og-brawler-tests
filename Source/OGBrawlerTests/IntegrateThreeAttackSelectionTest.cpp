@@ -21,6 +21,7 @@
 #include "OGBrawler/OGBrawlerLog.h"
 #include "OGSimulation/SimulationIntegrationExecutor.h"
 #include "OGSimulation/SimulationObjectStorage.h"
+#include "OGSimulation/SimulationFrame.h"
 #include <unordered_map>
 #include <string>
 #include <utility>
@@ -121,8 +122,8 @@ TEST_CASE("DAttack.Integrate3.ForwardStrikeWhenMoveAlignsWithAim", "[DAttack][Ai
 {
     using namespace integrate3tests;
     // Aim east, move east: signed angle ≈ 0 → within ±π/6 window → seq 4 (forward strike).
-    const glm::vec3 aim  = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
-    const glm::vec3 move = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+    const glm::vec3 aim  = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
+    const glm::vec3 move = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
     auto state = integrateOnce(aim, move, glm::vec2(0.f, -1.f), true, false);
 
     REQUIRE(state.m_currentState == DAttackState::Attacking);
@@ -133,8 +134,8 @@ TEST_CASE("DAttack.Integrate3.LeftStrikeWhenMove90DegCCWOfAim", "[DAttack][AimRe
 {
     using namespace integrate3tests;
     // Aim east (+x), move north (+y): cross(aim_xy, move_xy).z = 1 > 0, angle = π/2 > π/6 → seq 1.
-    const glm::vec3 aim  = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
-    const glm::vec3 move = glm::normalize(glm::vec3(0.f, 1.f, 0.f));
+    const glm::vec3 aim  = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
+    const glm::vec3 move = glm::normalize(glm::vec3(1.f, 0.f, -0.f));
     auto state = integrateOnce(aim, move, glm::vec2(0.f, -1.f), true, false);
 
     REQUIRE(state.m_currentState == DAttackState::Attacking);
@@ -145,8 +146,8 @@ TEST_CASE("DAttack.Integrate3.RightStrikeWhenMove90DegCWOfAim", "[DAttack][AimRe
 {
     using namespace integrate3tests;
     // Aim east (+x), move south (-y): cross(aim_xy, move_xy).z = -1 < 0, angle = π/2 > π/6 → seq 0.
-    const glm::vec3 aim  = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
-    const glm::vec3 move = glm::normalize(glm::vec3(0.f, -1.f, 0.f));
+    const glm::vec3 aim  = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
+    const glm::vec3 move = glm::normalize(glm::vec3(-1.f, 0.f, -0.f));
     auto state = integrateOnce(aim, move, glm::vec2(0.f, -1.f), true, false);
 
     REQUIRE(state.m_currentState == DAttackState::Attacking);
@@ -157,8 +158,8 @@ TEST_CASE("DAttack.Integrate3.ForwardStrikeWhenStickNeutral", "[DAttack][AimRela
 {
     using namespace integrate3tests;
     // Zero stick: length(moveDirection) < epsilon branch → seq 4 regardless of moveDirectionWorld.
-    const glm::vec3 aim  = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
-    const glm::vec3 move = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+    const glm::vec3 aim  = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
+    const glm::vec3 move = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
     auto state = integrateOnce(aim, move, glm::vec2(0.f, 0.f), true, false);
 
     REQUIRE(state.m_currentState == DAttackState::Attacking);
@@ -178,8 +179,8 @@ TEST_CASE("DAttack.Integrate3.AimWithDownwardZAndAlignedMoveXYIsForwardStrike", 
     //
     // The fix: angle is computed from the XY-projected aim, matching the sign's reference.
     // With aim_xy ≈ move_xy, dotXY = 1, angle = 0, signedAngle = 0 → seq 4 (forward).
-    const glm::vec3 aim  = glm::normalize(glm::vec3(0.722f, 0.f, -0.692f)); // mouse 100u E, capsule 96 up
-    const glm::vec3 move = glm::normalize(glm::vec3(1.f, 0.f, 0.f));        // XY-aligned with aim
+    const glm::vec3 aim  = glm::normalize(glm::vec3(0.f, -0.692f, -0.722f)); // mouse 100u E, capsule 96 up
+    const glm::vec3 move = glm::normalize(glm::vec3(0.f, 0.f, -1.f));        // XY-aligned with aim
     auto state = integrateOnce(aim, move, glm::vec2(0.f, -1.f), true, false);
 
     REQUIRE(state.m_currentState == DAttackState::Attacking);
@@ -190,8 +191,8 @@ TEST_CASE("DAttack.Integrate3.NoTransitionWithoutAttackInput", "[DAttack][AimRel
 {
     using namespace integrate3tests;
     // No attack buttons pressed: state must remain Idle.
-    const glm::vec3 aim  = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
-    const glm::vec3 move = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+    const glm::vec3 aim  = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
+    const glm::vec3 move = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
     auto state = integrateOnce(aim, move, glm::vec2(0.f, -1.f), false, false);
 
     REQUIRE(state.m_currentState == DAttackState::Idle);
@@ -216,8 +217,8 @@ TEST_CASE("DAttack.Integrate3.IsModeAgnostic", "[DAttack][AimRelativeMove]")
     // their origin). The test is explicit about the contract being checked.
     using namespace integrate3tests;
 
-    const glm::vec3 aimDirection       = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
-    const glm::vec3 moveDirectionWorld = glm::normalize(glm::vec3(0.f, 1.f, 0.f)); // 90° CCW → seq 1
+    const glm::vec3 aimDirection       = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
+    const glm::vec3 moveDirectionWorld = glm::normalize(glm::vec3(1.f, 0.f, -0.f)); // 90° CCW → seq 1
 
     // Call integrate3 via two separate SimulatableBrawler instances, each receiving
     // the same world vectors. Both must produce identical attack sequences.
@@ -249,8 +250,8 @@ TEST_CASE("DAttack.Integrate3.AntiParallelMoveIsForwardStrike_KnownArtifact", "[
     // update this test.
     using namespace integrate3tests;
 
-    const glm::vec3 aim  = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
-    const glm::vec3 move = glm::normalize(glm::vec3(-1.f, 0.f, 0.f)); // exactly anti-parallel
+    const glm::vec3 aim  = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
+    const glm::vec3 move = glm::normalize(glm::vec3(0.f, 0.f, 1.f)); // exactly anti-parallel
     auto state = integrateOnce(aim, move, glm::vec2(0.f, -1.f), true, false);
 
     REQUIRE(state.m_currentState == DAttackState::Attacking);
@@ -278,7 +279,7 @@ TEST_CASE("DAttack.Integrate3.HadoukenCommitmentHoldsAttackingState", "[DAttack]
     MockPhysicsAdapter physAdapter;
     MockSpatialQueryAdapter queryAdapter;
 
-    const glm::vec3 aim = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+    const glm::vec3 aim = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
     const float dt = 1.f / 60.f;
 
     // Drive one composite tick with attackLeft held and the given matcher result, returning
@@ -341,7 +342,7 @@ TEST_CASE("DAttack.Integrate3.MachineHadoukenUsesCharacterBindings", "[DAttack][
     // parent capsule transform resolved on-demand via CharacterBindings.capsuleBodyId — NOT
     // from a pre-resolved IntegrationUtils value. Point the mock's capsule body at a non-origin
     // transform and confirm the spawn position picks it up: spawnPos == capsulePos +
-    // aimXY*spawnForwardOffset + (0,0,spawnZOffset).
+    // aimXY*spawnForwardOffset + (0,0,spawnHeightOffset).
 
     simulatableBrawler::StaticData staticData;
     SimulatableBrawler character(staticData);
@@ -352,12 +353,12 @@ TEST_CASE("DAttack.Integrate3.MachineHadoukenUsesCharacterBindings", "[DAttack][
     MockPhysicsAdapter physAdapter;
     physAdapter.capsuleBodyId   = capsuleId;
     physAdapter.capsuleTransform = glm::mat4(1.f);
-    const glm::vec3 capsulePos(10.f, 20.f, 30.f);
+    const glm::vec3 capsulePos = glm::vec3(0.2f, 0.3f, -0.1f);
     physAdapter.capsuleTransform[3] = glm::vec4(capsulePos, 1.f);
 
     MockSpatialQueryAdapter queryAdapter;
 
-    const glm::vec3 aim = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+    const glm::vec3 aim = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
     simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
         .aimDirection       = aim,
         .moveDirectionWorld = aim,
@@ -374,12 +375,12 @@ TEST_CASE("DAttack.Integrate3.MachineHadoukenUsesCharacterBindings", "[DAttack][
         character.getAllState().getState().get<brawlerProjectileSimulation::State>();
     REQUIRE(projState.slots[0].spawnTick == 5u); // spawned this tick
 
-    // spawnPos == capsulePos + aimXY*spawnForwardOffset + (0,0,spawnZOffset), with capsulePos
+    // spawnPos == capsulePos + aimXY*spawnForwardOffset + (0,0,spawnHeightOffset), with capsulePos
     // sourced from getBodyTransform(characterBindings.capsuleBodyId) — the T33 plumbing under test.
     const glm::vec3 expectedSpawn =
         capsulePos
-        + glm::vec3(1.f, 0.f, 0.f) * staticData.m_projectileStaticData.spawnForwardOffset
-        + glm::vec3(0.f, 0.f, staticData.m_projectileStaticData.spawnZOffset);
+        + glm::vec3(0.f, 0.f, -1.f) * staticData.m_projectileStaticData.spawnForwardOffset
+        + simFrame::withHeight(glm::vec3(0.f), staticData.m_projectileStaticData.spawnHeightOffset);
     REQUIRE(projState.slots[0].spawnPos.x == Catch::Approx(expectedSpawn.x));
     REQUIRE(projState.slots[0].spawnPos.y == Catch::Approx(expectedSpawn.y));
     REQUIRE(projState.slots[0].spawnPos.z == Catch::Approx(expectedSpawn.z));
@@ -406,7 +407,7 @@ TEST_CASE("DAttack.Integrate3.InboundHitTransitionsToHitFlinch", "[DAttack][HitF
     MockPhysicsAdapter physAdapter;
     MockSpatialQueryAdapter queryAdapter;
 
-    const glm::vec3 aim = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+    const glm::vec3 aim = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
     const float dt = 1.f / 60.f;
 
     // Drive one composite tick. inboundHit is written onto the composite DerivedState slice
@@ -542,8 +543,8 @@ struct FMachineRig
     // end-tick cases set them, because the sequence a press selects is
     // `dAttackDirection::classify(aim, moveWorld, stick)` and that is the only way to enter
     // sequences 0 and 1 rather than the neutral-stick forward swing 4.
-    glm::vec3     aim{ 1.f, 0.f, 0.f };
-    glm::vec3     moveWorld{ 1.f, 0.f, 0.f };
+    glm::vec3     aim = glm::vec3(0.f, 0.f, -1.f);
+    glm::vec3     moveWorld = glm::vec3(0.f, 0.f, -1.f);
     glm::vec2     moveStick{ 0.f, 0.f };
     std::uint32_t triggeredActionId = 0u;
 
@@ -889,15 +890,15 @@ TEST_CASE("DAttack.Integrate3.AttackEndTickMatchesTheFirstIdleTick", "[DAttack][
 
     const Route routes[] = {
         { "seq 4 (forward, neutral stick)",
-          glm::vec3(1.f, 0.f, 0.f), glm::vec2(0.f, 0.f),  true, false,  1u, 0u, 4u, false, 0u },
+          glm::vec3(0.f, 0.f, -1.f), glm::vec2(0.f, 0.f),  true, false,  1u, 0u, 4u, false, 0u },
         { "seq 0 (move clockwise of aim)",
-          glm::vec3(0.f, -1.f, 0.f), glm::vec2(0.f, -1.f), true, false,  1u, 0u, 0u, false, 0u },
+          glm::vec3(-1.f, 0.f, -0.f), glm::vec2(0.f, -1.f), true, false,  1u, 0u, 0u, false, 0u },
         { "seq 1 (move counter-clockwise of aim)",
-          glm::vec3(0.f, 1.f, 0.f), glm::vec2(0.f, 1.f), false,  true,  1u, 0u, 1u, false, 0u },
+          glm::vec3(1.f, 0.f, -0.f), glm::vec2(0.f, 1.f), false,  true,  1u, 0u, 1u, false, 0u },
         { "seq 2 (chained from 0, attackLeft held past 0.3 s)",
-          glm::vec3(0.f, -1.f, 0.f), glm::vec2(0.f, -1.f), true, false, 24u, 0u, 0u,  true, 2u },
+          glm::vec3(-1.f, 0.f, -0.f), glm::vec2(0.f, -1.f), true, false, 24u, 0u, 0u,  true, 2u },
         { "seq 3 (chained from 1, attackRight held past 0.3 s)",
-          glm::vec3(0.f, 1.f, 0.f), glm::vec2(0.f, 1.f), false,  true, 24u, 0u, 1u,  true, 3u },
+          glm::vec3(1.f, 0.f, -0.f), glm::vec2(0.f, 1.f), false,  true, 24u, 0u, 1u,  true, 3u },
     };
 
     for (const Route& route : routes)
@@ -973,7 +974,7 @@ TEST_CASE("DAttack.Integrate3.ChainedSequenceRewritesTheEndTick", "[DAttack][Att
     using namespace integrate3tests;
 
     FMachineRig rig;
-    rig.moveWorld = glm::vec3(0.f, -1.f, 0.f);
+    rig.moveWorld = glm::vec3(-1.f, 0.f, -0.f);
     rig.moveStick = glm::vec2(0.f, -1.f);
 
     const SwingTrace tr = driveOneSwing(rig, 1u, /*L*/ true, /*R*/ false, /*holdTicks*/ 24u, 0u);
@@ -1089,7 +1090,7 @@ TEST_CASE("DAttack.Integrate3.EveryMachineAndRadialLogLineCarriesIdAndTick", "[D
     constexpr unsigned int kCharacterId = 7u;
     constexpr uint32_t kFirstTick = 42u;
     constexpr uint32_t kTickCount = 60u;   // long enough for a swing to start AND finish
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
 
     simulatableBrawler::StaticData staticData;
     SimulatableBrawler character(staticData);

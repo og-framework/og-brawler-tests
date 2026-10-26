@@ -25,10 +25,10 @@ struct Buttons
 };
 
 const glm::vec3 kAims[] = {
-    glm::vec3(0.f, 0.f, 1.f),
-    glm::vec3(1.f, 0.f, 0.f),
-    glm::vec3(0.6f, 0.8f, 0.f),
-    glm::vec3(-0.28f, 0.96f, 0.f),
+    glm::vec3(0.f, 1.f, -0.f),
+    glm::vec3(0.f, 0.f, -1.f),
+    glm::vec3(0.8f, 0.f, -0.6f),
+    glm::vec3(0.96f, 0.f, 0.28f),
 };
 
 const Buttons kButtons[] = {
@@ -46,8 +46,8 @@ const glm::vec2 kSticks[] = {
 
 const glm::vec3 kWorlds[] = {
     glm::vec3(0.f, 0.f, 0.f),
-    glm::vec3(0.6f, -0.8f, 0.f),
-    glm::vec3(1.f, 0.f, 0.f),
+    glm::vec3(-0.8f, 0.f, -0.6f),
+    glm::vec3(0.f, 0.f, -1.f),
 };
 
 const std::uint32_t kTriggers[] = {
@@ -111,14 +111,14 @@ TEST_CASE("SimulatableBrawler.InputViewSpec.NeutralInputViews",
     const auto zero = simulatableBrawler::getZeroPlayerInput();
 
     const machine::PlayerInputView machineView = machine::PlayerInputView::from(zero);
-    REQUIRE(machineView.aimDirection == glm::vec3(0.f, 0.f, 1.f));
+    REQUIRE(machineView.aimDirection == glm::vec3(0.f, 1.f, -0.f));
     REQUIRE(machineView.attackLeft == false);
     REQUIRE(machineView.attackRight == false);
     REQUIRE(machineView.moveDirection == glm::vec2(0.f, 0.f));
     REQUIRE(machineView.moveDirectionWorld == glm::vec3(0.f, 0.f, 0.f));
     REQUIRE(machineView.triggeredActionId == 0u);
 
-    REQUIRE(guard::PlayerInputView::from(zero).aimDirection == glm::vec3(0.f, 0.f, 1.f));
+    REQUIRE(guard::PlayerInputView::from(zero).aimDirection == glm::vec3(0.f, 1.f, -0.f));
 
     const movement::PlayerInputView movementView = movement::PlayerInputView::from(zero);
     REQUIRE(movementView.flags == 0u);

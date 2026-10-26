@@ -13,6 +13,7 @@
 #include "OGBrawler/BrawlerVisualizationInputSource.h"
 #include "OGBrawler/DAttackAimVisualization.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include "../InputPackaging/MockInputSource.h"
 
@@ -65,7 +66,7 @@ struct SilentLogger
 struct AimVizFixture
 {
 	std::vector<DAttackRadialSequence> sequences;
-	DAttackCircle circle{ 8u, 50.f, 100.f, 10.f, false, 1.f };
+	DAttackCircle circle{ 8u, 0.5f, 1.f, 0.1f, false, 1.f };
 	dAttackRadialSimulation::StaticData staticData{ sequences, circle };
 
 	dAttackRadialSimulation::State state;
@@ -128,7 +129,7 @@ std::optional<glm::vec3> renderFrameAimRay(
 // moveDirectionWorld unconditionally, so a zero vector yields NaN geometry — see
 // the ZeroMoveDirectionWorld case at the bottom of this file, which pins that
 // PRE-EXISTING behaviour rather than working around it silently.
-inline glm::vec3 someMoveDirection() { return glm::vec3(0.f, 1.f, 0.f); }
+inline glm::vec3 someMoveDirection() { return glm::vec3(1.f, 0.f, -0.f); }
 
 // Builds the live sample a local character would produce this frame, through the
 // real T12 packer — so anything the packer pins (discrete neutrality) holds here too.
@@ -164,7 +165,7 @@ constexpr int kRenderFramesPerSimTick = 4;
 inline glm::vec3 aimAtRenderFrame(int i)
 {
 	const float t = 0.05f * static_cast<float>(i + 1);
-	return glm::normalize(glm::vec3(1.f, t, 0.f));
+	return glm::normalize(glm::vec3(t, 0.f, -1.f));
 }
 
 } // namespace renderechotests
@@ -183,7 +184,7 @@ TEST_CASE("Visualization.RenderRateInputEcho.LocalCharacterEchoesFreshInputEvery
 
 	// The cache is frozen at the tick boundary — if the echo were not live, every
 	// frame would draw THIS aim.
-	const glm::vec3 staleAim = glm::normalize(glm::vec3(0.f, -1.f, 0.f));
+	const glm::vec3 staleAim = glm::normalize(glm::vec3(-1.f, 0.f, -0.f));
 	const std::optional<simulatableBrawler::PlayerInput> cached = cachedSampleWithAim(staleAim);
 
 	int sampleCount = 0;
@@ -206,19 +207,19 @@ TEST_CASE("Visualization.RenderRateInputEcho.LocalCharacterEchoesFreshInputEvery
 	for (int frame = 0; frame < kRenderFramesPerSimTick; ++frame)
 	{
 		const glm::vec3 expected = aimAtRenderFrame(frame) * outerRadius;
-		REQUIRE(aimRays[frame].x == Catch::Approx(expected.x).margin(1e-3));
-		REQUIRE(aimRays[frame].y == Catch::Approx(expected.y).margin(1e-3));
+		REQUIRE(simFrame::forwardRight(aimRays[frame]).x == Catch::Approx(simFrame::forwardRight(expected).x).margin(1e-5));
+		REQUIRE(simFrame::forwardRight(aimRays[frame]).y == Catch::Approx(simFrame::forwardRight(expected).y).margin(1e-5));
 	}
 
 	// And every frame differs from its predecessor — the property that fails if the
 	// source silently reverts to a tick-quantized read.
 	for (int frame = 1; frame < kRenderFramesPerSimTick; ++frame)
-		REQUIRE(glm::length(aimRays[frame] - aimRays[frame - 1]) > 1e-3f);
+		REQUIRE(glm::length(aimRays[frame] - aimRays[frame - 1]) > 1.0000001e-5f);
 
 	// The stale cached aim was never drawn.
 	const glm::vec3 staleEnd = staleAim * outerRadius;
 	for (int frame = 0; frame < kRenderFramesPerSimTick; ++frame)
-		REQUIRE(glm::length(aimRays[frame] - staleEnd) > 1e-3f);
+		REQUIRE(glm::length(aimRays[frame] - staleEnd) > 1.0000001e-5f);
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +235,7 @@ TEST_CASE("Visualization.RenderRateInputEcho.RemoteProxyKeepsCachedInputAndNever
 	AimVizFixture fx;
 	dAttackAimVisualization::State vizState;
 
-	const glm::vec3 cachedAim = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+	const glm::vec3 cachedAim = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
 	const std::optional<simulatableBrawler::PlayerInput> cached = cachedSampleWithAim(cachedAim);
 
 	int sampleCount = 0;
@@ -258,9 +259,9 @@ TEST_CASE("Visualization.RenderRateInputEcho.RemoteProxyKeepsCachedInputAndNever
 	const glm::vec3 expected = cachedAim * fx.circle.getOuterRadius();
 	for (int frame = 0; frame < kRenderFramesPerSimTick; ++frame)
 	{
-		REQUIRE(aimRays[frame].x == Catch::Approx(expected.x).margin(1e-3));
-		REQUIRE(aimRays[frame].y == Catch::Approx(expected.y).margin(1e-3));
-		REQUIRE(glm::length(aimRays[frame] - aimRays[0]) < 1e-4f);
+		REQUIRE(simFrame::forwardRight(aimRays[frame]).x == Catch::Approx(simFrame::forwardRight(expected).x).margin(1e-5));
+		REQUIRE(simFrame::forwardRight(aimRays[frame]).y == Catch::Approx(simFrame::forwardRight(expected).y).margin(1e-5));
+		REQUIRE(glm::length(aimRays[frame] - aimRays[0]) < 1e-6f);
 	}
 }
 
@@ -325,8 +326,8 @@ TEST_CASE("Visualization.RenderRateInputEcho.ListenServerHostEchoesWithNoCorrect
 	for (int frame = 0; frame < kRenderFramesPerSimTick; ++frame)
 	{
 		const glm::vec3 expected = aimAtRenderFrame(frame) * outerRadius;
-		REQUIRE(aimRays[frame].x == Catch::Approx(expected.x).margin(1e-3));
-		REQUIRE(aimRays[frame].y == Catch::Approx(expected.y).margin(1e-3));
+		REQUIRE(simFrame::forwardRight(aimRays[frame]).x == Catch::Approx(simFrame::forwardRight(expected).x).margin(1e-5));
+		REQUIRE(simFrame::forwardRight(aimRays[frame]).y == Catch::Approx(simFrame::forwardRight(expected).y).margin(1e-5));
 	}
 }
 
@@ -342,7 +343,7 @@ TEST_CASE("Visualization.RenderRateInputEcho.DiscreteEdgesNeverRenderEcho",
 	using namespace renderechotests;
 
 	MockInputSource pressed;
-	pressed.aimDirection       = glm::normalize(glm::vec3(1.f, 1.f, 0.f));
+	pressed.aimDirection       = glm::normalize(glm::vec3(1.f, 0.f, -1.f));
 	pressed.moveStick          = glm::vec2(0.f, 1.f);
 	pressed.moveDirectionWorld = someMoveDirection();
 	pressed.leftAttack         = true;
@@ -374,8 +375,8 @@ TEST_CASE("Visualization.RenderRateInputEcho.DiscreteEdgesNeverRenderEcho",
 
 	// Continuous fields DID come through — otherwise the neutrality above would be
 	// vacuous (an all-zero result would also pass it).
-	REQUIRE(echoed->aimDirection.x == Catch::Approx(pressed.aimDirection.x).margin(1e-5));
-	REQUIRE(echoed->aimDirection.y == Catch::Approx(pressed.aimDirection.y).margin(1e-5));
+	REQUIRE(simFrame::forwardRight(echoed->aimDirection).x == Catch::Approx(simFrame::forwardRight(pressed.aimDirection).x).margin(1e-5));
+	REQUIRE(simFrame::forwardRight(echoed->aimDirection).y == Catch::Approx(simFrame::forwardRight(pressed.aimDirection).y).margin(1e-5));
 	REQUIRE(echoed->moveStick.y == Catch::Approx(pressed.moveStick.y).margin(1e-5));
 }
 
@@ -436,7 +437,7 @@ TEST_CASE("Visualization.RenderRateInputEcho.ZeroMoveDirectionWorldStillNaNs_Pre
 	using namespace renderechotests;
 
 	MockInputSource idle; // moveStick zero, moveDirectionWorld zero — the defaults
-	idle.aimDirection = glm::normalize(glm::vec3(1.f, 0.f, 0.f));
+	idle.aimDirection = glm::normalize(glm::vec3(0.f, 0.f, -1.f));
 
 	const simulatableBrawler::PlayerInput echoed =
 		simulatableBrawler::makeVisualizationPlayerInput(

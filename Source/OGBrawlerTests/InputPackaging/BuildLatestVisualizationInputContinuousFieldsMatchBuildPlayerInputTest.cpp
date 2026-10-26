@@ -44,9 +44,9 @@ void requireContinuousFieldsMatch(const simulatableBrawler::PlayerInput& sim,
 TEST_CASE("Sim and visualization packers agree on every continuous field", "[InputPackaging][VisualizationInput]")
 {
 	MockInputSource src;
-	src.aimDirection       = glm::vec3(-0.28f, 0.96f, 0.f);
+	src.aimDirection       = glm::vec3(0.96f, 0.f, 0.28f);
 	src.moveStick          = glm::vec2(-0.4f, 0.9f);
-	src.moveDirectionWorld = glm::vec3(0.7f, 0.7f, 0.f);
+	src.moveDirectionWorld = glm::vec3(0.7f, 0.f, -0.7f);
 	src.leftAttack         = true;
 	src.rightAttack        = false;
 	src.triggeredActionId  = inputSequence::kHadoukenActionId;
@@ -70,9 +70,9 @@ TEST_CASE("Sim and visualization packers agree on every continuous field", "[Inp
 TEST_CASE("Discrete fields are allowed to differ, and do", "[InputPackaging][VisualizationInput]")
 {
 	MockInputSource src;
-	src.aimDirection       = glm::vec3(1.f, 0.f, 0.f);
+	src.aimDirection       = glm::vec3(0.f, 0.f, -1.f);
 	src.moveStick          = glm::vec2(0.3f, 0.3f);
-	src.moveDirectionWorld = glm::vec3(1.f, 0.f, 0.f);
+	src.moveDirectionWorld = glm::vec3(0.f, 0.f, -1.f);
 	src.leftAttack         = true;
 	src.rightAttack        = true;
 	src.triggeredActionId  = inputSequence::kHadoukenActionId;
@@ -108,7 +108,7 @@ TEST_CASE("Agreement holds when the sim path carries no discrete input", "[Input
 	// on identical output. This is the boundary that shows the divergence above is
 	// caused purely by the discrete arguments and not by two different assemblies.
 	MockInputSource src;
-	src.aimDirection       = glm::vec3(0.f, -1.f, 0.f);
+	src.aimDirection       = glm::vec3(-1.f, 0.f, -0.f);
 	src.moveStick          = glm::vec2(0.f, 0.f);
 	src.moveDirectionWorld = glm::vec3(0.f, 0.f, 0.f);
 

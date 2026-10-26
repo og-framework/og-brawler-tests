@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 #include "OGBrawler/SimulatableBrawlerTypes.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <cstdint>
 
@@ -13,7 +14,7 @@ namespace brawlerTestInputs
 
 struct Fields
 {
-    glm::vec3 aimDirection       = glm::vec3(0.f, 0.f, 1.f);
+    glm::vec3 aimDirection       = simFrame::kUp;
     bool      attackLeft         = false;
     bool      attackRight        = false;
     glm::vec2 moveStick          = glm::vec2(0.f);

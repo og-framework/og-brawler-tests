@@ -12,6 +12,7 @@
 #include "OGBrawler/InputSequence/GameMotions.h"
 #include "OGBrawler/InputSequence/InputSequence.h"
 #include "OGSimulation/Network/LocalInputCache.h"
+#include "OGSimulation/SimulationFrame.h"
 
 // ---------------------------------------------------------------------------
 // og-netcode-v2-input-relay T15 — WHERE THE MOTION MATCHER GETS ITS HISTORY.
@@ -58,7 +59,7 @@ constexpr float kDeadzone = 0.2f;
 
 // Aim pointing along world +X. Every angle below is aim-RELATIVE, so this choice
 // only fixes the frame the sticks are expressed in.
-inline glm::vec3 aim() { return glm::vec3(1.f, 0.f, 0.f); }
+inline glm::vec3 aim() { return glm::vec3(0.f, 0.f, -1.f); }
 
 // World-frame stick vector for an aim-relative angle, given aim = +X.
 // InputSequence's convention: right = (fwd.y, -fwd.x) = (0, -1), and the angle is
@@ -75,7 +76,7 @@ inline simulatableBrawler::PlayerInput frame(glm::vec2 stick,
 	simulatableBrawler::PlayerInput in;
 	in.aimDirection       = aim();
 	in.moveStick          = stick;
-	in.moveDirectionWorld = glm::vec3(stick.x, stick.y, 0.f);
+	in.moveDirectionWorld = simFrame::fromForwardRight(stick, 0.f);
 	in.attackLeft         = leftAttack;
 	in.attackRight        = rightAttack;
 	return in;
@@ -94,7 +95,7 @@ inline simulatableBrawler::ContinuousInputFields liveFields()
 	simulatableBrawler::ContinuousInputFields fields;
 	fields.aimDirection       = aim();
 	fields.moveStick          = stickForAngle(inputSequence::angle::Down);
-	fields.moveDirectionWorld = glm::vec3(fields.moveStick.x, fields.moveStick.y, 0.f);
+	fields.moveDirectionWorld = simFrame::fromForwardRight(fields.moveStick, 0.f);
 	return fields;
 }
 
@@ -169,7 +170,7 @@ inline simulatableBrawler::PlayerInput composite(glm::vec2 stick, bool leftAttac
 	simulatableBrawler::ContinuousInputFields fields;
 	fields.aimDirection       = aim();
 	fields.moveStick          = stick;
-	fields.moveDirectionWorld = glm::vec3(stick.x, stick.y, 0.f);
+	fields.moveDirectionWorld = simFrame::fromForwardRight(stick, 0.f);
 	return simulatableBrawler::makeSimPlayerInput(fields, leftAttack, rightAttack,
 	                                              inputSequence::kNoMatch,
 	                                              simulatableBrawler::InputFlagFields{});

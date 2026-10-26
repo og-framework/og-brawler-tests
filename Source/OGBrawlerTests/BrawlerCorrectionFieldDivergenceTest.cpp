@@ -153,7 +153,7 @@ TEST_CASE("DAttack.CorrectionFieldDivergence.RadialBodyAngularVelocityIsNamedWit
 	// planted magnitude is on ONE axis and the other two are equal, which is what
 	// makes `delta` readable as "the max component moved by this much".
 	predicted.edit<dAttackRadialSimulation::State>().bodyState.angularVelocity =
-		glm::vec3(0.f, 0.f, 12.25f);
+		glm::vec3(-0.f, -12.25f, 0.f);
 
 	REQUIRE_FALSE(predicted.isSimilarTo(authority));    // the control
 
@@ -170,7 +170,7 @@ TEST_CASE("DAttack.CorrectionFieldDivergence.RadialBodyAngularVelocityIsNamedWit
 	// would report sqrt(2) times it.
 	simulatableBrawler::State twoAxis = predicted;
 	twoAxis.edit<dAttackRadialSimulation::State>().bodyState.angularVelocity =
-		glm::vec3(0.f, 12.25f, 12.25f);
+		glm::vec3(-12.25f, -12.25f, 0.f);
 
 	FieldDivergence twoAxisDivergence;
 	describeFirstDivergingField(twoAxis, authority, twoAxisDivergence);
@@ -192,7 +192,7 @@ TEST_CASE("DAttack.CorrectionFieldDivergence.MovementLinearBodyStatePositionIsNa
 	// The knockback the client predicted and the authority never produced: the
 	// target is 25 units downrange on one peer and at rest on the other.
 	predicted.edit<brawlerMovementSimulation::State>().bodyState.position =
-		glm::vec3(25.f, 0.f, 0.f);
+		glm::vec3(0.f, 0.f, -0.25f);
 
 	REQUIRE_FALSE(predicted.isSimilarTo(authority));    // the control
 
@@ -201,7 +201,7 @@ TEST_CASE("DAttack.CorrectionFieldDivergence.MovementLinearBodyStatePositionIsNa
 
 	REQUIRE(pathOf(divergence) == "brawlerMovementSimulation::State.bodyState.position");
 	REQUIRE(divergence.kind == FieldDivergenceKind::Numeric);
-	REQUIRE(divergence.delta == Catch::Approx(25.f));
+	REQUIRE(divergence.delta == Catch::Approx(0.25f));
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ TEST_CASE("DAttack.CorrectionFieldDivergence.TheNamedFieldFollowsThePlant",
 		s.edit<dAttackRadialSimulation::State>().attackTimer = 0.5f;
 	});
 	const std::string movementPath = nameFor([](simulatableBrawler::State& s) {
-		s.edit<brawlerMovementSimulation::State>().bodyState.linearVelocity = glm::vec3(3.f, 0.f, 0.f);
+		s.edit<brawlerMovementSimulation::State>().bodyState.linearVelocity = glm::vec3(0.f, 0.f, -0.03f);
 	});
 
 	REQUIRE(machinePath  == "dAttackMachineSimulation::State.m_currentState");

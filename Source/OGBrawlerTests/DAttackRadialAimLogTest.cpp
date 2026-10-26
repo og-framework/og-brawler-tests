@@ -23,6 +23,7 @@
 #include <glm/trigonometric.hpp>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <string>
 #include <utility>
 #include <vector>
@@ -51,6 +52,22 @@
 
 namespace dattackradialaimlogtests
 {
+
+constexpr glm::vec3 kTurnAxis = glm::vec3(-0.f, -1.f, 0.f);
+
+std::string axisText(const glm::vec3& axis)
+{
+    char text[64];
+    std::snprintf(text, sizeof(text), "axis=(%.3f,%.3f,%.3f)", axis.x, axis.y, axis.z);
+    return text;
+}
+
+std::string withUnsignedZeros(std::string text)
+{
+    for (std::size_t at = text.find("-0.000"); at != std::string::npos; at = text.find("-0.000", at))
+        text.erase(at, 1);
+    return text;
+}
 
 static constexpr float kDt = 1.f / 60.f;
 // [og-netcode-v2-field-defects task 16] The (id, tick) the rig's IntegrateScope carries.
@@ -117,9 +134,9 @@ static std::vector<std::string> captureRadialLines(float aimAngle, const glm::ve
             { 0.0f, 0.0f, DAttackRadialSequenceState::Damaging },
             { 0.2f, 7.0f, DAttackRadialSequenceState::Idle } },
         0.1f,
-        DAttackRadialSequence::defaultUp());
+        DAttackRadialSequence::turnAxis());
 
-    DAttackCircle circle(8u, 90.f, 300.f, 70.f, false, 1.f);
+    DAttackCircle circle(8u, 0.9f, 3.f, 0.7f, false, 1.f);
     StaticData    staticData(sequences, circle);
 
     InitialConditions ic{};
@@ -195,7 +212,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheAimAngleAndAxis",
     using namespace dattackradialaimlogtests;
 
     const std::string line =
-        captureSetInitialConditionsLine(glm::pi<float>() * 0.25f, glm::vec3(0.f, 0.f, 1.f));
+        captureSetInitialConditionsLine(glm::pi<float>() * 0.25f, kTurnAxis);
 
     INFO("line: " << line);
     REQUIRE_FALSE(line.empty());                                   // the edge really fired
@@ -203,7 +220,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheAimAngleAndAxis",
     CHECK(line.rfind("[Radial.setInitialConditions] id=7 tick=42 seq=0 aimAngle=", 0) == 0);
     CHECK(line.find("seq=0") != std::string::npos);
     CHECK(line.find("aimAngle=0.7854") != std::string::npos);
-    CHECK(line.find("axis=(0.000,0.000,1.000)") != std::string::npos);
+    CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kTurnAxis))) != std::string::npos);
 }
 
 // ===========================================================================
@@ -225,7 +242,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheAimAngleAndAxis",
 // axis through `glm::abs(glm::abs(aimDot) - 1.f) < 0.0001f`, a comparison against NaN --
 // precisely the shape /fp:fast is allowed to rewrite. Measured here, 2026-09-19: that
 // predicate is TRUE for a NaN aimDot on this toolchain, so a degenerate aim takes the
-// `defaultUp` branch and its AXIS renders as a clean cardinal (0.000,0.000,1.000) -- it is
+// `turnAxis` branch and its AXIS renders as a clean cardinal (0.000,-1.000,0.000) -- it is
 // indistinguishable from the innocent cause (A). The `aimAngle` field is the ONLY place
 // the nan surfaces, which is why the runbook must read that field first.
 // ===========================================================================
@@ -235,13 +252,13 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
 {
     using namespace dattackradialaimlogtests;
 
-    const glm::vec3 defaultForward(1.f, 0.f, 0.f);
-    const glm::vec3 defaultUp(0.f, 0.f, 1.f);
+    constexpr glm::vec3 defaultForward = glm::vec3(0.f, 0.f, -1.f);
+    constexpr glm::vec3 turnAxis = kTurnAxis;
 
     volatile float neutralAimX = 0.f;
     volatile float neutralAimY = 0.f;
     const glm::vec3 degenerateAim =
-        glm::normalize(glm::vec3(neutralAimX, neutralAimY, 0.f));
+        glm::normalize(glm::vec3(neutralAimY, 0.f, -neutralAimX));
     const float aimDot          = glm::dot(degenerateAim, defaultForward);
     const float degenerateAngle = glm::acos(aimDot);
 
@@ -255,7 +272,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
     INFO("aimEqualsForward: " << aimEqualsForward);
     CHECK(aimEqualsForward);
     const glm::vec3 degenerateAxis = aimEqualsForward
-        ? defaultUp
+        ? turnAxis
         : glm::normalize(glm::cross(defaultForward, degenerateAim));
 
     const std::string line = captureSetInitialConditionsLine(degenerateAngle, degenerateAxis);
@@ -267,7 +284,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
     // ⭐ WHAT THE RUNBOOK'S READER MUST NOT BE FOOLED BY. Because the branch above is
     // taken, the AXIS of a degenerate aim renders as a clean cardinal (0,0,1) -- it looks
     // exactly like the innocent cause (A). Only the ANGLE carries the nan.
-    CHECK(line.find("axis=(0.000,0.000,1.000)") != std::string::npos);
+    CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kTurnAxis))) != std::string::npos);
 
     // The angle field itself must carry the nan. MSVC renders the indefinite NaN that
     // `0 * inf` produces as "-nan(ind)"; a quiet NaN as "nan". Both begin "nan" after the
@@ -318,7 +335,7 @@ TEST_CASE("DAttackRadial.EveryBranchLineIsVerboseOnly", "[DAttack][RadialAimLog]
     for (const Row& row : rows)
     {
         const std::vector<std::string> lines = captureRadialLines(
-            0.f, glm::vec3(0.f, 0.f, 1.f), row.icSeq, row.stSeq, row.timer);
+            0.f, kTurnAxis, row.icSeq, row.stSeq, row.timer);
 
         std::size_t branchLines = 0, expectedHits = 0, otherRadialLines = 0;
         for (const std::string& line : lines)

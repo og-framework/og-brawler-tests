@@ -1173,11 +1173,11 @@ namespace
     simulatableBrawler::PlayerInput richCapture()
     {
         simulatableBrawler::PlayerInput input = simulatableBrawler::getZeroPlayerInput();
-        input.aimDirection       = glm::vec3(0.6f, 0.f, 0.8f);
+        input.aimDirection       = glm::vec3(0.f, 0.8f, -0.6f);
         input.attackLeft         = true;
         input.attackRight        = true;
         input.moveStick          = glm::vec2(0.3f, -0.7f);
-        input.moveDirectionWorld = glm::vec3(0.3f, 0.f, -0.7f);
+        input.moveDirectionWorld = glm::vec3(0.f, -0.7f, -0.3f);
         input.triggeredActionId  = 9u;
         input.flags              = brawlerMovementSimulation::kInputFlagHoldGuard;
         return input;

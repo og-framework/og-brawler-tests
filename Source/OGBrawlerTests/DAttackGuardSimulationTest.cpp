@@ -33,6 +33,7 @@
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -128,12 +129,13 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 static constexpr float    kDt              = 1.f / 60.f;
 static constexpr uint32_t kOwnBodyValue    = 0u;
 static constexpr uint32_t kParentBodyValue = 1u;
-static const     glm::vec3 kAttachOffset   { 0.f, 0.f, 30.f };
-static const     glm::vec3 kParentPos      { 100.f, -250.f, 7.f };
+static constexpr glm::vec3 kAttachOffset   = glm::vec3(0.f, 0.3f, -0.f);
+static constexpr glm::vec3 kParentPos      = glm::vec3(-2.5f, 0.07f, -1.f);
 
 // Catch2's float comparison, at the tolerance the discriminating cases need. The
 // abs pin separates +/- 0.0099998, so 1e-4 is two orders of margin below the gap.
 static constexpr float kEps = 1e-4f;
+static constexpr float kPositionEps = 1e-6f;
 
 static dAttackGuardSimulation::RuntimeBindings makeBindings()
 {
@@ -165,7 +167,7 @@ static TickResult tick(const glm::vec3& aim,
 {
     using namespace dAttackGuardSimulation;
 
-    DAttackCircle circle{ 8u, 50.f, 100.f, 10.f, false, 1.f };
+    DAttackCircle circle{ 8u, 0.5f, 1.f, 0.1f, false, 1.f };
     StaticData    staticData{ circle };
     DerivedState  derived{};
 
@@ -206,7 +208,7 @@ static TickResult tick(const glm::vec3& aim,
     return r;
 }
 
-static glm::vec3 forwardOf(const TickResult& r) { return glm::vec3(r.bodyTransform[0]); }
+static glm::vec3 forwardOf(const TickResult& r) { return simFrame::forwardColumn(r.bodyTransform); }
 static glm::vec3 originOf (const TickResult& r) { return glm::vec3(r.bodyTransform[3]); }
 
 } // namespace dattackguardtests
@@ -229,10 +231,10 @@ TEST_CASE("DAttackGuard.FacesTheFourCardinalAims", "[DAttack][DAttackGuardSimula
 
     struct Row { const char* name; glm::vec3 aim; };
     const Row rows[] = {
-        { "+X (forward, the aimEqualsForward degenerate branch)", glm::vec3( 1.f,  0.f, 0.f) },
-        { "+Y (left)",                                           glm::vec3( 0.f,  1.f, 0.f) },
-        { "-X (backward, the ANTIPARALLEL degenerate branch)",    glm::vec3(-1.f,  0.f, 0.f) },
-        { "-Y (right)",                                          glm::vec3( 0.f, -1.f, 0.f) },
+        { "+X (forward, the aimEqualsForward degenerate branch)", glm::vec3(0.f, 0.f, -1.f) },
+        { "+Y (left)",                                           glm::vec3(1.f, 0.f, -0.f) },
+        { "-X (backward, the ANTIPARALLEL degenerate branch)",    glm::vec3(0.f, 0.f, 1.f) },
+        { "-Y (right)",                                          glm::vec3(-1.f, 0.f, -0.f) },
     };
 
     for (const Row& row : rows)
@@ -241,15 +243,15 @@ TEST_CASE("DAttackGuard.FacesTheFourCardinalAims", "[DAttack][DAttackGuardSimula
         const TickResult r = tick(row.aim);
         const glm::vec3 fwd = forwardOf(r);
 
-        REQUIRE(fwd.x == Catch::Approx(row.aim.x).margin(kEps));
-        REQUIRE(fwd.y == Catch::Approx(row.aim.y).margin(kEps));
-        REQUIRE(fwd.z == Catch::Approx(0.f).margin(kEps));
+        REQUIRE(simFrame::forwardRight(fwd).x == Catch::Approx(simFrame::forwardRight(row.aim).x).margin(kEps));
+        REQUIRE(simFrame::forwardRight(fwd).y == Catch::Approx(simFrame::forwardRight(row.aim).y).margin(kEps));
+        REQUIRE(simFrame::height(fwd) == Catch::Approx(0.f).margin(kEps));
 
         // ...and the body sat where the attachment says, in the same tick.
         const glm::vec3 origin = originOf(r);
-        REQUIRE(origin.x == Catch::Approx(kParentPos.x + kAttachOffset.x).margin(kEps));
-        REQUIRE(origin.y == Catch::Approx(kParentPos.y + kAttachOffset.y).margin(kEps));
-        REQUIRE(origin.z == Catch::Approx(kParentPos.z + kAttachOffset.z).margin(kEps));
+        REQUIRE(origin.x == Catch::Approx(kParentPos.x + kAttachOffset.x).margin(kPositionEps));
+        REQUIRE(origin.y == Catch::Approx(kParentPos.y + kAttachOffset.y).margin(kPositionEps));
+        REQUIRE(origin.z == Catch::Approx(kParentPos.z + kAttachOffset.z).margin(kPositionEps));
     }
 }
 
@@ -262,14 +264,14 @@ TEST_CASE("DAttackGuard.FacesTheFourCardinalAims", "[DAttack][DAttackGuardSimula
 // `aimEqualsForward` test is the guard against exactly that, and `acos` returning
 // an UNSIGNED angle is why testing |aimDot| (rather than aimDot) is correct:
 // at the antiparallel pole the angle is pi and any axis in the XY plane's normal
-// gives the same result, so `defaultUp` is a legitimate substitute.
+// gives the same result, so `turnAxis` is a legitimate substitute.
 // ===========================================================================
 
 TEST_CASE("DAttackGuard.DegenerateAimsNeverProduceNaN", "[DAttack][DAttackGuardSimulation]")
 {
     using namespace dattackguardtests;
 
-    for (const glm::vec3 aim : { glm::vec3(1.f, 0.f, 0.f), glm::vec3(-1.f, 0.f, 0.f) })
+    for (const glm::vec3 aim : { glm::vec3(0.f, 0.f, -1.f), glm::vec3(0.f, 0.f, 1.f) })
     {
         INFO("aim = (" << aim.x << ", " << aim.y << ", " << aim.z << ")");
         const TickResult r = tick(aim);
@@ -277,7 +279,7 @@ TEST_CASE("DAttackGuard.DegenerateAimsNeverProduceNaN", "[DAttack][DAttackGuardS
         REQUIRE(std::isfinite(fwd.x));
         REQUIRE(std::isfinite(fwd.y));
         REQUIRE(std::isfinite(fwd.z));
-        REQUIRE(fwd.x == Catch::Approx(aim.x).margin(kEps));
+        REQUIRE(simFrame::forwardRight(fwd).x == Catch::Approx(simFrame::forwardRight(aim).x).margin(kEps));
     }
 }
 
@@ -291,8 +293,8 @@ TEST_CASE("DAttackGuard.ZeroAimFallsBackToDefaultForward", "[DAttack][DAttackGua
     const TickResult r = tick(glm::vec3(0.f));
     const glm::vec3 fwd = forwardOf(r);
     REQUIRE(std::isfinite(fwd.x));
-    REQUIRE(fwd.x == Catch::Approx(1.f).margin(kEps));
-    REQUIRE(fwd.y == Catch::Approx(0.f).margin(kEps));
+    REQUIRE(simFrame::forwardRight(fwd).x == Catch::Approx(1.f).margin(kEps));
+    REQUIRE(simFrame::forwardRight(fwd).y == Catch::Approx(0.f).margin(kEps));
 }
 
 // ===========================================================================
@@ -310,7 +312,7 @@ TEST_CASE("DAttackGuard.ZeroAimFallsBackToDefaultForward", "[DAttack][DAttackGua
 //
 // ⭐ THE ONLY OBSERVABLE DIFFERENCE IS INSIDE THAT BAND, so that is where this
 // case aims. |aimDot| > 0.9999 means an aim within ~0.81 degrees of +/-X:
-//   * float overload -> the band is live -> axis = defaultUp (+Z), and the sign
+//   * float overload -> the band is live -> axis = turnAxis, and the sign
 //     of cross(+X, aim) is NOT consulted, so the tiny residual angle comes back
 //     with acos's UNSIGNED sign: forward.y is POSITIVE for a negative-y aim.
 //   * int overload   -> the band is dead -> axis = normalize(cross(+X, aim)) =
@@ -326,7 +328,7 @@ TEST_CASE("DAttackGuard.ZeroAimFallsBackToDefaultForward", "[DAttack][DAttackGua
 //
 // ⚠ NON-DISCRIMINATING BY CONSTRUCTION, stated so nobody adds one and thinks it
 // strengthens the case: a POSITIVE-y near-pole aim gives forward.y = +0.0099998
-// under BOTH overloads (the cross product is +Z there, which is defaultUp). Only
+// under BOTH overloads (the cross product is turnAxis there). Only
 // the negative-y arms below can tell the two apart.
 // ===========================================================================
 
@@ -342,20 +344,20 @@ TEST_CASE("DAttackGuard.NearPoleAimTakesTheEpsilonBandBranch", "[DAttack][DAttac
 
     SECTION("0.01 rad off +X, with NEGATIVE y")
     {
-        const TickResult r = tick(glm::vec3(c, -s, 0.f));
+        const TickResult r = tick(glm::vec3(-s, 0.f, -c));
         const glm::vec3 fwd = forwardOf(r);
-        INFO("forward.y = " << fwd.y << " (float overload: +" << s
+        INFO("forward.y = " << simFrame::forwardRight(fwd).y << " (float overload: +" << s
              << ", int overload: -" << s << ")");
-        REQUIRE(fwd.y == Catch::Approx(+s).margin(kEps));
+        REQUIRE(simFrame::forwardRight(fwd).y == Catch::Approx(+s).margin(kEps));
     }
 
     SECTION("0.01 rad off -X, with NEGATIVE y")
     {
-        const TickResult r = tick(glm::vec3(-c, -s, 0.f));
+        const TickResult r = tick(glm::vec3(-s, 0.f, c));
         const glm::vec3 fwd = forwardOf(r);
-        INFO("forward.y = " << fwd.y << " (float overload: +" << s
+        INFO("forward.y = " << simFrame::forwardRight(fwd).y << " (float overload: +" << s
              << ", int overload: -" << s << ")");
-        REQUIRE(fwd.y == Catch::Approx(+s).margin(kEps));
+        REQUIRE(simFrame::forwardRight(fwd).y == Catch::Approx(+s).margin(kEps));
     }
 }
 
@@ -375,7 +377,7 @@ TEST_CASE("DAttackGuard.WritesTheBodyTransformExactlyOnce", "[DAttack][DAttackGu
 {
     using namespace dattackguardtests;
 
-    const TickResult idle = tick(glm::vec3(0.f, 1.f, 0.f), DAttackState::Idle);
+    const TickResult idle = tick(glm::vec3(1.f, 0.f, -0.f), DAttackState::Idle);
     INFO("idle: ownGets=" << idle.ownGets << " parentGets=" << idle.parentGets
          << " ownSets=" << idle.ownSets);
     REQUIRE(idle.ownSets    == 1);
@@ -385,7 +387,7 @@ TEST_CASE("DAttackGuard.WritesTheBodyTransformExactlyOnce", "[DAttack][DAttackGu
     // The non-Idle tick too. The shapes are disabled on that tick, so nothing can
     // QUERY the guard — but the body must still follow the parent, because the
     // first Idle tick after an attack reads this pose through the adapter.
-    const TickResult attacking = tick(glm::vec3(0.f, 1.f, 0.f), DAttackState::Attacking);
+    const TickResult attacking = tick(glm::vec3(1.f, 0.f, -0.f), DAttackState::Attacking);
     INFO("attacking: ownGets=" << attacking.ownGets << " parentGets=" << attacking.parentGets
          << " ownSets=" << attacking.ownSets);
     REQUIRE(attacking.ownSets    == 1);
@@ -404,11 +406,11 @@ TEST_CASE("DAttackGuard.BodyFollowsTheParentInEveryMachineState", "[DAttack][DAt
                                    DAttackState::GuardFlinch, DAttackState::HitFlinch })
     {
         INFO("machine state ordinal = " << static_cast<int>(ms));
-        const TickResult r = tick(glm::vec3(1.f, 0.f, 0.f), ms);
+        const TickResult r = tick(glm::vec3(0.f, 0.f, -1.f), ms);
         const glm::vec3 origin = originOf(r);
-        REQUIRE(origin.x == Catch::Approx(kParentPos.x + kAttachOffset.x).margin(kEps));
-        REQUIRE(origin.y == Catch::Approx(kParentPos.y + kAttachOffset.y).margin(kEps));
-        REQUIRE(origin.z == Catch::Approx(kParentPos.z + kAttachOffset.z).margin(kEps));
+        REQUIRE(origin.x == Catch::Approx(kParentPos.x + kAttachOffset.x).margin(kPositionEps));
+        REQUIRE(origin.y == Catch::Approx(kParentPos.y + kAttachOffset.y).margin(kPositionEps));
+        REQUIRE(origin.z == Catch::Approx(kParentPos.z + kAttachOffset.z).margin(kPositionEps));
     }
 }
 
@@ -425,7 +427,7 @@ TEST_CASE("DAttackGuard.ShapesToggleEveryTickFromTheMachineState", "[DAttack][DA
 {
     using namespace dattackguardtests;
 
-    const TickResult idle = tick(glm::vec3(1.f, 0.f, 0.f), DAttackState::Idle);
+    const TickResult idle = tick(glm::vec3(0.f, 0.f, -1.f), DAttackState::Idle);
     REQUIRE(idle.enabled.size()  == 1u);
     REQUIRE(idle.disabled.empty());
 
@@ -433,7 +435,7 @@ TEST_CASE("DAttackGuard.ShapesToggleEveryTickFromTheMachineState", "[DAttack][DA
                                    DAttackState::HitFlinch })
     {
         INFO("machine state ordinal = " << static_cast<int>(ms));
-        const TickResult r = tick(glm::vec3(1.f, 0.f, 0.f), ms);
+        const TickResult r = tick(glm::vec3(0.f, 0.f, -1.f), ms);
         REQUIRE(r.disabled.size() == 1u);
         REQUIRE(r.enabled.empty());
     }
@@ -468,15 +470,15 @@ TEST_CASE("DAttackGuard.TransientBodyStateMatchesTheWrittenTransform", "[DAttack
 
     // integrate keeps the transient in step with the transform it just wrote, so
     // the visualization and the post-solve capture cannot disagree WITHIN a tick.
-    const TickResult r = tick(glm::vec3(0.f, -1.f, 0.f));
+    const TickResult r = tick(glm::vec3(-1.f, 0.f, -0.f));
 
     const glm::vec3 origin = originOf(r);
-    REQUIRE(r.state.bodyState.position.x == Catch::Approx(origin.x).margin(kEps));
-    REQUIRE(r.state.bodyState.position.y == Catch::Approx(origin.y).margin(kEps));
-    REQUIRE(r.state.bodyState.position.z == Catch::Approx(origin.z).margin(kEps));
+    REQUIRE(r.state.bodyState.position.x == Catch::Approx(origin.x).margin(kPositionEps));
+    REQUIRE(r.state.bodyState.position.y == Catch::Approx(origin.y).margin(kPositionEps));
+    REQUIRE(r.state.bodyState.position.z == Catch::Approx(origin.z).margin(kPositionEps));
 
     const glm::vec3 fwdFromTransform = forwardOf(r);
-    const glm::vec3 fwdFromTransient = glm::mat3_cast(r.state.bodyState.rotation) * glm::vec3(1.f, 0.f, 0.f);
+    const glm::vec3 fwdFromTransient = glm::mat3_cast(r.state.bodyState.rotation) * glm::vec3(0.f, 0.f, -1.f);
     REQUIRE(fwdFromTransient.x == Catch::Approx(fwdFromTransform.x).margin(kEps));
     REQUIRE(fwdFromTransient.y == Catch::Approx(fwdFromTransform.y).margin(kEps));
     REQUIRE(fwdFromTransient.z == Catch::Approx(fwdFromTransform.z).margin(kEps));

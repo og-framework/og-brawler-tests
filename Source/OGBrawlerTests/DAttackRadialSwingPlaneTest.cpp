@@ -16,6 +16,7 @@
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
@@ -33,7 +34,8 @@
 // and `lengthAlongRotationAxis` is `glm::abs(dot(hitDirection, axis))`. A projection
 // needs the SIGNED dot. For a hit ABOVE the plane the two agree, so the line looked
 // correct forever; for a hit BELOW it the axial component is DOUBLED AWAY from the
-// plane instead of removed — (75, 0, -35) became (75, 0, -70), not (75, 0, 0).
+// plane instead of removed — a hit 0.75 m out and 0.35 m below the plane was projected 0.7 m below
+// it, not onto it.
 //
 // `hitDistance` is therefore inflated for below-plane hits only, and it gates BOTH ends
 // of the annulus (`> innerRadius && < outerRadius`), so the strike zone below the plane
@@ -101,14 +103,14 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 // choices hold everything except the projection constant (they are the same choices
 // task 32's radial rig makes, for the same reasons):
 //
-//   * the sequence rotation axis is defaultUp() (+Z) and initialAimAngle is 0 about +Z,
-//     so the initial rotation is the identity and
-//         glm::dot(hitDirection, worldSequenceRotationAxis) == hitDirection.z
-//     exactly. The site under test reduces to arithmetic on `hitZ`.
+//   * the sequence rotation axis is turnAxis() (`simFrame::kTurnAxis`, -Y) and initialAimAngle is 0
+//     about it, so the initial rotation is the identity and
+//         glm::dot(hitDirection, worldSequenceRotationAxis) == -hitDirection.y
+//     exactly. The site under test reduces to arithmetic on `hitHeight`.
 //   * the ONE segment spans [0, 7) rad — wider than a full turn — so every direction
 //     resolves to segment 0 / Damaging. The segment lookup cannot become a second,
 //     uncontrolled discriminator. (It would otherwise be one: the projection's z-skew
-//     leaves `glm::normalize(hitDirectionOnRotationPlane)` with a non-unit XY part, and
+//     leaves `glm::normalize(hitDirectionOnRotationPlane)` with a non-unit horizontal part, and
 //     `glm::orientedAngle` on a non-unit operand reports a bogus angle.)
 //   * `rootTranslation` is the origin — `integrate`'s attachment block sets the own body
 //     to parentPosition + attachmentOffset, both zero — so `hitDirection` IS the hit's
@@ -122,7 +124,7 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 // ===========================================================================
 
 static std::size_t radialBodyHits(float planarX,
-                                    float hitZ,
+                                    float hitHeight,
                                     float halfThickness,
                                     float innerRadius,
                                     float outerRadius)
@@ -135,7 +137,7 @@ static std::size_t radialBodyHits(float planarX,
             { 0.0f, 0.0f, DAttackRadialSequenceState::Damaging },
             { 0.2f, 7.0f, DAttackRadialSequenceState::Idle } },
         0.1f,
-        DAttackRadialSequence::defaultUp());
+        DAttackRadialSequence::turnAxis());
 
     // DAttackCircle takes THICKNESS; the sim gates on getHalfThickness().
     DAttackCircle circle(8u, innerRadius, outerRadius, halfThickness * 2.f, false, 1.f);
@@ -143,7 +145,7 @@ static std::size_t radialBodyHits(float planarX,
 
     InitialConditions ic{};
     ic.initialAimAngle        = 0.f;
-    ic.initialAimRotationAxis = glm::vec3(0.f, 0.f, 1.f);
+    ic.initialAimRotationAxis = glm::vec3(-0.f, -1.f, 0.f);
     ic.activeAttackSequence   = 0u;
 
     State st{};
@@ -158,7 +160,7 @@ static std::size_t radialBodyHits(float planarX,
     MockPhysicsAdapter physics{ 2 };            // 0 = weapon (own), 1 = capsule (parent)
     MockSpatialQueryAdapter query{};
     SpatialQueryHit hit{};
-    hit.objectPosition   = glm::vec3(planarX, 0.f, hitZ);
+    hit.objectPosition   = glm::vec3(0.f, hitHeight, -planarX);
     hit.bodyId           = BodyId{ 5u };
     hit.rootBodyId       = BodyId{ 5u };
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -196,18 +198,19 @@ static std::size_t radialBodyHits(float planarX,
 // that still admits the hit IS `hitDistance`. Bisecting on the outer radius therefore
 // reads the quantity the acceptance criterion is about, rather than a proxy for it.
 //
-// The inner radius is held at 0.5 cm so the `> innerRadius` half of the gate is
-// satisfied for every distance considered here (all are >= 45 cm) and the bisection
-// measures the OUTER threshold alone. 40 iterations over [0.5, 512] resolve to ~5e-13.
+// The inner radius is held at 0.005 m so the `> innerRadius` half of the gate is
+// satisfied for every distance considered here (all are >= 0.45 m) and the bisection
+// measures the OUTER threshold alone. 40 iterations halve [0.005, 5.12] to ~4.7e-12, below
+// float resolution at 0.75 m (~6e-8), so the bisection ends on the float threshold itself.
 // ---------------------------------------------------------------------------
-static float measureHitDistance(float planarX, float hitZ, float halfThickness)
+static float measureHitDistance(float planarX, float hitHeight, float halfThickness)
 {
-    float lo = 0.5f;      // no hit at this outer radius (distance is always >= 45)
-    float hi = 512.f;     // hit at this outer radius
+    float lo = 0.005f;    // no hit at this outer radius (distance is always >= 0.45)
+    float hi = 5.12f;     // hit at this outer radius
     for (int i = 0; i < 40; ++i)
     {
         const float mid = 0.5f * (lo + hi);
-        if (radialBodyHits(planarX, hitZ, halfThickness, /*innerRadius*/ 0.5f, mid) == 1u)
+        if (radialBodyHits(planarX, hitHeight, halfThickness, /*innerRadius*/ 0.005f, mid) == 1u)
             hi = mid;
         else
             lo = mid;
@@ -220,12 +223,12 @@ static float measureHitDistance(float planarX, float hitZ, float halfThickness)
 // ===========================================================================
 // ⭐ 1. THE ACCEPTANCE CRITERION, MEASURED DIRECTLY.
 //
-// Two hits that are exact mirror images through the swing plane — (75, 0, +35) and
-// (75, 0, -35), both comfortably inside a 40 cm half-thickness — must be the same
+// Two hits that are exact mirror images through the swing plane — 0.75 m out and 0.35 m
+// above or below it, both comfortably inside a 0.4 m half-thickness — must be the same
 // distance from the swing AXIS, because reflecting a point through the plane cannot
-// change how far it is from the axis lying in that plane. Both are 75 cm out.
+// change how far it is from the axis lying in that plane. Both are 0.75 m out.
 //
-// PRE-FIX (measured, 2026-09-04):
+// PRE-FIX (measured, 2026-09-04, when the sim ran in centimetres):
 //     above =  75.0000   below = 102.5914     <- sqrt(75^2 + 70^2); the axial component
 //                                                was doubled away instead of removed
 // POST-FIX:
@@ -241,32 +244,32 @@ TEST_CASE("DAttackRadial.MirroredHitsAreTheSameDistanceFromTheSwingAxis",
 {
     using namespace dattackradialswingplanetests;
 
-    const float above = measureHitDistance(/*planarX*/ 75.f, /*hitZ*/ +35.f, /*halfThickness*/ 40.f);
-    const float below = measureHitDistance(/*planarX*/ 75.f, /*hitZ*/ -35.f, /*halfThickness*/ 40.f);
+    const float above = measureHitDistance(/*planarX*/ 0.75f, /*hitHeight*/ +0.35f, /*halfThickness*/ 0.4f);
+    const float below = measureHitDistance(/*planarX*/ 0.75f, /*hitHeight*/ -0.35f, /*halfThickness*/ 0.4f);
 
     INFO("above = " << above << ", below = " << below
-         << "  (pre-fix: 75.0 vs 102.5914 — the below-plane hit reads 36.8% further out)");
+         << "  (pre-fix: 0.75 vs 1.025914 m — the below-plane hit reads 36.8% further out)");
 
-    REQUIRE(above == Catch::Approx(below).margin(1e-3f));
-    REQUIRE(above == Catch::Approx(75.f).margin(1e-3f));
-    REQUIRE(below == Catch::Approx(75.f).margin(1e-3f));
+    REQUIRE(above == Catch::Approx(below).margin(1e-5f));
+    REQUIRE(above == Catch::Approx(0.75f).margin(1e-5f));
+    REQUIRE(below == Catch::Approx(0.75f).margin(1e-5f));
 }
 
 // ===========================================================================
 // ⭐ 2. THE SAME DEFECT AS THE GAMEPLAY OBSERVABLE — a hit count, 0 vs 1.
 //
 // The bisection above is the precise statement; this case is the one a designer would
-// recognise. Annulus 50..100 cm, half-thickness 40 cm, so a hit 35 cm off the plane is
+// recognise. Annulus 0.5..1 m, half-thickness 0.4 m, so a hit 0.35 m off the plane is
 // well inside the disc and the ONLY thing deciding it is the radius gate.
 //
-//   OUTWARD REACH — (75, 0, ±35), true distance 75, inside 50..100:
+//   OUTWARD REACH — 0.75 m out, ±0.35 m, true distance 0.75, inside 0.5..1:
 //       above: 1 hit before and after.
-//       below: pre-fix distance 102.59 > 100 -> 0 hits. The swing MISSED a body it
+//       below: pre-fix distance 1.0259 > 1 -> 0 hits. The swing MISSED a body it
 //              plainly overlapped. Post-fix: 1 hit.
 //
-//   INWARD PHANTOM — (45, 0, ±20), true distance 45, INSIDE the 50 cm inner hole:
+//   INWARD PHANTOM — 0.45 m out, ±0.2 m, true distance 0.45, INSIDE the 0.5 m inner hole:
 //       above: 0 hits before and after (correctly ignored).
-//       below: pre-fix distance sqrt(45^2 + 40^2) = 60.21, which lands inside the
+//       below: pre-fix distance sqrt(0.45^2 + 0.4^2) = 0.6021, which lands inside the
 //              annulus -> 1 PHANTOM hit on a body the swing passes around. Post-fix: 0.
 //
 // The two arms fail in OPPOSITE directions, which is why both are here: a "fix" that
@@ -283,31 +286,31 @@ TEST_CASE("DAttackRadial.SwingReachIsSymmetricAboveAndBelowThePlane",
         // Not discriminating, and not meant to be: it exists so that a 0 below cannot be
         // read as a rig that never records anything (which is what an un-cleared
         // DerivedState gives — see the header note).
-        REQUIRE(radialBodyHits(75.f, 0.f, 40.f, 50.f, 100.f) == 1u);
+        REQUIRE(radialBodyHits(0.75f, 0.f, 0.4f, 0.5f, 1.f) == 1u);
     }
 
     SECTION("OUTWARD REACH — 35 cm ABOVE the plane, 75 cm out: hit")
     {
         // Green before AND after. Paired with the arm below, it localises the defect to
         // the below-plane case rather than to the fixture.
-        REQUIRE(radialBodyHits(75.f, +35.f, 40.f, 50.f, 100.f) == 1u);
+        REQUIRE(radialBodyHits(0.75f, +0.35f, 0.4f, 0.5f, 1.f) == 1u);
     }
 
     SECTION("OUTWARD REACH — 35 cm BELOW the plane, 75 cm out: hit (was a MISS)")
     {
-        INFO("pre-fix: 0 hits — hitDistance read 102.59 against a 100 cm outer radius");
-        REQUIRE(radialBodyHits(75.f, -35.f, 40.f, 50.f, 100.f) == 1u);
+        INFO("pre-fix: 0 hits — hitDistance read 1.0259 against a 1 m outer radius");
+        REQUIRE(radialBodyHits(0.75f, -0.35f, 0.4f, 0.5f, 1.f) == 1u);
     }
 
     SECTION("INWARD HOLE — 20 cm ABOVE the plane, 45 cm out: no hit")
     {
-        REQUIRE(radialBodyHits(45.f, +20.f, 40.f, 50.f, 100.f) == 0u);
+        REQUIRE(radialBodyHits(0.45f, +0.2f, 0.4f, 0.5f, 1.f) == 0u);
     }
 
     SECTION("INWARD HOLE — 20 cm BELOW the plane, 45 cm out: no hit (was a PHANTOM hit)")
     {
-        INFO("pre-fix: 1 hit — hitDistance read 60.21, inside the 50..100 annulus");
-        REQUIRE(radialBodyHits(45.f, -20.f, 40.f, 50.f, 100.f) == 0u);
+        INFO("pre-fix: 1 hit — hitDistance read 0.6021, inside the 0.5..1 annulus");
+        REQUIRE(radialBodyHits(0.45f, -0.2f, 0.4f, 0.5f, 1.f) == 0u);
     }
 }
 
@@ -320,13 +323,13 @@ TEST_CASE("DAttackRadial.SwingReachIsSymmetricAboveAndBelowThePlane",
 // value for the projection and left the gate's operand alone.
 //
 // This case is the proof, and it is the one arm here that was GREEN BEFORE THE FIX AND
-// IS GREEN AFTER — deliberately. Its four arms are a mirrored pair straddling a 5.5 cm
+// IS GREEN AFTER — deliberately. Its four arms are a mirrored pair straddling a 0.055 m
 // half-thickness, so they are only all satisfied if the gate compares MAGNITUDES:
 //   * had the gate been switched to the signed value, every hit BELOW the plane would
-//     pass it (a negative is less than any positive half-thickness) and the -5.7 arm
+//     pass it (a negative is less than any positive half-thickness) and the -0.057 arm
 //     would go red;
-//   * had the abs been dropped from both, -5.3 and -5.7 would both register.
-// The annulus is 50..100 with the hit 75 cm out, so the radius gate is satisfied on
+//   * had the abs been dropped from both, -0.053 and -0.057 would both register.
+// The annulus is 0.5..1 with the hit 0.75 m out, so the radius gate is satisfied on
 // every arm and the thickness gate is the sole discriminator.
 // ===========================================================================
 
@@ -335,14 +338,14 @@ TEST_CASE("DAttackRadial.SwingPlaneHalfThicknessGateStaysUnsigned",
 {
     using namespace dattackradialswingplanetests;
 
-    // 5.3 cm from the plane, half-thickness 5.5 — inside the disc on both sides.
-    REQUIRE(radialBodyHits(75.f, +5.3f, 5.5f, 50.f, 100.f) == 1u);
-    REQUIRE(radialBodyHits(75.f, -5.3f, 5.5f, 50.f, 100.f) == 1u);
+    // 0.053 m from the plane, half-thickness 0.055 — inside the disc on both sides.
+    REQUIRE(radialBodyHits(0.75f, +0.053000003f, 0.055f, 0.5f, 1.f) == 1u);
+    REQUIRE(radialBodyHits(0.75f, -0.053000003f, 0.055f, 0.5f, 1.f) == 1u);
 
-    // 5.7 cm from the plane — outside the disc on both sides. The negative arm is the
+    // 0.057 m from the plane — outside the disc on both sides. The negative arm is the
     // one that goes red if the gate is ever handed the signed value.
-    REQUIRE(radialBodyHits(75.f, +5.7f, 5.5f, 50.f, 100.f) == 0u);
-    REQUIRE(radialBodyHits(75.f, -5.7f, 5.5f, 50.f, 100.f) == 0u);
+    REQUIRE(radialBodyHits(0.75f, +0.056999996f, 0.055f, 0.5f, 1.f) == 0u);
+    REQUIRE(radialBodyHits(0.75f, -0.056999996f, 0.055f, 0.5f, 1.f) == 0u);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

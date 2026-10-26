@@ -22,6 +22,7 @@
 
 #include "OGBrawler/BrawlerInputHistoryVisualization.h"
 #include "OGBrawler/InputSequence/InputSequence.h"
+#include "OGSimulation/SimulationFrame.h"
 
 namespace inputhistoryviztests
 {
@@ -34,7 +35,7 @@ using brawlerInputHistoryVisualization::nearestNamedDirection;
 // atomic: the header takes the deadzone as an argument so tests need no global.
 constexpr float kDeadzone = 0.15f;
 
-constexpr glm::vec3 kAimPlusX(1.f, 0.f, 0.f);
+constexpr glm::vec3 kAimPlusX = glm::vec3(0.f, 0.f, -1.f);
 
 // Just inside a sector edge -- half a sector, backed off by a margin far wider
 // than any float rounding in atan2.
@@ -45,7 +46,7 @@ constexpr float kInsideEdge = inputSequence::pi / 8.f - 0.01f;
 // world axes that perpendicular is the character's LEFT, so the angle grows leftward.
 static glm::vec2 stickAt(float aimRelativeRadians, glm::vec3 aim = kAimPlusX)
 {
-	const glm::vec2 fwd = glm::normalize(glm::vec2(aim.x, aim.y));
+	const glm::vec2 fwd = glm::normalize(simFrame::forwardRight(aim));
 	const glm::vec2 right(fwd.y, -fwd.x);
 	return std::cos(aimRelativeRadians) * fwd + std::sin(aimRelativeRadians) * right;
 }
@@ -153,9 +154,9 @@ TEST_CASE("InputHistoryViz.DirectionBucket.DegenerateReferenceForwardIsNeutral",
 
 	const glm::vec2 fullStick(1.f, 0.f);
 
-	CHECK(directionBucketOf(fullStick, glm::vec3(0.f, 0.f, 1.f), kDeadzone) == DirectionBucket::Neutral);
+	CHECK(directionBucketOf(fullStick, glm::vec3(0.f, 1.f, -0.f), kDeadzone) == DirectionBucket::Neutral);
 	CHECK(directionBucketOf(fullStick, glm::vec3(0.f, 0.f, 0.f), kDeadzone) == DirectionBucket::Neutral);
-	CHECK(directionBucketOf(fullStick, glm::vec3(1e-9f, 1e-9f, 1.f), kDeadzone) == DirectionBucket::Neutral);
+	CHECK(directionBucketOf(fullStick, glm::vec3(1e-9f, 1.f, -1e-9f), kDeadzone) == DirectionBucket::Neutral);
 }
 
 // ---------------------------------------------------------------------------
@@ -169,15 +170,15 @@ TEST_CASE("InputHistoryViz.DirectionBucket.BucketsAreAimRelativeNotWorldFrame",
 	namespace angle = inputSequence::angle;
 
 	// One relative angle, four unrelated aims, one answer.
-	CHECK(bucketAt(angle::DownForward, glm::vec3( 1.f,  0.f, 0.f)) == DirectionBucket::ForwardLeft);
-	CHECK(bucketAt(angle::DownForward, glm::vec3( 0.f,  1.f, 0.f)) == DirectionBucket::ForwardLeft);
-	CHECK(bucketAt(angle::DownForward, glm::vec3(-1.f,  0.f, 0.f)) == DirectionBucket::ForwardLeft);
-	CHECK(bucketAt(angle::DownForward, glm::vec3( 0.6f, -0.8f, 0.f)) == DirectionBucket::ForwardLeft);
+	CHECK(bucketAt(angle::DownForward, glm::vec3(0.f, 0.f, -1.f)) == DirectionBucket::ForwardLeft);
+	CHECK(bucketAt(angle::DownForward, glm::vec3(1.f, 0.f, -0.f)) == DirectionBucket::ForwardLeft);
+	CHECK(bucketAt(angle::DownForward, glm::vec3(0.f, 0.f, 1.f)) == DirectionBucket::ForwardLeft);
+	CHECK(bucketAt(angle::DownForward, glm::vec3(-0.8f, 0.f, -0.6f)) == DirectionBucket::ForwardLeft);
 
 	// One WORLD stick, two aims, two answers.
 	const glm::vec2 worldPlusX(1.f, 0.f);
-	CHECK(directionBucketOf(worldPlusX, glm::vec3(1.f, 0.f, 0.f), kDeadzone) == DirectionBucket::Forward);
-	CHECK(directionBucketOf(worldPlusX, glm::vec3(0.f, 1.f, 0.f), kDeadzone) == DirectionBucket::Left);
+	CHECK(directionBucketOf(worldPlusX, glm::vec3(0.f, 0.f, -1.f), kDeadzone) == DirectionBucket::Forward);
+	CHECK(directionBucketOf(worldPlusX, glm::vec3(1.f, 0.f, -0.f), kDeadzone) == DirectionBucket::Left);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

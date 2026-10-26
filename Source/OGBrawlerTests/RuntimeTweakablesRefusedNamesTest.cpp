@@ -230,35 +230,35 @@ TEST_CASE("The movement StaticData's five one-time parameters default to the aut
     const brawlerMovementSimulation::StaticData& sd = defaulted.m_movementStaticData;
 
     REQUIRE(sd.model == brawlerMovementSimulation::MovementModel::ContinuousAccelBrake); // ruling #10
-    REQUIRE(sd.maxWalkSpeed    == Catch::Approx(100.f));   // R-P1's one walk-speed literal
+    REQUIRE(sd.maxWalkSpeed    == Catch::Approx(1.f));   // R-P1's one walk-speed literal
     REQUIRE(sd.stepPeriodTicks == 20u);                    // 1/3 s at the 60 Hz sim clock
-    REQUIRE(sd.stepSpeed       == Catch::Approx(100.f));
-    REQUIRE(sd.gravity         == Catch::Approx(-980.f));  // NEGATIVE, world −Z
+    REQUIRE(sd.stepSpeed       == Catch::Approx(1.f));
+    REQUIRE(sd.gravity         == Catch::Approx(-9.8f));  // NEGATIVE, world −Z
 
     // And the values the task did NOT parameterise are still the authored ones beside them —
     // a positional constructor call is the classic place for an argument to shift by one.
-    REQUIRE(sd.acceleration        == Catch::Approx(2048.f));
-    REQUIRE(sd.brakingDeceleration == Catch::Approx(2000.f));
+    REQUIRE(sd.acceleration        == Catch::Approx(20.48f));
+    REQUIRE(sd.brakingDeceleration == Catch::Approx(20.f));
     REQUIRE(sd.maxSlopeAngleDeg    == Catch::Approx(45.f));
-    REQUIRE(sd.terminalFallSpeed   == Catch::Approx(2000.f));
-    REQUIRE(sd.rideHeight          == Catch::Approx(10.f));
-    REQUIRE(sd.snapDistance        == Catch::Approx(40.f));
+    REQUIRE(sd.terminalFallSpeed   == Catch::Approx(20.f));
+    REQUIRE(sd.rideHeight          == Catch::Approx(0.1f));
+    REQUIRE(sd.snapDistance        == Catch::Approx(0.4f));
 
     // ⭐ AND THE PARAMETERS ACTUALLY REACH THE SUB-SIM — a defaulted-parameter refactor that
     // forwards nothing would pass every assertion above. This is the only place in either suite
     // that passes anything, mirroring the manager's single call site.
     const simulatableBrawler::StaticData tuned(
-        brawlerMovementSimulation::MovementModel::Cadence, 200.f, 7u, 333.f, -500.f);
+        brawlerMovementSimulation::MovementModel::Cadence, 2.f, 7u, 3.33f, -5.f);
     REQUIRE(tuned.m_movementStaticData.model == brawlerMovementSimulation::MovementModel::Cadence);
-    REQUIRE(tuned.m_movementStaticData.maxWalkSpeed    == Catch::Approx(200.f));
+    REQUIRE(tuned.m_movementStaticData.maxWalkSpeed    == Catch::Approx(2.f));
     REQUIRE(tuned.m_movementStaticData.stepPeriodTicks == 7u);
-    REQUIRE(tuned.m_movementStaticData.stepSpeed       == Catch::Approx(333.f));
-    REQUIRE(tuned.m_movementStaticData.gravity         == Catch::Approx(-500.f));
+    REQUIRE(tuned.m_movementStaticData.stepSpeed       == Catch::Approx(3.33f));
+    REQUIRE(tuned.m_movementStaticData.gravity         == Catch::Approx(-5.f));
     // ⛔ …while everything NOT parameterised is untouched by the tuned call. This is the arm
     // that catches an argument shifted by one position in the forwarding list.
-    REQUIRE(tuned.m_movementStaticData.acceleration        == Catch::Approx(2048.f));
-    REQUIRE(tuned.m_movementStaticData.brakingDeceleration == Catch::Approx(2000.f));
-    REQUIRE(tuned.m_movementStaticData.terminalFallSpeed   == Catch::Approx(2000.f));
+    REQUIRE(tuned.m_movementStaticData.acceleration        == Catch::Approx(20.48f));
+    REQUIRE(tuned.m_movementStaticData.brakingDeceleration == Catch::Approx(20.f));
+    REQUIRE(tuned.m_movementStaticData.terminalFallSpeed   == Catch::Approx(20.f));
     REQUIRE(tuned.m_movementStaticData.hoverFrequency      == Catch::Approx(sd.hoverFrequency));
     REQUIRE(tuned.m_movementStaticData.capsuleRadius       == Catch::Approx(sd.capsuleRadius));
     REQUIRE(tuned.m_movementStaticData.capsuleHalfHeight   == Catch::Approx(sd.capsuleHalfHeight));

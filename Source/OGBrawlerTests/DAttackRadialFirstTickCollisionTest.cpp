@@ -17,6 +17,7 @@
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -194,10 +195,10 @@ struct FirstTickOutcome
 //     (0,-1,0) against aim (1,0,0) is a 90-degree SIDE case with a negative signed angle
 //     → sequence 0, which is the value `State::currenSequenceId` also defaults to. A zero
 //     stick classifies FORWARD → sequence 4 instead; both are exercised below.
-//   * The target sits at (targetX, 0, 0). The production attack circle is inner 90 /
-//     outer 300 / thickness 70, and the weapon is at the origin, so targetX 150 is inside
-//     the annulus and 0 cm off the swing plane — comfortably inside the 35 cm half
-//     thickness. targetX 500 is outside the outer radius; that is the negative control.
+//   * The target sits `targetX` metres forward of the weapon. The production attack circle is
+//     inner 0.9 / outer 3 / thickness 0.7 m, and the weapon is at the origin, so targetX 1.5 is
+//     inside the annulus and on the swing plane — comfortably inside the 0.35 m half
+//     thickness. targetX 5 is outside the outer radius; that is the negative control.
 //   * Production sequence 0 runs from -pi/2 to +3pi/8 over 0.6 s. The weapon never
 //     rotates in this rig (see the mock note), so the current direction stays at
 //     defaultForward, which lands in the segment starting at -pi/8: state Damaging.
@@ -222,14 +223,14 @@ static FirstTickOutcome runFirstTicks(int tickCount, float targetX, const glm::v
     MockSpatialQueryAdapter queryAdapter;
 
     SpatialQueryHit hit{};
-    hit.objectPosition   = glm::vec3(targetX, 0.f, 0.f);
+    hit.objectPosition   = glm::vec3(0.f, 0.f, -targetX);
     hit.bodyId           = BodyId{ kTargetRootBody };
     hit.rootBodyId       = BodyId{ kTargetRootBody };
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
     queryAdapter.report.hits.push_back(hit);
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
-    const glm::vec3 moveWorld(moveStick.x, moveStick.y, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
+    const glm::vec3 moveWorld = simFrame::fromForwardRight(moveStick, 0.f);
 
     const simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
         .aimDirection       = aim,
@@ -330,8 +331,8 @@ static SwingOutcome runSwing(int tickCount, glm::vec3 targetPosition,
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
     const SpatialQueryReport liveReport{ { hit } };
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
-    const glm::vec3 moveWorld(moveStick.x, moveStick.y, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
+    const glm::vec3 moveWorld = simFrame::fromForwardRight(moveStick, 0.f);
 
     const simulatableBrawler::PlayerInput input = brawlerTestInputs::make({
         .aimDirection       = aim,
@@ -416,7 +417,7 @@ TEST_CASE("DAttackRadial.FirstTickSwingRegistersHits", "[DAttack][HitDetection][
 {
     using namespace dattackradialfirstticktests;
 
-    const FirstTickOutcome out = runFirstTicks(/*tickCount*/ 1, /*targetX*/ 150.f,
+    const FirstTickOutcome out = runFirstTicks(/*tickCount*/ 1, /*targetX*/ 1.5f,
                                                /*moveStick*/ glm::vec2(0.f, -1.f));
 
     // --- the reaching path's premises, pinned so a future change that stops the path
@@ -456,7 +457,7 @@ TEST_CASE("DAttackRadial.FirstTickSwingRegistersHitsForwardSequence", "[DAttack]
 {
     using namespace dattackradialfirstticktests;
 
-    const FirstTickOutcome out = runFirstTicks(/*tickCount*/ 1, /*targetX*/ 150.f,
+    const FirstTickOutcome out = runFirstTicks(/*tickCount*/ 1, /*targetX*/ 1.5f,
                                                /*moveStick*/ glm::vec2(0.f, 0.f));
 
     INFO("machine seq = " << out.machineSequence << ", radial curSeq = " << out.radialSequenceId);
@@ -492,15 +493,15 @@ TEST_CASE("DAttackRadial.FirstSwingKeepsRegisteringForItsWholeDuration", "[DAtta
 
     SECTION("target inside the annulus — one hit, deduped across ten ticks")
     {
-        const FirstTickOutcome out = runFirstTicks(10, 150.f, glm::vec2(0.f, -1.f));
+        const FirstTickOutcome out = runFirstTicks(10, 1.5f, glm::vec2(0.f, -1.f));
         INFO("ledgerOnTarget = " << out.ledgerOnTarget << " (pre-fix: 0 for all ten ticks)");
         REQUIRE(out.ledgerOnTarget == 1u);
         REQUIRE(out.ledgerTotal == 1u);
     }
 
-    SECTION("NEGATIVE CONTROL — target 500 cm out, past the 300 cm outer radius")
+    SECTION("NEGATIVE CONTROL — target 5 m out, past the 3 m outer radius")
     {
-        const FirstTickOutcome out = runFirstTicks(10, 500.f, glm::vec2(0.f, -1.f));
+        const FirstTickOutcome out = runFirstTicks(10, 5.f, glm::vec2(0.f, -1.f));
         REQUIRE(out.ledgerOnTarget == 0u);
         // Post-fix the container is genuinely EMPTY, not "four phantoms and no real hit".
         REQUIRE(out.ledgerTotal == 0u);   // pre-fix: 4
@@ -562,7 +563,7 @@ TEST_CASE("DAttackRadial.SwingTangentIsOrthogonalToTheWeapon", "[DAttack][HitDet
     // enough off the axis of symmetry that a tangent built from the wrong operand order or
     // from the unprojected hit vector would not coincidentally land on the right answer.
     const float theta = glm::radians(15.f);
-    const glm::vec3 target(150.f * glm::cos(theta), 150.f * glm::sin(theta), 0.f);
+    const glm::vec3 target = glm::vec3(1.5f * glm::sin(theta), 0.f, -1.5f * glm::cos(theta));
 
     const SwingOutcome out = runSwing(/*tickCount*/ 24, target, /*moveStick*/ glm::vec2(0.f, -1.f));
 
@@ -612,7 +613,7 @@ TEST_CASE("DAttackRadial.SwingTangentFollowsTheSwingDirection", "[DAttack][HitDe
 
     // A target on the weapon line. rHat is then exactly +X and cross(+Z, +X) is exactly +Y,
     // so the two arms differ in one component and in nothing else.
-    const glm::vec3 target(150.f, 0.f, 0.f);
+    const glm::vec3 target = glm::vec3(0.f, 0.f, -1.5f);
 
     // The stick against the aim decides which sequence the machine picks -- (0,-1) is the
     // right swing (id 0), (0,+1) the left (id 1).
@@ -653,13 +654,13 @@ TEST_CASE("DAttackRadial.SwingTangentFollowsTheSwingDirection", "[DAttack][HitDe
     // 2. AND THE TANGENTS FOLLOW THEM. cross(axis, rHat) is the direction of increasing
     //    angle, so a positive sweep keeps it and a negative one flips it.
     const glm::vec3 increasing =
-        glm::cross(glm::vec3(0.f, 0.f, 1.f), glm::vec3(1.f, 0.f, 0.f));
-    REQUIRE(increasing.y == Catch::Approx(1.f).margin(1e-6f));   // the fixture's own claim
+        glm::cross(glm::vec3(-0.f, -1.f, 0.f), glm::vec3(0.f, 0.f, -1.f));
+    REQUIRE(simFrame::forwardRight(increasing).y == Catch::Approx(1.f).margin(1e-6f));   // the fixture's own claim
 
-    REQUIRE(right.swingTangent.y == Catch::Approx( 1.f).margin(1e-5f));
-    REQUIRE(left.swingTangent.y  == Catch::Approx(-1.f).margin(1e-5f));
-    REQUIRE(right.swingTangent.x == Catch::Approx(0.f).margin(1e-5f));
-    REQUIRE(left.swingTangent.x  == Catch::Approx(0.f).margin(1e-5f));
+    REQUIRE(simFrame::forwardRight(right.swingTangent).y == Catch::Approx( 1.f).margin(1e-5f));
+    REQUIRE(simFrame::forwardRight(left.swingTangent).y  == Catch::Approx(-1.f).margin(1e-5f));
+    REQUIRE(simFrame::forwardRight(right.swingTangent).x == Catch::Approx(0.f).margin(1e-5f));
+    REQUIRE(simFrame::forwardRight(left.swingTangent).x  == Catch::Approx(0.f).margin(1e-5f));
 
     // 3. MIRRORED, which is the user-visible property: a left hit and a right hit throw
     //    opposite ways, and neither throws the target into the weapon.
@@ -735,7 +736,7 @@ TEST_CASE("DAttackRadial.ChainedSwingCanHitTheSameTargetAgain", "[DAttack][HitDe
 {
     using namespace dattackradialfirstticktests;
 
-    const SwingOutcome out = runSwing(/*tickCount*/ 90, glm::vec3(150.f, 0.f, 0.f),
+    const SwingOutcome out = runSwing(/*tickCount*/ 90, glm::vec3(0.f, 0.f, -1.5f),
                                       /*moveStick*/ glm::vec2(0.f, -1.f));
 
     // The first swing connected -- the premise, and it is task 34's result restated here

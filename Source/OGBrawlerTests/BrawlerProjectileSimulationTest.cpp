@@ -14,6 +14,7 @@
 #include "OGSimulation/SpatialQueryResult.h"
 #include "OGBrawler/CollisionCategoryConstants.h"
 #include "BrawlerSimulationMocks.h"
+#include "OGSimulation/SimulationFrame.h"
 
 // ---------------------------------------------------------------------------
 // Closed-form projectile (Task 13).
@@ -59,16 +60,30 @@ static constexpr float kDt = 1.f / 60.f;
 static constexpr uint32_t kParentBodyIdValue = brawlerProjectileSimulation::kMaxProjectilePoolSize;
 
 static brawlerProjectileSimulation::StaticData makeStaticData(
-    float speed             = 500.f,
+    float speed             = 5.f,
     float maxLifetime       = 3.f,
-    float colliderRadius    = 30.f,
-    float spawnForwardOffset = 50.f,
-    float spawnZOffset      = 0.f)
+    float colliderRadius    = 0.3f,
+    float spawnForwardOffset = 0.5f,
+    float spawnHeightOffset = 0.f)
 {
     return brawlerProjectileSimulation::StaticData{
-        speed, maxLifetime, colliderRadius, spawnForwardOffset, spawnZOffset
+        speed, maxLifetime, colliderRadius,
+        spawnForwardOffset, spawnHeightOffset
     };
 }
+
+static constexpr glm::mat4 guardFacing(const glm::vec3& forward)
+{
+    constexpr glm::length_t forwardIndex = simFrameDetail::axisIndex(simFrame::kForward);
+    constexpr float forwardSign = simFrameDetail::axisIsNegative(simFrame::kForward) ? -1.f : 1.f;
+    const glm::vec4 column(forwardSign * forward, 0.f);
+    const glm::mat4 identity(1.f);
+    return glm::mat4(forwardIndex == 0 ? column : identity[0], forwardIndex == 1 ? column : identity[1],
+        forwardIndex == 2 ? column : identity[2], identity[3]);
+}
+
+static_assert(simFrame::forwardColumn(guardFacing(glm::vec3(0.f, 0.f, 1.f))) == glm::vec3(0.f, 0.f, 1.f),
+    "guardFacing must build the transform whose forwardColumn is the given forward");
 
 // Build N bindings: slot i has ownBodyId=i, parentBodyId=kParentBodyIdValue.
 static std::array<brawlerProjectileSimulation::RuntimeBindings,
@@ -133,12 +148,12 @@ TEST_CASE("BrawlerProjectile.SpawnIntoEmptyPool", "[BrawlerProjectile]")
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(/*speed*/500.f);
+    auto sd = makeStaticData(/*speed*/5.f);
     State state;
     InitialConditions ic;
     ic.spawnRequestPending = 1;
-    ic.spawnPos = glm::vec3(10.f, 20.f, 30.f);
-    ic.spawnDir = glm::vec3(1.f, 0.f, 0.f);   // unit; velocity derived = dir * speed
+    ic.spawnPos = glm::vec3(0.2f, 0.3f, -0.1f);
+    ic.spawnDir = glm::vec3(0.f, 0.f, -1.f);   // unit; velocity derived = dir * speed
 
     MockPhysicsAdapter physics{ kMaxProjectilePoolSize + 1 };
     MockSpatialQueryAdapter query;
@@ -160,14 +175,14 @@ TEST_CASE("BrawlerProjectile.SpawnIntoEmptyPool", "[BrawlerProjectile]")
 
     // Body transform must reflect spawnPos (elapsed == 0 ⇒ derivedPos == spawnPos).
     const glm::vec3 bodyPos = glm::vec3(physics.bodies[0].transform[3]);
-    REQUIRE(bodyPos.x == Catch::Approx(10.f));
-    REQUIRE(bodyPos.y == Catch::Approx(20.f));
-    REQUIRE(bodyPos.z == Catch::Approx(30.f));
+    REQUIRE(simFrame::forwardRight(bodyPos).x == Catch::Approx(0.1f));
+    REQUIRE(simFrame::forwardRight(bodyPos).y == Catch::Approx(0.2f));
+    REQUIRE(simFrame::height(bodyPos) == Catch::Approx(0.3f));
 
     // Linear velocity is derived: spawnDir * projectileSpeed.
-    REQUIRE(physics.bodies[0].linearVelocity.x == Catch::Approx(500.f));
-    REQUIRE(physics.bodies[0].linearVelocity.y == Catch::Approx(0.f));
-    REQUIRE(physics.bodies[0].linearVelocity.z == Catch::Approx(0.f));
+    REQUIRE(simFrame::forwardRight(physics.bodies[0].linearVelocity).x == Catch::Approx(5.f));
+    REQUIRE(simFrame::forwardRight(physics.bodies[0].linearVelocity).y == Catch::Approx(0.f));
+    REQUIRE(simFrame::height(physics.bodies[0].linearVelocity) == Catch::Approx(0.f));
 
     // Other slots remain free / not alive.
     REQUIRE(state.slots[1].spawnTick == 0u);
@@ -184,7 +199,7 @@ TEST_CASE("BrawlerProjectile.ClosedFormDerivedPosition", "[BrawlerProjectile]")
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(/*speed*/500.f, /*maxLifetime*/3.f);
+    auto sd = makeStaticData(/*speed*/5.f, /*maxLifetime*/3.f);
     State state;
     InitialConditions ic;
     DerivedState derived;
@@ -194,7 +209,7 @@ TEST_CASE("BrawlerProjectile.ClosedFormDerivedPosition", "[BrawlerProjectile]")
     // Spawn at tick 100, origin, +X direction.
     ic.spawnRequestPending = 1;
     ic.spawnPos = glm::vec3(0.f, 0.f, 0.f);
-    ic.spawnDir = glm::vec3(1.f, 0.f, 0.f);
+    ic.spawnDir = glm::vec3(0.f, 0.f, -1.f);
     const uint32_t spawnTick = 100u;
     callIntegrate(ic, state, derived, physics, query, sd, spawnTick);
     REQUIRE(state.slots[0].isAlive(spawnTick));
@@ -206,9 +221,9 @@ TEST_CASE("BrawlerProjectile.ClosedFormDerivedPosition", "[BrawlerProjectile]")
 
     REQUIRE(state.slots[0].isAlive(laterTick));
     const glm::vec3 bodyPos = glm::vec3(physics.bodies[0].transform[3]);
-    REQUIRE(bodyPos.x == Catch::Approx(250.f));
-    REQUIRE(bodyPos.y == Catch::Approx(0.f));
-    REQUIRE(bodyPos.z == Catch::Approx(0.f));
+    REQUIRE(simFrame::forwardRight(bodyPos).x == Catch::Approx(2.5f));
+    REQUIRE(simFrame::forwardRight(bodyPos).y == Catch::Approx(0.f));
+    REQUIRE(simFrame::height(bodyPos) == Catch::Approx(0.f));
 }
 
 // ---------------------------------------------------------------------------
@@ -229,14 +244,14 @@ TEST_CASE("BrawlerProjectile.SpawnDroppedWhenPoolFull", "[BrawlerProjectile]")
     for (uint32_t i = 0; i < sd.projectilePoolSize; ++i)
     {
         state.slots[i].spawnTick = 50u + i;   // distinct, nonzero, < currentTick
-        state.slots[i].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+        state.slots[i].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
         state.slots[i].endTick   = 0u;        // alive
     }
 
     InitialConditions ic;
     ic.spawnRequestPending = 1;
-    ic.spawnPos = glm::vec3(1.f, 2.f, 3.f);
-    ic.spawnDir = glm::vec3(0.f, 1.f, 0.f);
+    ic.spawnPos = glm::vec3(0.02f, 0.03f, -0.01f);
+    ic.spawnDir = glm::vec3(1.f, 0.f, -0.f);
 
     MockPhysicsAdapter physics{ kMaxProjectilePoolSize + 1 };
     MockSpatialQueryAdapter query;
@@ -279,8 +294,8 @@ TEST_CASE("BrawlerProjectile.RuntimePoolSizeGatesActiveSlots", "[BrawlerProjecti
     // First spawn fills the single active slot.
     InitialConditions ic;
     ic.spawnRequestPending = 1;
-    ic.spawnPos = glm::vec3(1.f, 0.f, 0.f);
-    ic.spawnDir = glm::vec3(1.f, 0.f, 0.f);
+    ic.spawnPos = glm::vec3(0.f, 0.f, -0.01f);
+    ic.spawnDir = glm::vec3(0.f, 0.f, -1.f);
     const uint32_t firstTick = 100u;
     callIntegrate(ic, state, derived, physics, query, sd, firstTick);
     REQUIRE(state.slots[0].isAlive(firstTick));
@@ -305,7 +320,7 @@ TEST_CASE("BrawlerProjectile.LifetimeExpiryKillsSlot", "[BrawlerProjectile]")
     using namespace brawlerProjectileSimulation;
 
     const float maxLifetime = 1.f;
-    auto sd = makeStaticData(500.f, maxLifetime);
+    auto sd = makeStaticData(5.f, maxLifetime);
 
     // Spawned at tick 100; after 60 ticks elapsed = 60 * (1/60) = 1.0 s >= maxLifetime.
     const uint32_t spawnTick   = 100u;
@@ -314,7 +329,7 @@ TEST_CASE("BrawlerProjectile.LifetimeExpiryKillsSlot", "[BrawlerProjectile]")
     State state;
     state.slots[0].spawnTick = spawnTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -329,7 +344,7 @@ TEST_CASE("BrawlerProjectile.LifetimeExpiryKillsSlot", "[BrawlerProjectile]")
     REQUIRE_FALSE(state.slots[0].isAlive(currentTick));
 
     const glm::vec3 parkPos = glm::vec3(physics.bodies[0].transform[3]);
-    REQUIRE(parkPos.z < -1000.f);
+    REQUIRE(simFrame::height(parkPos) < -10.f);
     REQUIRE(physics.bodies[0].linearVelocity == glm::vec3(0.f));
 
     // Lifetime expiry does not generate a derived hit.
@@ -349,14 +364,14 @@ TEST_CASE("BrawlerProjectile.LifetimeExpiryWinsOverContactOnTheSameTick", "[Braw
     using namespace brawlerProjectileSimulation;
 
     const float maxLifetime = 1.f;
-    auto sd = makeStaticData(500.f, maxLifetime);
+    auto sd = makeStaticData(5.f, maxLifetime);
     const uint32_t spawnTick   = 100u;
     const uint32_t currentTick = spawnTick + 60u;   // elapsed 1.0 s >= maxLifetime
 
     State state;
     state.slots[0].spawnTick = spawnTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -364,7 +379,7 @@ TEST_CASE("BrawlerProjectile.LifetimeExpiryWinsOverContactOnTheSameTick", "[Braw
     MockSpatialQueryAdapter query;
     SpatialQueryHit hit{};
     hit.rootBodyId       = BodyId{ 42 };
-    hit.objectPosition   = glm::vec3(5.f, 5.f, 0.f);
+    hit.objectPosition   = glm::vec3(0.05f, 0.f, -0.05f);
     hit.bodyId           = BodyId{ 99 };
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
     query.nextReport.hits.push_back(hit);
@@ -388,7 +403,7 @@ TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 3.f);
+    auto sd = makeStaticData(5.f, 3.f);
 
     const uint32_t spawnTick   = 100u;
     const uint32_t currentTick = spawnTick + 6u;   // elapsed 0.1 s, well within lifetime
@@ -396,7 +411,7 @@ TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
     State state;
     state.slots[0].spawnTick = spawnTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -408,7 +423,7 @@ TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
     // to derived.hits, not derived.blocks).
     SpatialQueryHit hit{};
     hit.rootBodyId     = BodyId{ 42 };
-    hit.objectPosition = glm::vec3(5.f, 5.f, 0.f);
+    hit.objectPosition = glm::vec3(0.05f, 0.f, -0.05f);
     hit.bodyId         = BodyId{ 99 };
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
     query.nextReport.hits.push_back(hit);
@@ -425,7 +440,7 @@ TEST_CASE("BrawlerProjectile.HitOnNonParentKillsSlot", "[BrawlerProjectile]")
     REQUIRE_FALSE(state.slots[0].isAlive(currentTick));
 
     const glm::vec3 parkPos = glm::vec3(physics.bodies[0].transform[3]);
-    REQUIRE(parkPos.z < -1000.f);
+    REQUIRE(simFrame::height(parkPos) < -10.f);
     REQUIRE(physics.bodies[0].linearVelocity == glm::vec3(0.f));
 
     // Body hit routes to damage hits, not blocks.
@@ -444,7 +459,7 @@ TEST_CASE("BrawlerProjectile.HitOnParentBodyIgnored", "[BrawlerProjectile]")
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 3.f);
+    auto sd = makeStaticData(5.f, 3.f);
 
     const uint32_t spawnTick   = 100u;
     const uint32_t currentTick = spawnTick + 6u;
@@ -452,7 +467,7 @@ TEST_CASE("BrawlerProjectile.HitOnParentBodyIgnored", "[BrawlerProjectile]")
     State state;
     state.slots[0].spawnTick = spawnTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -490,7 +505,7 @@ TEST_CASE("BrawlerProjectile.BlockOnGuardFront", "[BrawlerProjectile]")
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 3.f);   // guardMiddleSectionHalfAngle defaults to 0.25 rad
+    auto sd = makeStaticData(5.f, 3.f);   // guardMiddleSectionHalfAngle defaults to 0.25 rad
 
     const uint32_t spawnTick   = 100u;
     const uint32_t currentTick = spawnTick + 6u;
@@ -498,7 +513,7 @@ TEST_CASE("BrawlerProjectile.BlockOnGuardFront", "[BrawlerProjectile]")
     State state;
     state.slots[0].spawnTick = spawnTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);   // +X travel
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);   // +X travel
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -508,13 +523,12 @@ TEST_CASE("BrawlerProjectile.BlockOnGuardFront", "[BrawlerProjectile]")
 
     // Guard body lives at index kMaxProjectilePoolSize + 1 (distinct from parent).
     const uint32_t guardBodyId = kMaxProjectilePoolSize + 1;
-    glm::mat4 guardXform(1.f);
-    guardXform[0] = glm::vec4(-1.f, 0.f, 0.f, 0.f);   // forward axis = -X (faces +X projectile)
+    glm::mat4 guardXform = guardFacing(glm::vec3(0.f, 0.f, 1.f));   // forward axis = -X (faces +X projectile)
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
     hit.rootBodyId       = BodyId{ 7 };
-    hit.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
+    hit.objectPosition   = glm::vec3(0.f, 0.f, -0.05f);
     hit.bodyId           = BodyId{ guardBodyId };
     hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
     query.nextReport.hits.push_back(hit);
@@ -551,7 +565,7 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardBack", "[BrawlerProjectile]")
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 3.f);
+    auto sd = makeStaticData(5.f, 3.f);
 
     const uint32_t spawnTick   = 100u;
     const uint32_t currentTick = spawnTick + 6u;
@@ -559,7 +573,7 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardBack", "[BrawlerProjectile]")
     State state;
     state.slots[0].spawnTick = spawnTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -567,13 +581,12 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardBack", "[BrawlerProjectile]")
     MockSpatialQueryAdapter query;
 
     const uint32_t guardBodyId = kMaxProjectilePoolSize + 1;
-    glm::mat4 guardXform(1.f);
-    guardXform[0] = glm::vec4(1.f, 0.f, 0.f, 0.f);   // forward axis = +X (faces away from -X incoming)
+    glm::mat4 guardXform = guardFacing(glm::vec3(0.f, 0.f, -1.f));   // forward axis = +X (faces away from -X incoming)
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
     hit.rootBodyId       = BodyId{ 9 };
-    hit.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
+    hit.objectPosition   = glm::vec3(0.f, 0.f, -0.05f);
     hit.bodyId           = BodyId{ guardBodyId };
     hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
     query.nextReport.hits.push_back(hit);
@@ -607,7 +620,7 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardSide", "[BrawlerProjectile]")
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 3.f);   // guardMiddleSectionHalfAngle defaults to 0.25 rad
+    auto sd = makeStaticData(5.f, 3.f);   // guardMiddleSectionHalfAngle defaults to 0.25 rad
 
     const uint32_t spawnTick   = 100u;
     const uint32_t currentTick = spawnTick + 6u;
@@ -616,7 +629,7 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardSide", "[BrawlerProjectile]")
     state.slots[0].spawnTick = spawnTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
     // incoming = -spawnDir = normalize(+1,0,+1) → pi/4 off the guard forward (+X).
-    state.slots[0].spawnDir  = glm::normalize(glm::vec3(-1.f, 0.f, -1.f));
+    state.slots[0].spawnDir  = glm::normalize(glm::vec3(0.f, -1.f, 1.f));
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -624,13 +637,12 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardSide", "[BrawlerProjectile]")
     MockSpatialQueryAdapter query;
 
     const uint32_t guardBodyId = kMaxProjectilePoolSize + 1;
-    glm::mat4 guardXform(1.f);
-    guardXform[0] = glm::vec4(1.f, 0.f, 0.f, 0.f);   // forward axis = +X (toward shooter side)
+    glm::mat4 guardXform = guardFacing(glm::vec3(0.f, 0.f, -1.f));   // forward axis = +X (toward shooter side)
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
     hit.rootBodyId       = BodyId{ 11 };
-    hit.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
+    hit.objectPosition   = glm::vec3(0.f, 0.f, -0.05f);
     hit.bodyId           = BodyId{ guardBodyId };
     hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
     query.nextReport.hits.push_back(hit);
@@ -663,16 +675,16 @@ TEST_CASE("BrawlerProjectile.BlockIndicatorAtInnerCircle", "[BrawlerProjectile]"
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 3.f);   // guardMiddleSectionHalfAngle defaults to 0.25 rad
-    sd.innerCircleRadius = 100.f;
+    auto sd = makeStaticData(5.f, 3.f);   // guardMiddleSectionHalfAngle defaults to 0.25 rad
+    sd.innerCircleRadius = 1.f;
 
     const uint32_t spawnTick   = 100u;
     const uint32_t currentTick = spawnTick + 6u;
 
     State state;
     state.slots[0].spawnTick = spawnTick;
-    state.slots[0].spawnPos  = glm::vec3(-500.f, 0.f, 50.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);   // +X travel
+    state.slots[0].spawnPos  = glm::vec3(0.f, 0.5f, 5.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);   // +X travel
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -681,8 +693,7 @@ TEST_CASE("BrawlerProjectile.BlockIndicatorAtInnerCircle", "[BrawlerProjectile]"
 
     // Guard body at origin, forward axis -X (faces the incoming +X projectile → block).
     const uint32_t guardBodyId = kMaxProjectilePoolSize + 1;
-    glm::mat4 guardXform(1.f);
-    guardXform[0] = glm::vec4(-1.f, 0.f, 0.f, 0.f);   // forward axis = -X
+    glm::mat4 guardXform = guardFacing(glm::vec3(0.f, 0.f, 1.f));   // forward axis = -X
     guardXform[3] = glm::vec4(0.f, 0.f, 0.f, 1.f);    // character root at origin
     physics.bodies[guardBodyId].transform = guardXform;
 
@@ -698,8 +709,8 @@ TEST_CASE("BrawlerProjectile.BlockIndicatorAtInnerCircle", "[BrawlerProjectile]"
 
     REQUIRE(derived.blocks.size() == 1u);
     // Entry point on the inner circle facing the shooter: x = -100, NOT the body centre 0.
-    REQUIRE(derived.blocks[0].position.x == Catch::Approx(-100.f));
-    REQUIRE(derived.blocks[0].position.x != Catch::Approx(0.f));
+    REQUIRE(simFrame::forwardRight(derived.blocks[0].position).x == Catch::Approx(-1.f));
+    REQUIRE(simFrame::forwardRight(derived.blocks[0].position).x != Catch::Approx(0.f));
     REQUIRE(derived.blocks[0].rootBodyId == BodyId{ 7 });
     REQUIRE(derived.hits.empty());
 }
@@ -717,7 +728,7 @@ TEST_CASE("BrawlerProjectile.HitIndicatorPersistsForPersistTicks", "[BrawlerProj
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 100.f);   // big lifetime so it never expires here
+    auto sd = makeStaticData(5.f, 100.f);   // big lifetime so it never expires here
     sd.indicatorPersistTicks = 5u;
 
     const uint32_t hitTick = 100u;
@@ -725,7 +736,7 @@ TEST_CASE("BrawlerProjectile.HitIndicatorPersistsForPersistTicks", "[BrawlerProj
     State state;
     state.slots[0].spawnTick = hitTick;       // alive on the hit tick
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -734,7 +745,7 @@ TEST_CASE("BrawlerProjectile.HitIndicatorPersistsForPersistTicks", "[BrawlerProj
 
     SpatialQueryHit hit{};
     hit.rootBodyId       = BodyId{ 42 };
-    hit.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
+    hit.objectPosition   = glm::vec3(0.f, 0.f, -0.05f);
     hit.bodyId           = BodyId{ 99 };
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
     query.nextReport.hits.push_back(hit);
@@ -768,16 +779,16 @@ TEST_CASE("BrawlerProjectile.BlockIndicatorPersistsForPersistTicks", "[BrawlerPr
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 100.f);
+    auto sd = makeStaticData(5.f, 100.f);
     sd.indicatorPersistTicks = 5u;
-    sd.innerCircleRadius = 100.f;
+    sd.innerCircleRadius = 1.f;
 
     const uint32_t hitTick = 100u;
 
     State state;
     state.slots[0].spawnTick = hitTick;
-    state.slots[0].spawnPos  = glm::vec3(-500.f, 0.f, 0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].spawnPos  = glm::vec3(0.f, 0.f, 5.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -785,8 +796,7 @@ TEST_CASE("BrawlerProjectile.BlockIndicatorPersistsForPersistTicks", "[BrawlerPr
     MockSpatialQueryAdapter query;
 
     const uint32_t guardBodyId = kMaxProjectilePoolSize + 1;
-    glm::mat4 guardXform(1.f);
-    guardXform[0] = glm::vec4(-1.f, 0.f, 0.f, 0.f);   // faces the shooter → block
+    glm::mat4 guardXform = guardFacing(glm::vec3(0.f, 0.f, 1.f));   // faces the shooter → block
     physics.bodies[guardBodyId].transform = guardXform;
 
     SpatialQueryHit hit{};
@@ -821,7 +831,7 @@ TEST_CASE("BrawlerProjectile.MultipleIndicatorsAccumulate", "[BrawlerProjectile]
     using namespace projectiletests;
     using namespace brawlerProjectileSimulation;
 
-    auto sd = makeStaticData(500.f, 100.f);   // default indicatorPersistTicks (20) — wide window
+    auto sd = makeStaticData(5.f, 100.f);   // default indicatorPersistTicks (20) — wide window
 
     const uint32_t firstTick = 100u;
 
@@ -829,7 +839,7 @@ TEST_CASE("BrawlerProjectile.MultipleIndicatorsAccumulate", "[BrawlerProjectile]
     // Slot 0 is alive and hits on the first tick. Slot 1 stays free for now.
     state.slots[0].spawnTick = firstTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    state.slots[0].spawnDir  = glm::vec3(1.f, 0.f, 0.f);
+    state.slots[0].spawnDir  = glm::vec3(0.f, 0.f, -1.f);
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;
@@ -838,7 +848,7 @@ TEST_CASE("BrawlerProjectile.MultipleIndicatorsAccumulate", "[BrawlerProjectile]
 
     SpatialQueryHit hitA{};
     hitA.rootBodyId       = BodyId{ 1 };
-    hitA.objectPosition   = glm::vec3(5.f, 0.f, 0.f);
+    hitA.objectPosition   = glm::vec3(0.f, 0.f, -0.05f);
     hitA.bodyId           = BodyId{ 90 };
     hitA.objectCategories = CollisionCategories::single(collisionCategory::body);
     query.nextReport.hits.clear();
@@ -851,13 +861,13 @@ TEST_CASE("BrawlerProjectile.MultipleIndicatorsAccumulate", "[BrawlerProjectile]
     // Now bring slot 1 alive (spawnTick set just before its hit tick so it is not
     // "alive" on the first tick) and inject a DIFFERENT target.
     state.slots[1].spawnTick = firstTick + 1u;
-    state.slots[1].spawnPos  = glm::vec3(0.f, 10.f, 0.f);
-    state.slots[1].spawnDir  = glm::vec3(0.f, 1.f, 0.f);
+    state.slots[1].spawnPos  = glm::vec3(0.1f, 0.f, -0.f);
+    state.slots[1].spawnDir  = glm::vec3(1.f, 0.f, -0.f);
     state.slots[1].endTick   = 0u;
 
     SpatialQueryHit hitB{};
     hitB.rootBodyId       = BodyId{ 2 };
-    hitB.objectPosition   = glm::vec3(0.f, 15.f, 0.f);
+    hitB.objectPosition   = glm::vec3(0.15f, 0.f, -0.f);
     hitB.bodyId           = BodyId{ 91 };
     hitB.objectCategories = CollisionCategories::single(collisionCategory::body);
     query.nextReport.hits.clear();

@@ -18,7 +18,7 @@
 // buildPlayerInput does.
 struct MockInputSource
 {
-	glm::vec3 aimDirection       = glm::vec3(0.f, 0.f, 1.f);
+	glm::vec3 aimDirection       = glm::vec3(0.f, 1.f, -0.f);
 	glm::vec2 moveStick          = glm::vec2(0.f, 0.f);
 	glm::vec3 moveDirectionWorld = glm::vec3(0.f, 0.f, 0.f);
 

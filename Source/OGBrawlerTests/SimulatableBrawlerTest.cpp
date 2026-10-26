@@ -19,6 +19,7 @@
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 // ---------------------------------------------------------------------------
 // Mock physics body adapter — satisfies PhysicsBodyAdapter concept.
@@ -148,7 +149,7 @@ TEST_CASE("DAttack.SimulatableBrawler.RingoutIntegrateIsReachedFromTheComposite"
     // Authored, not assumed: the arms below are positioned relative to the SHIPPED kill
     // plane, so retuning it in brawlerRingout::StaticData moves this test with it instead of
     // silently making one arm vacuous.
-    const float killPlaneZ = staticData.m_ringoutStaticData.killPlaneZ;
+    const float killPlaneHeight = staticData.m_ringoutStaticData.killPlaneHeight;
 
     auto integrateOneTickAtZ = [&](float z)
     {
@@ -157,8 +158,9 @@ TEST_CASE("DAttack.SimulatableBrawler.RingoutIntegrateIsReachedFromTheComposite"
         // Ring-out reads the position the movement sub-sim LEFT BEHIND, so seeding the
         // movement State slice is exactly the input the law consumes. `teleportPending` is 0
         // on a default-constructed InitialConditions, which the death arm also requires.
-        character.editAllState().editState()
-            .edit<brawlerMovementSimulation::State>().bodyState.position.z = z;
+        glm::vec3& position = character.editAllState().editState()
+            .edit<brawlerMovementSimulation::State>().bodyState.position;
+        position = simFrame::withHeight(position, z);
 
         const SimulationTimeStep step(0u, false, false, false, 1.f / 60.f);
         character.integrate(step, zeroInput, physAdapter, queryAdapter, staticData);
@@ -167,7 +169,7 @@ TEST_CASE("DAttack.SimulatableBrawler.RingoutIntegrateIsReachedFromTheComposite"
 
     SECTION("below the kill plane, the composite's integrate kills the character")
     {
-        const brawlerRingout::State dead = integrateOneTickAtZ(killPlaneZ - 100.f);
+        const brawlerRingout::State dead = integrateOneTickAtZ(killPlaneHeight - 1.f);
 
         // THE WHOLE POINT: this bit is only ever written by brawlerRingout::integrate, and
         // the only thing that can call it on this object is the block in
@@ -182,7 +184,7 @@ TEST_CASE("DAttack.SimulatableBrawler.RingoutIntegrateIsReachedFromTheComposite"
     {
         // Without this arm, an implementation that set the dead bit unconditionally — or a
         // default-constructed State that already had it — would satisfy the section above.
-        const brawlerRingout::State alive = integrateOneTickAtZ(killPlaneZ + 100.f);
+        const brawlerRingout::State alive = integrateOneTickAtZ(killPlaneHeight + 1.f);
         REQUIRE_FALSE(brawlerRingout::isDead(alive));
     }
 }
@@ -814,8 +816,9 @@ namespace movementResim
         {
             brawlerMovementSimulation::State& s = movement();
             glm::vec3 solved = s.bodyState.position + s.velocity * kDt;
-            if (solved.x > kWallX)
-                solved.x = kWallX;
+            if (simFrame::forwardRight(solved).x > kWallX)
+                solved = simFrame::fromForwardRight(
+                    glm::vec2(kWallX, simFrame::forwardRight(solved).y), simFrame::height(solved));
             s.bodyState.position = solved;
         }
 
@@ -833,7 +836,7 @@ namespace movementResim
         // The stick arrives as a world XY direction whose LENGTH the sim reads as the
         // deflection; the game sends unit length (getInputDirectionInCameraSpace normalises),
         // so a unit +X vector is "full deflection, into the wall".
-        input.moveDirectionWorld = glm::vec3(1.f, 0.f, 0.f);
+        input.moveDirectionWorld = glm::vec3(0.f, 0.f, -1.f);
         return input;
     }
 
@@ -841,7 +844,7 @@ namespace movementResim
     // and every tick after it.
     void seatAgainstTheWall(FPeer& peer)
     {
-        peer.movement().bodyState.position = glm::vec3(kWallX, 0.f, 0.f);
+        peer.movement().bodyState.position = glm::vec3(0.f, 0.f, -kWallX);
     }
 
     // The premises every case shares: the latent path is LIVE in this fixture, the
@@ -864,12 +867,12 @@ namespace movementResim
         // 2. THE CONTACT CLAMP HELD: the into-wall component was killed to zero and
         //    the model re-accelerated from zero, so the authority ends the tick at
         //    exactly one tick of acceleration.
-        REQUIRE(authority.movement().velocity.x
-                == Catch::Approx(accelPerTick()).margin(1e-3f));
+        REQUIRE(simFrame::forwardRight(authority.movement().velocity).x
+                == Catch::Approx(accelPerTick()).margin(1.0000001e-5f));
 
         // 3. AND THE BODY IS ON THE WALL, not through it.
-        REQUIRE(authority.movement().bodyState.position.x
-                == Catch::Approx(kWallX).margin(1e-4f));
+        REQUIRE(simFrame::forwardRight(authority.movement().bodyState.position).x
+                == Catch::Approx(kWallX).margin(1e-6f));
     }
 }
 }
@@ -906,7 +909,9 @@ TEST_CASE("DAttack.SimulatableBrawler.ReplayAfterAdoptionReproducesContactClamp"
     // property that matters: it is in SerializableFields, so `isSimilarTo` -- the
     // shipped resim trigger -- can see it. (Same technique, same reason, as
     // SimulationNetSyncTest.cpp's `divergeState`.)
-    client.movement().bodyState.position.x = kWallX - 5.f;
+    client.movement().bodyState.position = simFrame::fromForwardRight(
+        glm::vec2(kWallX - 0.05f, simFrame::forwardRight(client.movement().bodyState.position).y),
+        simFrame::height(client.movement().bodyState.position));
 
     // THE PREMISE OF THE WHOLE CASE: this landing really does disagree, so
     // `tryInsertingCorrectState`'s `if (!predictionWasCorrect)` branch is the one
@@ -952,9 +957,9 @@ TEST_CASE("DAttack.SimulatableBrawler.ReplayAfterAdoptionReproducesContactClamp"
                 .isSimilarTo(authority.character.getAllState().getState()));
 
     // ...and SPELLED OUT, so a break names the term rather than only the verdict.
-    REQUIRE(client.movement().velocity.x
-            == Catch::Approx(authority.movement().velocity.x).margin(1e-4f));
-    REQUIRE(authority.movement().velocity.x == Catch::Approx(accelPerTick()).margin(1e-3f));
+    REQUIRE(simFrame::forwardRight(client.movement().velocity).x
+            == Catch::Approx(simFrame::forwardRight(authority.movement().velocity).x).margin(1e-6f));
+    REQUIRE(simFrame::forwardRight(authority.movement().velocity).x == Catch::Approx(accelPerTick()).margin(1.0000001e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -1061,8 +1066,8 @@ TEST_CASE("DAttack.SimulatableBrawler.ReplayAnchoredOnHitTickConvergesInOneCorre
     // origin would be pressed into that wall on every tick, which step 6' would then correctly
     // kill. This case is about a CORRECTION, not about contact, so the two peers start 10 m short
     // of the wall and the whole slide happens in open space.
-    authority.movement().bodyState.position = glm::vec3(-1000.f, 0.f, 0.f);
-    client.movement().bodyState.position    = glm::vec3(-1000.f, 0.f, 0.f);
+    authority.movement().bodyState.position = glm::vec3(0.f, 0.f, 10.f);
+    client.movement().bodyState.position    = glm::vec3(0.f, 0.f, 10.f);
 
     // The reaction the authority's routing pass would have resolved for the shipped right-hand
     // swing: a knockback at the authored speed, dwelling for its own slide time. Read from the
@@ -1126,8 +1131,8 @@ TEST_CASE("DAttack.SimulatableBrawler.ReplayAnchoredOnHitTickConvergesInOneCorre
     //    really does correct here rather than sliding on silently.
     REQUIRE(authorityMachine.m_currentState == DAttackState::HitFlinch);
     REQUIRE(authorityMachine.m_hitReaction == HitReactionKind::Knockback);
-    REQUIRE(authority.movement().velocity.x
-            == Catch::Approx(spec.knockbackSpeed).margin(1e-2f));
+    REQUIRE(simFrame::forwardRight(authority.movement().velocity).x
+            == Catch::Approx(spec.knockbackSpeed).margin(1e-4f));
     REQUIRE(clientMachine.m_currentState == DAttackState::Idle);
     REQUIRE_FALSE(client.character.getAllState().getState()
                       .isSimilarTo(authority.character.getAllState().getState()));
@@ -1146,7 +1151,7 @@ TEST_CASE("DAttack.SimulatableBrawler.ReplayAnchoredOnHitTickConvergesInOneCorre
     REQUIRE(client.character.getAllState().getState()
                 .get<dAttackMachineSimulation::State>().m_flinchDuration
             == Catch::Approx(dwell).margin(1e-6f));
-    REQUIRE(client.movement().velocity.x == Catch::Approx(spec.knockbackSpeed).margin(1e-2f));
+    REQUIRE(simFrame::forwardRight(client.movement().velocity).x == Catch::Approx(spec.knockbackSpeed).margin(1e-4f));
 
     // 3. ONE CORRECTION, NOT A STORM. From the adopted tick on, the client reproduces the
     //    authority tick for tick with NO further hit signal on either side -- the decay runs off
@@ -1160,14 +1165,14 @@ TEST_CASE("DAttack.SimulatableBrawler.ReplayAnchoredOnHitTickConvergesInOneCorre
              << " client v.x=" << client.movement().velocity.x);
         REQUIRE(client.character.getAllState().getState()
                     .isSimilarTo(authority.character.getAllState().getState()));
-        REQUIRE(client.movement().velocity.x
-                == Catch::Approx(authority.movement().velocity.x).margin(1e-4f));
+        REQUIRE(simFrame::forwardRight(client.movement().velocity).x
+                == Catch::Approx(simFrame::forwardRight(authority.movement().velocity).x).margin(1e-6f));
     }
 
     // ...and the slide really was running through all of that, so row 3 is not a comparison of two
     // stationary characters.
-    REQUIRE(authority.movement().velocity.x > 0.f);
-    REQUIRE(authority.movement().velocity.x < spec.knockbackSpeed);
+    REQUIRE(simFrame::forwardRight(authority.movement().velocity).x > 0.f);
+    REQUIRE(simFrame::forwardRight(authority.movement().velocity).x < spec.knockbackSpeed);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

@@ -13,6 +13,7 @@
 #include "catch_amalgamated.hpp"
 #include "OGBrawler/DAttackDirectionClassifier.h"
 #include "OGBrawler/DAttackSequenceId.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -26,20 +27,20 @@ namespace
 	glm::vec3 dirAt(float degrees)
 	{
 		const float r = glm::radians(degrees);
-		return glm::vec3(std::cos(r), std::sin(r), 0.f);
+		return glm::vec3(std::sin(r), 0.f, -std::cos(r));
 	}
 
-	unsigned int classifyAt(float moveDegrees, const glm::vec3& aim = glm::vec3(1.f, 0.f, 0.f))
+	unsigned int classifyAt(float moveDegrees, const glm::vec3& aim = glm::vec3(0.f, 0.f, -1.f))
 	{
 		const glm::vec3 move = dirAt(moveDegrees);
-		return dAttackDirection::classify(aim, move, glm::vec2(move.x, move.y));
+		return dAttackDirection::classify(aim, move, simFrame::forwardRight(move));
 	}
 }
 
 TEST_CASE("classify: no movement attacks forward", "[attackdirection]")
 {
 	const unsigned int d = dAttackDirection::classify(
-		glm::vec3(1.f, 0.f, 0.f), glm::vec3(1.f, 0.f, 0.f), glm::vec2(0.f, 0.f));
+		glm::vec3(0.f, 0.f, -1.f), glm::vec3(0.f, 0.f, -1.f), glm::vec2(0.f, 0.f));
 	CHECK(d == kForward);
 }
 
@@ -107,7 +108,7 @@ TEST_CASE("classify: the back cone is independent of the aim direction",
 	{
 		const glm::vec3 aim  = dirAt(aimDeg);
 		const glm::vec3 back = -aim;
-		const unsigned int d = dAttackDirection::classify(aim, back, glm::vec2(back.x, back.y));
+		const unsigned int d = dAttackDirection::classify(aim, back, simFrame::forwardRight(back));
 		INFO("aim angle = " << aimDeg);
 		CHECK(d == kForward);
 	}
@@ -118,9 +119,9 @@ TEST_CASE("classify: aim with downward z still classifies on the XY projection",
 {
 	// Mouse-on-floor aim comes from a capsule above z=0, so aimDirection carries a
 	// downward z. Projecting is what keeps that from inflating the angle.
-	const glm::vec3 aimDown = glm::normalize(glm::vec3(1.f, 0.f, -0.6f));
-	const glm::vec3 move    = glm::vec3(1.f, 0.f, 0.f);
-	const unsigned int d = dAttackDirection::classify(aimDown, move, glm::vec2(move.x, move.y));
+	const glm::vec3 aimDown = glm::normalize(glm::vec3(0.f, -0.6f, -1.f));
+	const glm::vec3 move    = glm::vec3(0.f, 0.f, -1.f);
+	const unsigned int d = dAttackDirection::classify(aimDown, move, simFrame::forwardRight(move));
 	CHECK(d == kForward);
 }
 

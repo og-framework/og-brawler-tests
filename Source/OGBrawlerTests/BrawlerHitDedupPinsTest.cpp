@@ -25,6 +25,7 @@
 #include "OGSimulation/SpatialQueryAdapter.h"
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <algorithm>
 #include <cmath>
@@ -40,7 +41,7 @@ constexpr int   kContactSwingTick = 24;
 constexpr int   kContactTick      = 40;
 constexpr int   kPressTick        = kContactTick - kContactSwingTick;
 constexpr int   kLastTick         = kContactTick + 40;
-constexpr float kTargetDistance   = 150.f;
+constexpr float kTargetDistance   = 1.5f;
 
 struct Handles
 {
@@ -68,8 +69,8 @@ static_assert(kPeerA.attackerRoot != kPeerB.attackerRoot && kPeerA.targetRoot !=
     "Task 26 ruling 2026-09-26: every per-process engine handle differs between the peers; a handle "
     "the two peers share cannot expose that handle on the wire.");
 
-inline glm::vec3 guardFacingTheAttackerAim() { return glm::vec3(-std::cos(0.5f), -std::sin(0.5f), 0.f); }
-inline glm::vec3 guardTurnedAwayAim()        { return glm::vec3(1.f, 0.f, 0.f); }
+inline glm::vec3 guardFacingTheAttackerAim() { return glm::vec3(-std::sin(0.5f), 0.f, std::cos(0.5f)); }
+inline glm::vec3 guardTurnedAwayAim()        { return glm::vec3(0.f, 0.f, -1.f); }
 
 struct Physics
 {
@@ -104,7 +105,7 @@ struct Query
         if (!radial || !weaponOverlapsTarget)
             return report;
         SpatialQueryHit body{};
-        body.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+        body.objectPosition   = glm::vec3(0.f, 0.f, -kTargetDistance);
         body.bodyId           = BodyId{ h.targetRoot };
         body.rootBodyId       = BodyId{ h.targetRoot };
         body.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -174,7 +175,7 @@ struct Rig
     static simulatableBrawler::PlayerInput makeInput(const glm::vec3& aim, bool attackLeft,
                                                      const glm::vec2& stick, std::uint8_t flags)
     {
-        const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
+        const glm::vec3 moveWorld = simFrame::fromForwardRight(stick, 0.f);
         return brawlerTestInputs::make({ .aimDirection       = aim,
                                          .attackLeft         = attackLeft,
                                          .moveStick          = stick,
@@ -186,7 +187,7 @@ struct Rig
     simulatableBrawler::PlayerInput attackerInput(int t) const
     {
         const bool press = t == kPressTick || t == secondPressTick;
-        return makeInput(glm::vec3(1.f, 0.f, 0.f), press,
+        return makeInput(glm::vec3(0.f, 0.f, -1.f), press,
                          press ? glm::vec2(0.f, -1.f) : glm::vec2(0.f), 0u);
     }
     static simulatableBrawler::PlayerInput targetInput(bool guardFacesTheAttacker)
@@ -284,7 +285,7 @@ struct MultiQuery
         for (const int i : overlapping)
         {
             SpatialQueryHit body{};
-            body.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+            body.objectPosition   = glm::vec3(0.f, 0.f, -kTargetDistance);
             body.bodyId           = BodyId{ multiTargetRoot(i) };
             body.rootBodyId       = BodyId{ multiTargetRoot(i) };
             body.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -344,7 +345,7 @@ struct MultiTargetRig
         ResolvedInputs<SimulatableBrawler> inputs;
         auto& map = std::get<0>(inputs);
         const bool press = t == kPressTick;
-        map.emplace(kMultiAttackerId, Rig::makeInput(glm::vec3(1.f, 0.f, 0.f), press,
+        map.emplace(kMultiAttackerId, Rig::makeInput(glm::vec3(0.f, 0.f, -1.f), press,
                                                      press ? glm::vec2(0.f, -1.f) : glm::vec2(0.f), 0u));
         for (int i = 0; i < kMultiTargetCount; ++i)
             map.emplace(multiTargetId(i), Rig::makeInput(guardTurnedAwayAim(), false, glm::vec2(0.f), 0u));
@@ -591,4 +592,4 @@ TEST_CASE("HitDedup.ASwingHitsAtMostThreeDistinctTargets",
     }
 }
 
-#endif // WITH_LOW_LEVEL_TESTS
+#endif

@@ -33,6 +33,7 @@
 #include "OGBrawler/InputSequence/InputSequence.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
 #include "OGSimulation/Network/LocalInputCache.h"
+#include "OGSimulation/SimulationFrame.h"
 
 namespace inputhistorytoggletests
 {
@@ -49,7 +50,7 @@ static simulatableBrawler::PlayerInput makeCapture(glm::vec3 aimDirection,
 {
 	simulatableBrawler::ContinuousInputFields fields;
 	fields.aimDirection       = aimDirection;
-	fields.moveStick          = glm::vec2(moveDirectionWorld.x, moveDirectionWorld.y);
+	fields.moveStick          = simFrame::forwardRight(moveDirectionWorld);
 	fields.moveDirectionWorld = moveDirectionWorld;
 
 	return simulatableBrawler::makeSimPlayerInput(fields, false, false, inputSequence::kNoMatch,
@@ -58,12 +59,12 @@ static simulatableBrawler::PlayerInput makeCapture(glm::vec3 aimDirection,
 
 static simulatableBrawler::PlayerInput forwardCapture()
 {
-	return makeCapture(glm::vec3(1.f, 0.f, 0.f), glm::vec3(1.f, 0.f, 0.f));
+	return makeCapture(glm::vec3(0.f, 0.f, -1.f), glm::vec3(0.f, 0.f, -1.f));
 }
 
 static simulatableBrawler::PlayerInput backCapture()
 {
-	return makeCapture(glm::vec3(1.f, 0.f, 0.f), glm::vec3(-1.f, 0.f, 0.f));
+	return makeCapture(glm::vec3(0.f, 0.f, -1.f), glm::vec3(0.f, 0.f, 1.f));
 }
 
 // ---------------------------------------------------------------------------

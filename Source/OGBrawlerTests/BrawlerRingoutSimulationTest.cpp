@@ -29,6 +29,7 @@
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryAdapter.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 // ---------------------------------------------------------------------------
 // brawlerRingout — the kill-plane / respawn sub-simulation [ringout task 1].
@@ -69,10 +70,10 @@ struct Rig
 
     // Park the body at a world Z. Nothing else about the movement state matters to ring-out —
     // it reads exactly one float.
-    void setBodyZ(float z) { movementState.bodyState.position.z = z; }
+    void setBodyZ(float z) { movementState.bodyState.position = simFrame::withHeight(movementState.bodyState.position, z); }
 
-    float aboveThePlane() const { return sd.killPlaneZ + 100.f; }
-    float belowThePlane() const { return sd.killPlaneZ - 100.f; }
+    float aboveThePlane() const { return sd.killPlaneHeight + 1.f; }
+    float belowThePlane() const { return sd.killPlaneHeight - 1.f; }
 
     bool dead() const { return ringout::isDead(state); }
 
@@ -224,17 +225,17 @@ TEST_CASE("Ringout.AboveThePlaneDoesNotDie", "[BrawlerRingout]")
         REQUIRE(rig.movementIc.teleportPending == 0u);
     }
 
-    // THE BOUNDARY, and it is STRICT. `position.z < killPlaneZ` — standing exactly on the
+    // THE BOUNDARY, and it is STRICT. `height(position) < killPlaneHeight` — standing exactly on the
     // plane is alive. A `<=` here would kill a character resting at the authored height on a
     // level whose floor happens to sit there.
-    rig.setBodyZ(rig.sd.killPlaneZ);
+    rig.setBodyZ(rig.sd.killPlaneHeight);
     rig.tick(11u);
     REQUIRE_FALSE(rig.dead());
     REQUIRE_FALSE(rig.derived.diedThisTick);
 
     // DECOY CONTROL for the boundary above: one float lower and it does die, so the
     // assertion is measuring the comparison rather than a sub-sim that never kills anybody.
-    rig.setBodyZ(std::nextafterf(rig.sd.killPlaneZ, -1000.f));
+    rig.setBodyZ(std::nextafterf(rig.sd.killPlaneHeight, -1000.f));
     rig.tick(12u);
     REQUIRE(rig.dead());
     REQUIRE(rig.derived.diedThisTick);
@@ -307,7 +308,7 @@ TEST_CASE("Ringout.RespawnWritesTheTeleportSeedAndClearsDead", "[BrawlerRingout]
     // the two arms is what makes this hold; a plain `if` would re-arm the countdown on the
     // very tick it expired.
     REQUIRE_FALSE(rig.derived.diedThisTick);
-    REQUIRE(rig.movementState.bodyState.position.z < rig.sd.killPlaneZ);
+    REQUIRE(simFrame::height(rig.movementState.bodyState.position) < rig.sd.killPlaneHeight);
 
     // Now let the movement sub-sim do what it does later in this same tick, and step on. The
     // character is on its spawn point and stays alive.
@@ -338,7 +339,7 @@ TEST_CASE("Ringout.DeadAndStillFallingDoesNotReDieOrReArm", "[BrawlerRingout]")
     float z = rig.belowThePlane();
     for (std::uint32_t t = 51u; t <= 60u; ++t)
     {
-        z -= 250.f;
+        z -= 2.5f;
         rig.setBodyZ(z);
         rig.tick(t);
 
@@ -403,7 +404,7 @@ TEST_CASE("Ringout.APendingTeleportSuppressesDeathDetection", "[BrawlerRingout]"
     // the movement teleport from the capsule pose before the movement sub-sim has integrated
     // once.
     rig.movementIc.teleportPending = 1u;
-    rig.movementIc.teleportPos     = glm::vec3(0.f, 0.f, 500.f);
+    rig.movementIc.teleportPos     = glm::vec3(0.f, 5.f, -0.f);
 
     rig.tick(1u);
     REQUIRE_FALSE(rig.dead());
@@ -675,22 +676,22 @@ using Placements = std::vector<ringout::LevelSpawnPoint>;
 // the furthest −X, so a comparator that quietly sorted by position instead of by name produces
 // the EXACT REVERSE of the right answer rather than something that happens to coincide with it.
 // A fixture whose two candidate orderings agree cannot tell them apart.
-inline ringout::LevelSpawnPoint alpha() { return { "Alpha", glm::vec3( 900.f,  10.f, 50.f) }; }
-inline ringout::LevelSpawnPoint bravo() { return { "Bravo", glm::vec3( 300.f,  20.f, 51.f) }; }
-inline ringout::LevelSpawnPoint chas()  { return { "Chas",  glm::vec3(-300.f,  30.f, 52.f) }; }
-inline ringout::LevelSpawnPoint delta() { return { "Delta", glm::vec3(-900.f,  40.f, 53.f) }; }
+inline ringout::LevelSpawnPoint alpha() { return { "Alpha", glm::vec3(0.1f, 0.5f, -9.f) }; }
+inline ringout::LevelSpawnPoint bravo() { return { "Bravo", glm::vec3(0.2f, 0.51f, -3.f) }; }
+inline ringout::LevelSpawnPoint chas()  { return { "Chas",  glm::vec3(0.3f, 0.52f, 3.f) }; }
+inline ringout::LevelSpawnPoint delta() { return { "Delta", glm::vec3(0.4f, 0.53f, 9.f) }; }
 
 // [T18] The table grew to eight, so the fill and overflow cases need more names than that. Same
 // anti-correlation: each later name sits further −X.
 inline Placements tenInNameOrder()
 {
     return { alpha(), bravo(), chas(), delta(),
-             { "Echo",   glm::vec3(-1200.f,  50.f, 54.f) },
-             { "Fox",    glm::vec3(-1500.f,  60.f, 55.f) },
-             { "Golf",   glm::vec3(-1800.f,  70.f, 56.f) },
-             { "Hotel",  glm::vec3(-2100.f,  80.f, 57.f) },
-             { "India",  glm::vec3(-2400.f,  90.f, 58.f) },
-             { "Juliet", glm::vec3(-2700.f, 100.f, 59.f) } };
+             { "Echo",   glm::vec3(0.5f, 0.54f, 12.f) },
+             { "Fox",    glm::vec3(0.6f, 0.55f, 15.f) },
+             { "Golf",   glm::vec3(0.7f, 0.56f, 18.f) },
+             { "Hotel",  glm::vec3(0.8f, 0.57f, 21.f) },
+             { "India",  glm::vec3(0.9f, 0.58f, 24.f) },
+             { "Juliet", glm::vec3(1.f, 0.59f, 27.f) } };
 }
 static_assert(ringout::kMaxSpawnPoints + 2u <= 10u,
     "tenInNameOrder() must hold more placements than the spawn table, or CASE 5 stops testing "
@@ -794,9 +795,9 @@ TEST_CASE("Ringout.SpawnPoints.TheOrderingKeyIsTheActorName", "[BrawlerRingout]"
     REQUIRE(table[3] == delta().position);
 
     // ⛔ AND DESCENDING BY X, which is what a position-keyed comparator would have produced.
-    REQUIRE(table[0].x > table[1].x);
-    REQUIRE(table[1].x > table[2].x);
-    REQUIRE(table[2].x > table[3].x);
+    REQUIRE(simFrame::forwardRight(table[0]).x > simFrame::forwardRight(table[1]).x);
+    REQUIRE(simFrame::forwardRight(table[1]).x > simFrame::forwardRight(table[2]).x);
+    REQUIRE(simFrame::forwardRight(table[2]).x > simFrame::forwardRight(table[3]).x);
 
     // The comparator itself, exercised directly in both directions — a strict order, not just
     // one that happens to give the right answer for this input.
@@ -808,8 +809,8 @@ TEST_CASE("Ringout.SpawnPoints.TheOrderingKeyIsTheActorName", "[BrawlerRingout]"
     // designer will meet it: `PlayerStart_10` sorts BEFORE `PlayerStart_2`. This is pinned
     // rather than merely documented so that a future "let me make this natural-order" edit is a
     // deliberate change to a stated behaviour instead of a silent reshuffle of everyone's slots.
-    const ringout::LevelSpawnPoint ten{ "PlayerStart_10", glm::vec3(1.f, 1.f, 1.f) };
-    const ringout::LevelSpawnPoint two{ "PlayerStart_2",  glm::vec3(2.f, 2.f, 2.f) };
+    const ringout::LevelSpawnPoint ten{ "PlayerStart_10", glm::vec3(0.01f, 0.01f, -0.01f) };
+    const ringout::LevelSpawnPoint two{ "PlayerStart_2",  glm::vec3(0.02f, 0.02f, -0.02f) };
     REQUIRE(ringout::levelSpawnPointOrderBefore(ten, two));
 }
 
@@ -917,8 +918,8 @@ TEST_CASE("Ringout.SpawnPoints.DuplicateNamesStillOrderDeterministically", "[Bra
 {
     using namespace spawnpoints;
 
-    const ringout::LevelSpawnPoint dupLow { "Dup", glm::vec3(-700.f, 0.f, 60.f) };
-    const ringout::LevelSpawnPoint dupHigh{ "Dup", glm::vec3( 700.f, 0.f, 60.f) };
+    const ringout::LevelSpawnPoint dupLow { "Dup", glm::vec3(0.f, 0.6f, 7.f) };
+    const ringout::LevelSpawnPoint dupHigh{ "Dup", glm::vec3(0.f, 0.6f, -7.f) };
 
     const Placements serverOrder{ dupLow, dupHigh };
     const Placements clientOrder{ dupHigh, dupLow };
@@ -1150,7 +1151,7 @@ constexpr std::uint32_t kSpawnSlot = 2u;
 // The fall every case starts with: 100 cm above the authored plane. At the authored
 // -980 cm/s² that reaches the plane in under 30 ticks, which leaves the death comfortably
 // inside a short replay window and the respawn (`respawnDelayTicks` later) inside a long one.
-constexpr float kStartMarginAbovePlane = 100.f;
+constexpr float kStartMarginAbovePlane = 1.f;
 
 // Byte-addressable stand-in for `FSimulationStateSyncBuffer` — the shape
 // `correctionStateBuffer`'s `Buffer` concept asks for.
@@ -1295,11 +1296,11 @@ struct FPeer
     }
 
     // Seat the character just above the authored kill plane, with the spawn slot the authority
-    // would have handed it. The height is read from the SHIPPED plane, so retuning `killPlaneZ`
+    // would have handed it. The height is read from the SHIPPED plane, so retuning `killPlaneHeight`
     // moves the fixture with it instead of silently starting the run below the plane.
     void seatAboveThePlane(float margin)
     {
-        movement().bodyState.position = glm::vec3(0.f, 0.f, ringoutStatic().killPlaneZ + margin);
+        movement().bodyState.position = simFrame::withHeight(glm::vec3(0.f), ringoutStatic().killPlaneHeight + margin);
         movement().velocity           = glm::vec3(0.f);
         ringoutIc().spawnSlot         = kSpawnSlot;
     }
@@ -1473,8 +1474,8 @@ TEST_CASE("Ringout.Resim.TheFallFixtureDiesAndRespawnsExactlyOnce", "[BrawlerRin
 
     // The death is a genuine crossing: at or above the plane on the tick before, below it on the
     // tick the dead bit is set.
-    REQUIRE(entryAt(trace, deathTick - 1u).position.z >= peer.ringoutStatic().killPlaneZ);
-    REQUIRE(entryAt(trace, deathTick).position.z < peer.ringoutStatic().killPlaneZ);
+    REQUIRE(simFrame::height(entryAt(trace, deathTick - 1u).position) >= peer.ringoutStatic().killPlaneHeight);
+    REQUIRE(simFrame::height(entryAt(trace, deathTick).position) < peer.ringoutStatic().killPlaneHeight);
 
     // And the respawn landed on THIS character's authored point, in the same tick — the movement
     // sub-sim consumes ring-out's teleport seed later in the very tick ring-out wrote it.
@@ -1528,7 +1529,7 @@ TEST_CASE("Ringout.Resim.ReplayAcrossTheDeathTickReproducesTheDeath", "[BrawlerR
     // A WIRE field, so the shipped `isSimilarTo` — the production resim trigger — can see the
     // disagreement. (Same technique, same reason, as `SimulationNetSyncTest.cpp`'s `divergeState`
     // and the movement rig's wall-position nudge.)
-    client.movement().bodyState.position.x += 5.f;
+    client.movement().bodyState.position += glm::vec3(0.f, 0.f, -0.05f);
 
     // THE PREMISE OF THE WHOLE CASE: the landing really does disagree, so production takes the
     // overwriting branch and the restored slot really is a default-constructed struct.
@@ -1594,7 +1595,7 @@ TEST_CASE("Ringout.Resim.ReplayAcrossTheRespawnTickReproducesTheRespawn", "[Braw
     client.run(1u, anchorTick, nullptr);
 
     const simulatableBrawler::State& authorityAtAnchor = entryAt(live, anchorTick).state;
-    client.movement().bodyState.position.x += 5.f;
+    client.movement().bodyState.position += glm::vec3(0.f, 0.f, -0.05f);
     REQUIRE_FALSE(client.state().isSimilarTo(authorityAtAnchor));
 
     adoptAndPrepareResim(client, authorityAtAnchor, anchorTick);
@@ -1716,8 +1717,8 @@ TEST_CASE("Ringout.Resim.AMidCountdownCorrectionDoesNotMoveTheRespawnTick", "[Br
     // is what makes the first one discriminating: the character really IS below the kill plane
     // for the whole countdown, so a cleared dead bit re-arms immediately.
     REQUIRE(deathTicks(replayed, /*deadBefore=*/true).empty());
-    REQUIRE(entryAt(replayed, anchorTick + 1u).position.z
-            < authority.ringoutStatic().killPlaneZ);
+    REQUIRE(simFrame::height(entryAt(replayed, anchorTick + 1u).position)
+            < authority.ringoutStatic().killPlaneHeight);
 
     // ⭐ AND THE WHOLE REPLAYED TRACE IS BYTE-IDENTICAL TO THE LIVE ONE.
     requireByteIdenticalTraces(sliceFrom(live, anchorTick + 1u), replayed);

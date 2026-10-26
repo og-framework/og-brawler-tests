@@ -4,6 +4,7 @@
 #include "catch_amalgamated.hpp"
 #include "OGBrawler/InputSequence/InputSequence.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
+#include "OGSimulation/SimulationFrame.h"
 #include <map>
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ static simulatableBrawler::PlayerInput makeInput(glm::vec2 stick, glm::vec3 aim)
 {
     simulatableBrawler::PlayerInput pi;
     pi.moveStick          = stick;
-    pi.moveDirectionWorld = glm::vec3(stick.x, stick.y, 0.f);
+    pi.moveDirectionWorld = simFrame::fromForwardRight(stick, 0.f);
     pi.aimDirection       = aim;
     return pi;
 }
@@ -62,7 +63,7 @@ TEST_CASE("InputSequence.AimRelativeAngle.AxisAlignedAim", "[InputSequence]")
 {
     using namespace inputSequence;
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
     constexpr float eps = 1e-4f;
 
     auto angleOf = [&](glm::vec2 stick) {
@@ -92,7 +93,7 @@ TEST_CASE("InputSequence.AimRelativeAngle.RotatedAim", "[InputSequence]")
 {
     using namespace inputSequence;
 
-    const glm::vec3 aim(0.707107f, 0.707107f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.707107f, 0.f, -0.707107f);
     constexpr float eps = 1e-3f;
 
     auto angleOf = [&](glm::vec2 stick) {
@@ -114,7 +115,7 @@ TEST_CASE("InputSequence.AimRelativeAngle.NulloptCases", "[InputSequence]")
 {
     using namespace inputSequence;
 
-    const glm::vec3 validAim(1.f, 0.f, 0.f);
+    const glm::vec3 validAim = glm::vec3(0.f, 0.f, -1.f);
     const glm::vec3 zeroAim(0.f, 0.f, 0.f);
 
     REQUIRE_FALSE(aimRelativeAngle(glm::vec2(0.1f, 0.f), validAim, 0.5f ).has_value());
@@ -151,7 +152,7 @@ TEST_CASE("InputSequence.MatchSequence.HadoukenMatches", "[InputSequence]")
     using namespace inputSequence;
     using namespace inputseqtests;
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
     const uint32_t currentTick = 10;
 
     std::map<uint32_t, simulatableBrawler::PlayerInput> history;
@@ -189,7 +190,7 @@ TEST_CASE("InputSequence.MatchSequence.MaxGapFramesViolation", "[InputSequence]"
     using namespace inputSequence;
     using namespace inputseqtests;
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
     const uint32_t currentTick = 10;
 
     std::map<uint32_t, simulatableBrawler::PlayerInput> history;
@@ -227,7 +228,7 @@ TEST_CASE("InputSequence.MatchSequence.TightToleranceRejects", "[InputSequence]"
     using namespace inputSequence;
     using namespace inputseqtests;
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
 
     // Stick at ~30° from aim — well outside a pi/16 tolerance around Forward (0).
     auto inputAt30Deg = makeInput(glm::vec2(0.866f, -0.5f), aim);
@@ -257,7 +258,7 @@ TEST_CASE("InputSequence.MatchSequence.ColdCacheReturnsNoMatch", "[InputSequence
     using namespace inputSequence;
     using namespace inputseqtests;
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
 
     auto nullAccessor = [](uint32_t) -> const simulatableBrawler::PlayerInput* { return nullptr; };
 
@@ -279,7 +280,7 @@ TEST_CASE("InputSequence.MatchSequence.NeverMatchingBufferReturnsNoMatch", "[Inp
     using namespace inputSequence;
     using namespace inputseqtests;
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
 
     simulatableBrawler::PlayerInput neutral = makeInput(glm::vec2(0.f, 0.f), aim);
     auto accessor = [&](uint32_t) -> const simulatableBrawler::PlayerInput* { return &neutral; };
@@ -306,7 +307,7 @@ TEST_CASE("InputSequence.MatchSequence.TieBreakLongerWins", "[InputSequence]")
     using namespace inputSequence;
     using namespace inputseqtests;
 
-    const glm::vec3 aim(1.f, 0.f, 0.f);
+    const glm::vec3 aim = glm::vec3(0.f, 0.f, -1.f);
 
     std::map<uint32_t, simulatableBrawler::PlayerInput> history;
     history[7] = makeInput(glm::vec2(-1.f, -1.f), aim); // DownBack

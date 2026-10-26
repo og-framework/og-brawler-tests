@@ -30,7 +30,7 @@
 // here would create a second place to update and a case that passes against its own copy
 // of a stale number. What this file spells is the ARITHMETIC those values imply, named:
 //     accelPerTick() = acceleration * dt, brakePerTick(), gravityPerTick(), and -- since
-//     [movement-sim task 56 / ruling #28] -- servoStepPerCm(), maxVerticalStep() and
+//     [movement-sim task 56 / ruling #28] -- servoStepPerMetre(), maxVerticalStep() and
 //     discreteCriticalZeta(). `maxSnapStep()` retired with `maxSnapSpeed`.
 //
 // -------------------------- THE ENGINE STEP IS THE RIG'S ---------------------
@@ -89,6 +89,7 @@
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SimulationComposite.h"
 #include "OGSimulation/SimulationDependencies.h"
+#include "OGSimulation/SimulationFrame.h"
 #include "OGSimulation/SimulationSerialization.h"
 #include "OGSimulation/SpatialQueryResult.h"
 
@@ -114,9 +115,9 @@ constexpr QueryVolumeId        kVolumeId{ 91u };
 // An infinite plane { p : dot(planeNormal, p) == planeOffset }, swept against the
 // character capsule. Written FROM FIRST PRINCIPLES and deliberately NOT from the model
 // under test -- that non-circularity is what made task 49's measurement admissible (its
-// reviewer reproduced both arms independently to 5e-6 cm) and it is the whole reason
+// reviewer reproduced both arms independently to 5e-8 m) and it is the whole reason
 // `HoverOnRampDoesNotDrift` can be believed:
-//   * while planeNormal.z > 0 the capsule's nearest point to the plane is on its LOWEST
+//   * while the plane normal's up component is > 0 the capsule's nearest point to the plane is on its LOWEST
 //     axis endpoint, so the signed gap is dot(n, bottomAxisPoint) - planeOffset - radius;
 //   * moving along the unit sweep direction `d` changes that gap at rate dot(n, d), so
 //     contact happens at travel = gap / -dot(n, d).
@@ -131,10 +132,10 @@ constexpr QueryVolumeId        kVolumeId{ 91u };
 // ---------------------------------------------------------------------------
 struct PlaneGroundQueryAdapter
 {
-    glm::vec3 planeNormal{ 0.f, 0.f, 1.f };
+    glm::vec3 planeNormal = glm::vec3(0.f, 1.f, -0.f);
     float     planeOffset = 0.f;
-    float     capsuleRadius     = 42.f;
-    float     capsuleHalfHeight = 96.f;
+    float     capsuleRadius     = 0.42f;
+    float     capsuleHalfHeight = 0.96f;
 
     // Recorded per call so a case reads exactly the clearance the sim consumed.
     bool  sawProbe      = false;
@@ -156,7 +157,7 @@ struct PlaneGroundQueryAdapter
 
         const glm::vec3 centre(pose[3].x, pose[3].y, pose[3].z);
         const glm::vec3 bottom =
-            centre - glm::vec3(0.f, 0.f, capsuleHalfHeight - capsuleRadius);
+            centre - simFrame::withHeight(glm::vec3(0.f), capsuleHalfHeight - capsuleRadius);
 
         const float gap  = glm::dot(planeNormal, bottom) - planeOffset - capsuleRadius;
         const float rate = -glm::dot(planeNormal, dir);   // closing speed per unit travel
@@ -189,52 +190,52 @@ struct PlaneGroundQueryAdapter
 
 static_assert(SpatialQueryAdapter<PlaneGroundQueryAdapter>);
 
-// The capsule centre height that puts `clearance` cm of VERTICAL clearance between the
-// capsule and the plane at x == y == 0. It is the mock's OWN gap equation inverted, so a
+// The capsule centre height that puts `clearance` metres of VERTICAL clearance between the
+// capsule and the plane at x == z == 0. It is the mock's OWN gap equation inverted, so a
 // seed is placed by the same geometry the probe reads back rather than by a second
 // derivation that could disagree with it.
 inline float seedZForClearance(const PlaneGroundQueryAdapter& ground, float clearance)
 {
     const float axisHalf = ground.capsuleHalfHeight - ground.capsuleRadius;
     return axisHalf + clearance
-         + (ground.planeOffset + ground.capsuleRadius) / ground.planeNormal.z;
+         + (ground.planeOffset + ground.capsuleRadius) / simFrame::height(ground.planeNormal);
 }
 
 // A scripted floor hit at a chosen clearance, for the cases whose ground is a controlled
 // scalar rather than a geometry. `probeLength` is `rideHeight + snapDistance` -- the sim
 // recovers `clearance` as `fraction * probeLength`, so the two must agree.
 inline SweepHit floorHitAt(float clearance, float probeLength,
-                           glm::vec3 normal = glm::vec3(0.f, 0.f, 1.f))
+                           glm::vec3 normal = glm::vec3(0.f, 1.f, -0.f))
 {
     SweepHit hit{};
     hit.blocked     = true;
     hit.fraction    = clearance / probeLength;
     hit.normal      = normal;
-    hit.impactPoint = glm::vec3(0.f, 0.f, -clearance);
+    hit.impactPoint = simFrame::withHeight(glm::vec3(0.f), -clearance);
     return hit;
 }
 
-// A unit normal tilted `degrees` away from world up, in the XZ plane (so its `u` axis
-// stays in XZ and `v` stays world +Y -- see `buildTangentFrame`).
+// A unit normal tilted `degrees` away from world up, in the forward-up plane (so its `u` axis
+// stays in that plane and `v` stays world right, +X -- see `buildTangentFrame`).
 inline glm::vec3 slopeNormal(float degrees)
 {
     const float theta = glm::radians(degrees);
-    return glm::vec3(-glm::sin(theta), 0.f, glm::cos(theta));
+    return glm::vec3(0.f, glm::cos(theta), glm::sin(theta));
 }
 
 // The THREE CHANNELS of a velocity in the frame a surface normal induces: `(a, b, c)` such that
 // `V == a*u + b*v + c*up`. [movement-sim task 57 / ruling #29]
 //
 // ⚠ WHY A CASE NEEDS THIS AT ALL, AND WHY IT IS NOT CIRCULAR. `state.velocity` is a WORLD
-// vector, and on a slope its world `z` mixes the tangential channel's own vertical component with
+// vector, and on a slope its world height mixes the tangential channel's own vertical component with
 // the servo's output -- so "the character never accelerates downward faster than gravity" is
-// simply not a statement about `velocity.z`, it is a statement about `c`. This function spells the
+// simply not a statement about the velocity's height, it is a statement about `c`. This function spells the
 // dual basis out again rather than calling the header's `decomposeVelocity`, so a case is never
 // asking the subject to confirm its own answer; what it DOES borrow is `buildTangentFrame`, which
 // is task 12's and is not under test here.
 inline glm::vec3 channelsOf(const glm::vec3& velocity, const glm::vec3& n)
 {
-    glm::vec3 u(1.f, 0.f, 0.f), v(0.f, 1.f, 0.f);
+    glm::vec3 u(simFrame::kForward), v(simFrame::kRight);
     movement::buildTangentFrame(n, u, v);
     const float     b      = glm::dot(velocity, v);
     const glm::vec3 planar = velocity - b * v;
@@ -317,7 +318,7 @@ struct Rig
     float knockbackSpeed() const
     { return game.m_hitReactions[dAttackDirection::kRightSequenceId].knockbackSpeed; }
 
-    // The closed form ruling #13 authored: v^2 / (2a). 500 cm at the shipped pair.
+    // The closed form ruling #13 authored: v^2 / (2a). 5 m at the shipped pair.
     float knockbackDistance() const
     { return knockbackSpeed() * knockbackSpeed() / (2.f * sd.launchDecel); }
 
@@ -325,7 +326,7 @@ struct Rig
     float knockbackSlideSeconds() const { return knockbackSpeed() / sd.launchDecel; }
 
     // Enter `HitFlinch` with a resolved reaction, exactly as the machine's veto does from the
-    // routing system's slice. `directionXY` is the world XY unit direction away from the attacker.
+    // routing system's slice. `directionXY` is the horizontal (forward, right) unit direction away from the attacker.
     void hit(HitReactionKind kind, glm::vec2 directionXY, float lockoutDuration)
     {
         const bool knockback = kind == HitReactionKind::Knockback;
@@ -353,15 +354,15 @@ struct Rig
     // from position error, and there is no assignment left to clamp. Everything below is derived
     // from the SHIPPED gains, never restated — R-P1 as it has always applied in this file.
 
-    // What one cm of clearance error commands in one tick, from rest: `a == k*e` exactly,
-    // because the feed-forward cancels gravity. 35.266667 cm/s at the shipped k.
-    float servoStepPerCm() const { return sd.hoverStiffness * kDt; }
+    // What one metre of clearance error commands in one tick, from rest: `a == k*e` exactly,
+    // because the feed-forward cancels gravity. 35.266667 m/s at the shipped k.
+    float servoStepPerMetre() const { return sd.hoverStiffness * kDt; }
 
     // ⭐ THE HONEST PER-TICK VELOCITY BOUND, and it is NOT `hoverMaxAccel * kDt`. The clamp is
     // applied to the servo term, which CONTAINS the `- gravity` feed-forward, so the total
     // acceleration is `gravity + clamp(servo, ±hoverMaxAccel)` and its magnitude reaches
-    // `hoverMaxAccel + |gravity|` on the downward saturation. 516.333333 cm/s, against the
-    // 500.000000 the tidier wrong form would have given — a 3.3 % difference that a case
+    // `hoverMaxAccel + |gravity|` on the downward saturation. 5.16333333 m/s, against the
+    // 5.00000000 the tidier wrong form would have given — a 3.3 % difference that a case
     // asserting the wrong one would have failed on, in the right direction, for the wrong reason.
     float maxVerticalStep() const
     { return (sd.hoverMaxAccel + glm::abs(sd.gravity)) * kDt; }
@@ -442,11 +443,11 @@ using PlaneRig    = Rig<PlaneGroundQueryAdapter>;
 inline void seatOnFlatGroundAtRideHeight(ScriptedRig& rig)
 {
     rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight, rig.probeLength()) };
-    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
 }
 
-// The full-deflection stick, as a world XY direction.
-inline glm::vec3 stick(float x, float y) { return glm::vec3(x, y, 0.f); }
+// The full-deflection stick (forward, right), as a horizontal world direction.
+inline glm::vec3 stick(float x, float y) { return simFrame::fromForwardRight(glm::vec2(x, y), 0.f); }
 
 // A byte-addressable buffer of the shape `writeToSyncedBuffer` asks for. Poisoned rather
 // than zeroed, so a field the codec never writes reads back as poison instead of as a
@@ -484,19 +485,19 @@ TEST_CASE("BrawlerMovement.TeleportSeedWritesTransformAndZeroVelocity", "[Brawle
     // is what a fixture assertion should mean.
     REQUIRE_FALSE(rig.sd.drivesBody);
 
-    rig.state.velocity         = glm::vec3(5.f, 6.f, 7.f);
+    rig.state.velocity         = glm::vec3(0.06f, 0.07f, -0.05f);
     rig.state.committedStepDir = glm::vec2(0.25f, -0.75f);
     rig.state.stepStartTick    = 3u;
     rig.state.flags            = static_cast<std::uint8_t>(movement::kFlagHasCommand);
-    rig.state.positionCmd      = glm::vec3(-1.f, -2.f, -3.f);
+    rig.state.positionCmd      = glm::vec3(-0.02f, -0.03f, 0.01f);
 
     rig.ic.teleportPending = 1u;
-    rig.ic.teleportPos     = glm::vec3(10.f, 20.f, 30.f);
+    rig.ic.teleportPos     = glm::vec3(0.2f, 0.3f, -0.1f);
 
     rig.tick(/*tick*/ 7u);
 
     // 1. THE SEED LANDED IN STATE.
-    REQUIRE(rig.state.bodyState.position == glm::vec3(10.f, 20.f, 30.f));
+    REQUIRE(rig.state.bodyState.position == glm::vec3(0.2f, 0.3f, -0.1f));
     REQUIRE(rig.state.committedStepDir == glm::vec2(0.f));
     REQUIRE(rig.state.stepStartTick == 7u);
     REQUIRE_FALSE(rig.hasCommandBit());
@@ -510,7 +511,7 @@ TEST_CASE("BrawlerMovement.TeleportSeedWritesTransformAndZeroVelocity", "[Brawle
     REQUIRE(rig.phys.setLinearVelocityCalls.size() == 1u);
     REQUIRE(rig.phys.setTransformCalls[0].bodyId == kBodyId);
     REQUIRE(glm::vec3(rig.phys.setTransformCalls[0].transform[3])
-            == glm::vec3(10.f, 20.f, 30.f));
+            == glm::vec3(0.2f, 0.3f, -0.1f));
     REQUIRE(rig.phys.setLinearVelocityCalls[0].value == glm::vec3(0.f));
 
     // 4. AND NOTHING WAS PUSHED THROUGH THE FORCE SEAM. Revision 5 would have; ruling
@@ -537,7 +538,7 @@ TEST_CASE("BrawlerMovement.AttachSupportedWhenProbeNormalWalkable", "[BrawlerMov
     flat.tick(1u);
     REQUIRE(flat.support() == movement::SupportState::Supported);
     REQUIRE(flat.derived.lastSupportState == static_cast<std::uint8_t>(movement::SupportState::Supported));
-    REQUIRE(flat.derived.surfaceNormal == glm::vec3(0.f, 0.f, 1.f));
+    REQUIRE(flat.derived.surfaceNormal == glm::vec3(0.f, 1.f, -0.f));
 
     ScriptedRig justUnder;
     justUnder.query.scriptedSweeps = {
@@ -546,7 +547,7 @@ TEST_CASE("BrawlerMovement.AttachSupportedWhenProbeNormalWalkable", "[BrawlerMov
     INFO("slope " << (cap - 1.f) << " deg vs cap " << cap << " deg");
     REQUIRE(justUnder.support() == movement::SupportState::Supported);
     // ...and the frame followed that normal rather than staying world up.
-    REQUIRE(justUnder.derived.surfaceNormal.x == Catch::Approx(slopeNormal(cap - 1.f).x).margin(1e-5f));
+    REQUIRE(simFrame::forwardRight(justUnder.derived.surfaceNormal).x == Catch::Approx(simFrame::forwardRight(slopeNormal(cap - 1.f)).x).margin(1e-5f));
 }
 
 TEST_CASE("BrawlerMovement.AttachUnsupportedWhenProbeMisses", "[BrawlerMovement]")
@@ -555,7 +556,7 @@ TEST_CASE("BrawlerMovement.AttachUnsupportedWhenProbeMisses", "[BrawlerMovement]
 
     ScriptedRig rig;
     rig.query.scriptedSweeps.clear();          // an empty script is a MISS on every call
-    rig.state.bodyState.position = glm::vec3(3.f, -4.f, 500.f);
+    rig.state.bodyState.position = glm::vec3(-0.04f, 5.f, -0.03f);
 
     rig.tick(1u);
 
@@ -564,7 +565,7 @@ TEST_CASE("BrawlerMovement.AttachUnsupportedWhenProbeMisses", "[BrawlerMovement]
     // validity rule), so the viz readout must be zeroed rather than carry the garbage.
     REQUIRE(rig.derived.lastProbePoint == glm::vec3(0.f));
     // The airborne frame falls back to the servo axis.
-    REQUIRE(rig.derived.surfaceNormal == glm::vec3(0.f, 0.f, 1.f));
+    REQUIRE(rig.derived.surfaceNormal == glm::vec3(0.f, 1.f, -0.f));
 
     // ⭐ THE PROBE ITSELF, read off the RECORDED CALL. Exactly one sweep per tick, on the
     // movement volume, from the body's own pose, straight down `rideHeight + snapDistance`.
@@ -572,11 +573,11 @@ TEST_CASE("BrawlerMovement.AttachUnsupportedWhenProbeMisses", "[BrawlerMovement]
     // it is the only place the recorded `(transform, delta)` pair is the subject.
     REQUIRE(rig.query.sweepCalls.size() == 1u);
     REQUIRE(rig.query.sweepCalls[0].volumeId == kVolumeId);
-    REQUIRE(glm::vec3(rig.query.sweepCalls[0].transform[3]) == glm::vec3(3.f, -4.f, 500.f));
-    REQUIRE(rig.query.sweepCalls[0].delta == glm::vec3(0.f, 0.f, -rig.probeLength()));
+    REQUIRE(glm::vec3(rig.query.sweepCalls[0].transform[3]) == glm::vec3(-0.04f, 5.f, -0.03f));
+    REQUIRE(rig.query.sweepCalls[0].delta == simFrame::withHeight(glm::vec3(0.f), -rig.probeLength()));
 
     // AND THE FALL BEGAN: an unattached capsule is on the authored gravity law.
-    REQUIRE(rig.state.velocity.z == Catch::Approx(rig.gravityPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(rig.gravityPerTick()).margin(1e-6f));
 }
 
 TEST_CASE("BrawlerMovement.AttachUnsupportedWhenSlopeTooSteep", "[BrawlerMovement]")
@@ -591,19 +592,19 @@ TEST_CASE("BrawlerMovement.AttachUnsupportedWhenSlopeTooSteep", "[BrawlerMovemen
     // `cap - 1` arm, this is a one-degree straddle of the authored cap.
     rig.query.scriptedSweeps = {
         floorHitAt(rig.sd.rideHeight, rig.probeLength(), slopeNormal(cap + 1.f)) };
-    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
 
     rig.tick(1u);
 
     INFO("slope " << (cap + 1.f) << " deg vs cap " << cap
-         << " deg; dot(n, up)=" << slopeNormal(cap + 1.f).z
+         << " deg; dot(n, up)=" << simFrame::height(slopeNormal(cap + 1.f))
          << " cosMaxSlope=" << rig.sd.cosMaxSlope);
     REQUIRE(rig.support() == movement::SupportState::Unsupported);
     // A too-steep face is not a frame either: the tangent frame falls back to world up,
     // so a character cannot walk on a wall by accident (task 20 is what changes this).
-    REQUIRE(rig.derived.surfaceNormal == glm::vec3(0.f, 0.f, 1.f));
+    REQUIRE(rig.derived.surfaceNormal == glm::vec3(0.f, 1.f, -0.f));
     // And the vertical term is gravity, not the hover servo -- there is no ground to hold.
-    REQUIRE(rig.state.velocity.z == Catch::Approx(rig.gravityPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(rig.gravityPerTick()).margin(1e-6f));
 }
 
 // ===========================================================================
@@ -615,23 +616,23 @@ TEST_CASE("BrawlerMovement.TangentFrameOnFlatGroundIsWorldXY", "[BrawlerMovement
     using namespace movementTests;
 
     // At ride height the servo commands nothing, so the whole of `state.velocity` is
-    // `u * velocityUV.x + v * velocityUV.y`. Pushing +X and then +Y therefore READS OFF
+    // `u * velocityUV.x + v * velocityUV.y`. Pushing forward and then right therefore READS OFF
     // `u` and `v` directly.
     ScriptedRig pushX;
     seatOnFlatGroundAtRideHeight(pushX);
     pushX.tick(1u, stick(1.f, 0.f));
-    REQUIRE(pushX.state.velocity.z == 0.f);
-    REQUIRE(pushX.state.velocity.x == Catch::Approx(pushX.accelPerTick()).margin(1e-4f));
-    REQUIRE(pushX.state.velocity.y == 0.f);
+    REQUIRE(simFrame::height(pushX.state.velocity) == 0.f);
+    REQUIRE(simFrame::forwardRight(pushX.state.velocity).x == Catch::Approx(pushX.accelPerTick()).margin(1e-6f));
+    REQUIRE(simFrame::forwardRight(pushX.state.velocity).y == 0.f);
 
     ScriptedRig pushY;
     seatOnFlatGroundAtRideHeight(pushY);
     pushY.tick(1u, stick(0.f, 1.f));
-    REQUIRE(pushY.state.velocity.z == 0.f);
-    REQUIRE(pushY.state.velocity.x == 0.f);
-    REQUIRE(pushY.state.velocity.y == Catch::Approx(pushY.accelPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::height(pushY.state.velocity) == 0.f);
+    REQUIRE(simFrame::forwardRight(pushY.state.velocity).x == 0.f);
+    REQUIRE(simFrame::forwardRight(pushY.state.velocity).y == Catch::Approx(pushY.accelPerTick()).margin(1e-6f));
 
-    // ⇒ u == world +X and v == world +Y, which is what makes "same stick, flat vs slope"
+    // ⇒ u == world forward and v == world right, which is what makes "same stick, flat vs slope"
     //   a meaningful comparison instead of an arbitrary rotation.
 }
 
@@ -644,15 +645,14 @@ TEST_CASE("BrawlerMovement.TangentFrameFollowsSlopeNormal", "[BrawlerMovement]")
 
     ScriptedRig rig;
     rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight, rig.probeLength(), n) };
-    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
 
     rig.tick(1u, stick(1.f, 0.f));
 
-    // `buildTangentFrame` projects world +X into the plane and renormalises, so for a
-    // normal tilted `theta` about +Y the frame is u = (cos theta, 0, sin theta),
-    // v = (0, 1, 0). Derived here from the basis construction, NOT read back from it.
-    const glm::vec3 expectedU(glm::cos(glm::radians(kSlopeDeg)), 0.f,
-                              glm::sin(glm::radians(kSlopeDeg)));
+    // `buildTangentFrame` projects world forward into the plane and renormalises, so for a
+    // normal tilted `theta` about the right axis (`slopeNormal`) the frame is u = (0, sin theta, -cos theta),
+    // v = (1, 0, 0). Derived here from the basis construction, NOT read back from it.
+    const glm::vec3 expectedU = glm::vec3(0.f, glm::sin(glm::radians(kSlopeDeg)), -glm::cos(glm::radians(kSlopeDeg)));
 
     REQUIRE(rig.support() == movement::SupportState::Supported);
     REQUIRE(rig.derived.surfaceNormal == n);
@@ -660,15 +660,15 @@ TEST_CASE("BrawlerMovement.TangentFrameFollowsSlopeNormal", "[BrawlerMovement]")
     // At ride height the servo is silent, so the velocity IS the tangential term:
     // one tick of acceleration along `u`.
     const glm::vec3 expected = expectedU * rig.accelPerTick();
-    INFO("velocity=(" << rig.state.velocity.x << ", " << rig.state.velocity.y << ", "
-         << rig.state.velocity.z << ")  expected=(" << expected.x << ", " << expected.y
-         << ", " << expected.z << ")");
-    REQUIRE(rig.state.velocity.x == Catch::Approx(expected.x).margin(1e-4f));
-    REQUIRE(rig.state.velocity.y == Catch::Approx(expected.y).margin(1e-4f));
-    REQUIRE(rig.state.velocity.z == Catch::Approx(expected.z).margin(1e-4f));
+    INFO("velocity=(" << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << ", "
+         << simFrame::height(rig.state.velocity) << ")  expected=(" << simFrame::forwardRight(expected).x << ", " << simFrame::forwardRight(expected).y
+         << ", " << simFrame::height(expected) << ")");
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(simFrame::forwardRight(expected).x).margin(1e-6f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(simFrame::forwardRight(expected).y).margin(1e-6f));
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(simFrame::height(expected)).margin(1e-6f));
 
     // ⭐ AND IT IS PERPENDICULAR TO THE NORMAL -- the character walks ALONG the plane.
-    REQUIRE(glm::dot(rig.state.velocity, n) == Catch::Approx(0.f).margin(1e-4f));
+    REQUIRE(glm::dot(rig.state.velocity, n) == Catch::Approx(0.f).margin(1e-6f));
 }
 
 TEST_CASE("BrawlerMovement.ComposeIsSurfaceRelative", "[BrawlerMovement]")
@@ -684,24 +684,24 @@ TEST_CASE("BrawlerMovement.ComposeIsSurfaceRelative", "[BrawlerMovement]")
     ScriptedRig slope;
     slope.query.scriptedSweeps = {
         floorHitAt(slope.sd.rideHeight, slope.probeLength(), slopeNormal(kSlopeDeg)) };
-    slope.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + slope.sd.rideHeight);
+    slope.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + slope.sd.rideHeight);
     slope.tick(1u, stick(1.f, 0.f));
 
-    INFO("flat  v=(" << flat.state.velocity.x << ", " << flat.state.velocity.y << ", "
-         << flat.state.velocity.z << ")\n"
-         "slope v=(" << slope.state.velocity.x << ", " << slope.state.velocity.y << ", "
-         << slope.state.velocity.z << ")");
+    INFO("flat  v=(" << simFrame::forwardRight(flat.state.velocity).x << ", " << simFrame::forwardRight(flat.state.velocity).y << ", "
+         << simFrame::height(flat.state.velocity) << ")\n"
+         "slope v=(" << simFrame::forwardRight(slope.state.velocity).x << ", " << simFrame::forwardRight(slope.state.velocity).y << ", "
+         << simFrame::height(slope.state.velocity) << ")");
 
     // 1. THE SAME STICK PRODUCED DIFFERENT WORLD VELOCITIES -- the frame is in the loop.
     REQUIRE_FALSE(flat.state.velocity == slope.state.velocity);
-    REQUIRE(slope.state.velocity.z > 0.f);         // walking UP the ramp lifts you
-    REQUIRE(flat.state.velocity.z == 0.f);
+    REQUIRE(simFrame::height(slope.state.velocity) > 0.f);         // walking UP the ramp lifts you
+    REQUIRE(simFrame::height(flat.state.velocity) == 0.f);
 
     // 2. AND THEY DIFFER BY EXACTLY THE FRAME, not by a speed loss: the tangential SPEED
     //    is identical. The stick's deflection is preserved into the surface plane, so a
     //    character does not walk more slowly up a ramp for want of a cosine.
     REQUIRE(glm::length(slope.state.velocity)
-            == Catch::Approx(glm::length(flat.state.velocity)).margin(1e-4f));
+            == Catch::Approx(glm::length(flat.state.velocity)).margin(1e-6f));
 }
 
 // ===========================================================================
@@ -719,17 +719,17 @@ TEST_CASE("BrawlerMovement.ContinuousAccelerates", "[BrawlerMovement]")
     const float a = rig.accelPerTick();
 
     rig.tick(1u, stick(1.f, 0.f));
-    REQUIRE(rig.state.velocity.x == Catch::Approx(a).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(a).margin(1e-6f));
     rig.tick(2u, stick(1.f, 0.f));
-    REQUIRE(rig.state.velocity.x == Catch::Approx(2.f * a).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(2.f * a).margin(1e-6f));
 
     // The third tick would overshoot (3a = 102.4 > 100), and `moveTowards` is EXACT at
     // the endpoint rather than asymptotic, so the speed lands on the cap and stops.
     rig.tick(3u, stick(1.f, 0.f));
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.sd.maxWalkSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.sd.maxWalkSpeed).margin(1e-6f));
     for (std::uint32_t t = 4u; t <= 10u; ++t)
         rig.tick(t, stick(1.f, 0.f));
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.sd.maxWalkSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.sd.maxWalkSpeed).margin(1e-6f));
 }
 
 TEST_CASE("BrawlerMovement.ContinuousBrakes", "[BrawlerMovement]")
@@ -738,20 +738,20 @@ TEST_CASE("BrawlerMovement.ContinuousBrakes", "[BrawlerMovement]")
 
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
-    rig.state.velocity = glm::vec3(rig.sd.maxWalkSpeed, 0.f, 0.f);
+    rig.state.velocity = glm::vec3(0.f, 0.f, -rig.sd.maxWalkSpeed);
 
     const float b = rig.brakePerTick();
 
     rig.tick(1u);   // NO STICK -> the brake arm
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.sd.maxWalkSpeed - b).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.sd.maxWalkSpeed - b).margin(1e-6f));
     rig.tick(2u);
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.sd.maxWalkSpeed - 2.f * b).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.sd.maxWalkSpeed - 2.f * b).margin(1e-6f));
 
     // ⭐ AND IT REACHES EXACTLY ZERO. `moveTowards` returns the target when the remaining
     // distance is within one step, so a braked character STOPS rather than approaching
     // zero forever and leaving a denormal crawling across the wire every tick.
     rig.tick(3u);
-    REQUIRE(rig.state.velocity.x == 0.f);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == 0.f);
     REQUIRE(rig.state.velocity == glm::vec3(0.f));
 }
 
@@ -759,7 +759,7 @@ TEST_CASE("BrawlerMovement.StickMagnitudeScalesSpeed", "[BrawlerMovement]")
 {
     using namespace movementTests;
 
-    // The stick arrives as a world XY direction whose LENGTH is the deflection, so a
+    // The stick arrives as a horizontal world direction whose LENGTH is the deflection, so a
     // quarter-deflected stick asks for a quarter of the walk speed -- not for the walk
     // speed in a slightly different direction.
     const float deflections[] = { 0.25f, 0.5f, 1.f };
@@ -771,9 +771,9 @@ TEST_CASE("BrawlerMovement.StickMagnitudeScalesSpeed", "[BrawlerMovement]")
             rig.tick(t, stick(d, 0.f));
 
         INFO("deflection " << d << " -> speed " << glm::length(rig.state.velocity));
-        REQUIRE(rig.state.velocity.x
-                == Catch::Approx(d * rig.sd.maxWalkSpeed).margin(1e-4f));
-        REQUIRE(rig.state.velocity.y == 0.f);
+        REQUIRE(simFrame::forwardRight(rig.state.velocity).x
+                == Catch::Approx(d * rig.sd.maxWalkSpeed).margin(1e-6f));
+        REQUIRE(simFrame::forwardRight(rig.state.velocity).y == 0.f);
     }
 }
 
@@ -789,7 +789,7 @@ TEST_CASE("BrawlerMovement.FrozenByHoldGuard", "[BrawlerMovement]")
     // frozen VALUE is, and that it does not decay, is `FrozenIsExactThisTick` below.)
     ScriptedRig held;
     seatOnFlatGroundAtRideHeight(held);
-    held.state.velocity = glm::vec3(held.sd.maxWalkSpeed, 0.f, 0.f);
+    held.state.velocity = glm::vec3(0.f, 0.f, -held.sd.maxWalkSpeed);
     held.tick(1u, stick(1.f, 0.f), movement::kInputFlagHoldGuard);
 
     REQUIRE(held.frozenBit());
@@ -799,20 +799,20 @@ TEST_CASE("BrawlerMovement.FrozenByHoldGuard", "[BrawlerMovement]")
     // case would pass on a rig that could not move at all.
     ScriptedRig free;
     seatOnFlatGroundAtRideHeight(free);
-    free.state.velocity = glm::vec3(free.sd.maxWalkSpeed, 0.f, 0.f);
+    free.state.velocity = glm::vec3(0.f, 0.f, -free.sd.maxWalkSpeed);
     free.tick(1u, stick(1.f, 0.f), 0u);
     REQUIRE_FALSE(free.frozenBit());
-    REQUIRE(free.state.velocity.x == Catch::Approx(free.sd.maxWalkSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(free.state.velocity).x == Catch::Approx(free.sd.maxWalkSpeed).margin(1e-6f));
 
     // ⭐ CONTROL 2 -- AN UNASSIGNED BIT IS INERT. Bits 1-7 are UNASSIGNED; this pins that
     // `frozen` reads bit 0 and not "any bit set", so the first flag to land in them cannot
     // silently freeze locomotion.
     ScriptedRig reserved;
     seatOnFlatGroundAtRideHeight(reserved);
-    reserved.state.velocity = glm::vec3(reserved.sd.maxWalkSpeed, 0.f, 0.f);
+    reserved.state.velocity = glm::vec3(0.f, 0.f, -reserved.sd.maxWalkSpeed);
     reserved.tick(1u, stick(1.f, 0.f), static_cast<std::uint8_t>(1u << 1));
     REQUIRE_FALSE(reserved.frozenBit());
-    REQUIRE(reserved.state.velocity.x == Catch::Approx(reserved.sd.maxWalkSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(reserved.state.velocity).x == Catch::Approx(reserved.sd.maxWalkSpeed).margin(1e-6f));
 }
 
 TEST_CASE("BrawlerMovement.FrozenByHitFlinch", "[BrawlerMovement]")
@@ -821,7 +821,7 @@ TEST_CASE("BrawlerMovement.FrozenByHitFlinch", "[BrawlerMovement]")
 
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
-    rig.state.velocity = glm::vec3(rig.sd.maxWalkSpeed, 0.f, 0.f);
+    rig.state.velocity = glm::vec3(0.f, 0.f, -rig.sd.maxWalkSpeed);
     rig.machineState.m_currentState = DAttackState::HitFlinch;
 
     rig.tick(1u, stick(1.f, 0.f));
@@ -837,13 +837,13 @@ TEST_CASE("BrawlerMovement.FrozenByHitFlinch", "[BrawlerMovement]")
     // which is a number neither the freeze nor a full stop could produce.
     ScriptedRig attacking;
     seatOnFlatGroundAtRideHeight(attacking);
-    attacking.state.velocity = glm::vec3(attacking.sd.maxWalkSpeed, 0.f, 0.f);
+    attacking.state.velocity = glm::vec3(0.f, 0.f, -attacking.sd.maxWalkSpeed);
     attacking.machineState.m_currentState  = DAttackState::Attacking;
     attacking.machineState.m_attackEndTick = 10u;      // R = 9 on tick 1
     attacking.tick(1u, stick(1.f, 0.f));
     REQUIRE_FALSE(attacking.frozenBit());
-    REQUIRE(attacking.state.velocity.x
-            == Catch::Approx(attacking.sd.maxWalkSpeed * 8.f / 9.f).margin(1e-3f));
+    REQUIRE(simFrame::forwardRight(attacking.state.velocity).x
+            == Catch::Approx(attacking.sd.maxWalkSpeed * 8.f / 9.f).margin(1.0000001e-5f));
 
     // ⚠ AND THE OTHER HALF, RECORDED RATHER THAN LEFT AS A SURPRISE: a DEFAULT-CONSTRUCTED
     // machine `State` held in `Attacking` carries `m_attackEndTick == 0`, which ⛔G-24's guard
@@ -852,7 +852,7 @@ TEST_CASE("BrawlerMovement.FrozenByHitFlinch", "[BrawlerMovement]")
     // stays clear -- and it is the reason the arm above has to set the field at all.
     ScriptedRig noEndTick;
     seatOnFlatGroundAtRideHeight(noEndTick);
-    noEndTick.state.velocity = glm::vec3(noEndTick.sd.maxWalkSpeed, 0.f, 0.f);
+    noEndTick.state.velocity = glm::vec3(0.f, 0.f, -noEndTick.sd.maxWalkSpeed);
     noEndTick.machineState.m_currentState = DAttackState::Attacking;
     REQUIRE(noEndTick.machineState.m_attackEndTick == 0u);
     noEndTick.tick(1u, stick(1.f, 0.f));
@@ -866,7 +866,7 @@ TEST_CASE("BrawlerMovement.FrozenByGuardFlinch", "[BrawlerMovement]")
 
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
-    rig.state.velocity = glm::vec3(rig.sd.maxWalkSpeed, 0.f, 0.f);
+    rig.state.velocity = glm::vec3(0.f, 0.f, -rig.sd.maxWalkSpeed);
     rig.machineState.m_currentState = DAttackState::GuardFlinch;
 
     rig.tick(1u, stick(1.f, 0.f));
@@ -876,11 +876,11 @@ TEST_CASE("BrawlerMovement.FrozenByGuardFlinch", "[BrawlerMovement]")
     // CONTROL -- Idle is the default and must not freeze.
     ScriptedRig idle;
     seatOnFlatGroundAtRideHeight(idle);
-    idle.state.velocity = glm::vec3(idle.sd.maxWalkSpeed, 0.f, 0.f);
+    idle.state.velocity = glm::vec3(0.f, 0.f, -idle.sd.maxWalkSpeed);
     REQUIRE(idle.machineState.m_currentState == DAttackState::Idle);
     idle.tick(1u, stick(1.f, 0.f));
     REQUIRE_FALSE(idle.frozenBit());
-    REQUIRE(idle.state.velocity.x == Catch::Approx(idle.sd.maxWalkSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(idle.state.velocity).x == Catch::Approx(idle.sd.maxWalkSpeed).margin(1e-6f));
 }
 
 TEST_CASE("BrawlerMovement.FrozenIsExactThisTick", "[BrawlerMovement]")
@@ -891,10 +891,10 @@ TEST_CASE("BrawlerMovement.FrozenIsExactThisTick", "[BrawlerMovement]")
     // TICK. It is not a decay, and it does not restore the pre-freeze velocity afterwards.
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
-    rig.state.velocity = glm::vec3(rig.sd.maxWalkSpeed, 0.f, 0.f);
+    rig.state.velocity = glm::vec3(0.f, 0.f, -rig.sd.maxWalkSpeed);
 
     rig.tick(1u, stick(1.f, 0.f));
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.sd.maxWalkSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.sd.maxWalkSpeed).margin(1e-6f));
 
     rig.tick(2u, stick(1.f, 0.f), movement::kInputFlagHoldGuard);
     // ⭐ EXACT, not `maxWalkSpeed - brakingDeceleration * dt` and not anything smaller.
@@ -904,7 +904,7 @@ TEST_CASE("BrawlerMovement.FrozenIsExactThisTick", "[BrawlerMovement]")
     // ⭐ AND IT RESUMES FROM ZERO. If the freeze had merely been masked on the way out,
     // the model would re-read `maxWalkSpeed` here and this would be 100, not one tick of
     // acceleration.
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.accelPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.accelPerTick()).margin(1e-6f));
     REQUIRE_FALSE(rig.frozenBit());
 }
 
@@ -920,13 +920,13 @@ TEST_CASE("BrawlerMovement.FrozenIsExactThisTick", "[BrawlerMovement]")
 // one term buys:
 //     servo(e = 0, vUp = 0) = k*0 - c*0 - gravity = -gravity   =>   a = gravity + (-gravity) = 0
 // WITHOUT the `- sd.gravity` feed-forward the spring would have to SAG until it held its own
-// weight, `k*sag == |gravity|` => 980 / 2116 = 0.463138 cm. That is not a rounding error: it is
+// weight, `k*sag == |gravity|` => 9.8 / 2116 = 0.00463138 m. That is not a rounding error: it is
 // 463x the scale every `clearance == rideHeight` pin in this file asserts to, and all of them
 // would have had to be loosened to accept it.
 //
 // POISONED, NOT ASSUMED (impl notes §2): with `- sd.gravity` deleted from the servo term this
-// case reads velocity.z == -16.333334 on the first tick instead of 0, and `HoverOnRampDoesNotDrift`
-// settles 0.4631 cm low. Both arms were run.
+// case reads a vertical velocity of -0.16333334 on the first tick instead of 0, and `HoverOnRampDoesNotDrift`
+// settles 0.004631 m low. Both arms were run.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerMovement.HoverHoldsRideHeight", "[BrawlerMovement]")
 {
@@ -940,45 +940,45 @@ TEST_CASE("BrawlerMovement.HoverHoldsRideHeight", "[BrawlerMovement]")
     INFO("at rest: clearance == rideHeight == " << rest.sd.rideHeight
          << "  gravity=" << rest.sd.gravity << "  k=" << rest.sd.hoverStiffness);
     REQUIRE(rest.support() == movement::SupportState::Supported);
-    REQUIRE(rest.state.velocity.z == 0.f);
+    REQUIRE(simFrame::height(rest.state.velocity) == 0.f);
     REQUIRE(rest.state.velocity == glm::vec3(0.f));
 
     // 2. ⭐ A FALL ALREADY IN PROGRESS IS DAMPED, NOT ANNIHILATED -- and this row is the whole
     //    difference between ruling #28's law and the dead-beat it replaced. The dead-beat
     //    ASSIGNED `velocityUp` from clearance, so this seed read EXACTLY 0.000000 after one tick:
-    //    600 cm/s of real momentum destroyed by a position servo. Here the only term acting is
+    //    6 m/s of real momentum destroyed by a position servo. Here the only term acting is
     //    the damper (e == 0, and the feed-forward cancels gravity), so the closed form is
     //    `vUp * (1 - c*dt)` and nothing is discarded.
     ScriptedRig falling;
     seatOnFlatGroundAtRideHeight(falling);
-    falling.state.velocity = glm::vec3(0.f, 0.f, -500.f);
+    falling.state.velocity = glm::vec3(0.f, -5.f, -0.f);
     falling.tick(1u);
 
-    const float damped = -500.f * (1.f - falling.sd.hoverDamping * kDt);
-    INFO("fall in progress: -500 -> " << falling.state.velocity.z
+    const float damped = -5.f * (1.f - falling.sd.hoverDamping * kDt);
+    INFO("fall in progress: -500 -> " << simFrame::height(falling.state.velocity)
          << "  (closed form vUp*(1 - c*dt) = " << damped
          << ", dead-beat would have assigned 0.000000)");
-    REQUIRE(falling.state.velocity.z == Catch::Approx(damped).margin(1e-3f));
-    REQUIRE(falling.state.velocity.z != 0.f);           // RED under the dead-beat
-    REQUIRE(falling.state.velocity.z < 0.f);            // still falling, just slower
-    REQUIRE(glm::abs(falling.state.velocity.z) < 500.f);
+    REQUIRE(simFrame::height(falling.state.velocity) == Catch::Approx(damped).margin(1.0000001e-5f));
+    REQUIRE(simFrame::height(falling.state.velocity) != 0.f);           // RED under the dead-beat
+    REQUIRE(simFrame::height(falling.state.velocity) < 0.f);            // still falling, just slower
+    REQUIRE(glm::abs(simFrame::height(falling.state.velocity)) < 5.f);
 
     // 3. ...AND IT CONVERGES TO THE SAME EXACT ZERO. The damping is real, not a stall.
     for (std::uint32_t t = 2u; t <= 9u; ++t)
         falling.tick(t);
-    INFO("after 8 more ticks vz=" << falling.state.velocity.z);
-    REQUIRE(glm::abs(falling.state.velocity.z) < 1e-3f);
+    INFO("after 8 more ticks vz=" << simFrame::height(falling.state.velocity));
+    REQUIRE(glm::abs(simFrame::height(falling.state.velocity)) < 1.0000001e-5f);
 
     // 4. CONTROL -- the same seed with nothing under the capsule falls at the authored rate.
     //    That is what makes arm 2 a measurement: the two arms differ only in whether the probe
     //    found ground, and the SERVO TERM is the only thing that differs in the law.
     ScriptedRig unsupported;
     unsupported.query.scriptedSweeps.clear();
-    unsupported.state.velocity = glm::vec3(0.f, 0.f, -500.f);
+    unsupported.state.velocity = glm::vec3(0.f, -5.f, -0.f);
     unsupported.tick(1u);
     REQUIRE(unsupported.support() == movement::SupportState::Unsupported);
-    REQUIRE(unsupported.state.velocity.z
-            == Catch::Approx(-500.f + unsupported.gravityPerTick()).margin(1e-3f));
+    REQUIRE(simFrame::height(unsupported.state.velocity)
+            == Catch::Approx(-5.f + unsupported.gravityPerTick()).margin(1.0000001e-5f));
 }
 
 TEST_CASE("BrawlerMovement.HoverLiftsWhenLow", "[BrawlerMovement]")
@@ -986,25 +986,25 @@ TEST_CASE("BrawlerMovement.HoverLiftsWhenLow", "[BrawlerMovement]")
     using namespace movementTests;
 
     ScriptedRig rig;
-    // 1 cm LOW, FROM REST. The whole law collapses to `a = k*e` on this tick: the feed-forward
+    // 0.01 m LOW, FROM REST. The whole law collapses to `a = k*e` on this tick: the feed-forward
     // cancels gravity exactly and the damper term is zero because `vUp` is. So the commanded
-    // velocity is `k*e*dt` -- one multiplication, and `servoStepPerCm()` is that per cm.
-    // ⚠ THE DEAD-BEAT WOULD HAVE COMMANDED `e / dt` = 60 cm/s here. 35.266667 vs 60 is the
+    // velocity is `k*e*dt` -- one multiplication, and `servoStepPerMetre()` is that per metre.
+    // ⚠ THE DEAD-BEAT WOULD HAVE COMMANDED `e / dt` = 0.6 m/s here. 0.35266667 vs 0.6 is the
     // visible content of ruling #28 at small errors: the spring does not close the gap in one
     // tick and is not trying to.
-    rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight - 1.f, rig.probeLength()) };
+    rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight - 0.01f, rig.probeLength()) };
     rig.tick(1u);
 
-    const float expected = rig.servoStepPerCm();          // k * 1 cm * dt
-    INFO("clearance error 1 cm -> commanded " << rig.state.velocity.z
-         << " cm/s (k*e*dt = " << expected << ", retired dead-beat e/dt = " << (1.f / kDt)
+    const float expected = rig.servoStepPerMetre() * 0.01f;          // k * 0.01 m * dt
+    INFO("clearance error 0.01 m -> commanded " << simFrame::height(rig.state.velocity)
+         << " m/s (k*e*dt = " << expected << ", retired dead-beat e/dt = " << (0.01f / kDt)
          << ", one tick of gravity = " << rig.gravityPerTick() << ")");
-    REQUIRE(rig.state.velocity.z > 0.f);
-    REQUIRE(rig.state.velocity.z == Catch::Approx(expected).margin(1e-3f));
-    REQUIRE(rig.state.velocity.z < rig.maxVerticalStep());   // this arm is UNSATURATED
+    REQUIRE(simFrame::height(rig.state.velocity) > 0.f);
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(expected).margin(1.0000001e-5f));
+    REQUIRE(simFrame::height(rig.state.velocity) < rig.maxVerticalStep());   // this arm is UNSATURATED
     // ...and it is NOT the retired law's answer, which is what makes the value assertion above
     // a measurement of the new one rather than a transcription.
-    REQUIRE(rig.state.velocity.z != Catch::Approx(1.f / kDt).margin(1e-3f));
+    REQUIRE(simFrame::height(rig.state.velocity) != Catch::Approx(0.01f / kDt).margin(1.0000001e-5f));
 }
 
 // ⭐⭐ RENAMED AND INVERTED BY movement-sim TASK 57 / RULING #29. It was
@@ -1017,37 +1017,37 @@ TEST_CASE("BrawlerMovement.HoverDoesNotPullDownWhenHigh", "[BrawlerMovement]")
     using namespace movementTests;
 
     ScriptedRig rig;
-    rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight + 1.f, rig.probeLength()) };
+    rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight + 0.01f, rig.probeLength()) };
     rig.tick(1u);
 
-    // ONE cm HIGH. The task-56 spring commanded `k*e*dt` = -35.267 cm/s here; ruling #29 commands
+    // 0.01 m HIGH. The task-56 spring commanded `k*e*dt` = -0.35267 m/s here; ruling #29 commands
     // ONE TICK OF GRAVITY and nothing else, because `hoverPullDownAccel` ships at 0.
     REQUIRE(rig.sd.hoverPullDownAccel == 0.f);
     REQUIRE(rig.support() == movement::SupportState::Supported);   // the servo IS on this tick...
-    REQUIRE(rig.state.velocity.z < 0.f);
-    REQUIRE(rig.state.velocity.z == Catch::Approx(rig.gravityPerTick()).margin(1e-3f));
+    REQUIRE(simFrame::height(rig.state.velocity) < 0.f);
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(rig.gravityPerTick()).margin(1.0000001e-5f));
     // ...and it is NOT the retired two-sided answer, which is what makes the row above a
     // measurement of the new arm rather than a coincidence of two small numbers.
-    REQUIRE(rig.state.velocity.z != Catch::Approx(-rig.servoStepPerCm()).margin(1e-3f));
+    REQUIRE(simFrame::height(rig.state.velocity) != Catch::Approx(-rig.servoStepPerMetre() * 0.01f).margin(1.0000001e-5f));
 
-    // AND THE OTHER ARM IS UNTOUCHED: one cm LOW is still task 56's `k*e*dt`, to the digit. F1
+    // AND THE OTHER ARM IS UNTOUCHED: 0.01 m LOW is still task 56's `k*e*dt`, to the digit. F1
     // changes exactly one side of `e == 0`, and this pair is the statement of that.
     ScriptedRig low;
-    low.query.scriptedSweeps = { floorHitAt(low.sd.rideHeight - 1.f, low.probeLength()) };
+    low.query.scriptedSweeps = { floorHitAt(low.sd.rideHeight - 0.01f, low.probeLength()) };
     low.tick(1u);
-    REQUIRE(low.state.velocity.z == Catch::Approx(low.servoStepPerCm()).margin(1e-3f));
+    REQUIRE(simFrame::height(low.state.velocity) == Catch::Approx(low.servoStepPerMetre() * 0.01f).margin(1.0000001e-5f));
 
-    // THE KNOB RESTORES A BOUNDED PULL, and only a bounded one: at 980 the same one-cm-high tick
-    // asks for `k*1` = 2116 and gets 980 -- `glm::max(k*e, -hoverPullDownAccel)` is the ceiling.
+    // THE KNOB RESTORES A BOUNDED PULL, and only a bounded one: at 9.8 the same 0.01-m-high tick
+    // asks for `k*e` = 21.16 and gets 9.8 -- `glm::max(k*e, -hoverPullDownAccel)` is the ceiling.
     ScriptedRig knob;
-    knob.sd.hoverPullDownAccel = 980.f;
-    knob.query.scriptedSweeps = { floorHitAt(knob.sd.rideHeight + 1.f, knob.probeLength()) };
+    knob.sd.hoverPullDownAccel = 9.8f;
+    knob.query.scriptedSweeps = { floorHitAt(knob.sd.rideHeight + 0.01f, knob.probeLength()) };
     knob.tick(1u);
-    INFO("1 cm high: default " << rig.state.velocity.z << ", knob 980 -> "
-         << knob.state.velocity.z << ", task 56 would have said " << -rig.servoStepPerCm());
-    REQUIRE(knob.sd.hoverStiffness * 1.f > knob.sd.hoverPullDownAccel);          // the ceiling binds
-    REQUIRE(knob.state.velocity.z
-            == Catch::Approx((knob.sd.gravity - knob.sd.hoverPullDownAccel) * kDt).margin(1e-3f));
+    INFO("0.01 m high: default " << simFrame::height(rig.state.velocity) << ", knob 9.8 -> "
+         << simFrame::height(knob.state.velocity) << ", task 56 would have said " << -rig.servoStepPerMetre() * 0.01f);
+    REQUIRE(knob.sd.hoverStiffness * 0.01f > knob.sd.hoverPullDownAccel);          // the ceiling binds
+    REQUIRE(simFrame::height(knob.state.velocity)
+            == Catch::Approx((knob.sd.gravity - knob.sd.hoverPullDownAccel) * kDt).margin(1.0000001e-5f));
 }
 
 TEST_CASE("BrawlerMovement.HoverServoAccelerationIsClamped", "[BrawlerMovement]")
@@ -1086,66 +1086,66 @@ TEST_CASE("BrawlerMovement.HoverServoAccelerationIsClamped", "[BrawlerMovement]"
     //    term F1 removed above ride height, and its absence is why the number differs from the
     //    task-56 one by exactly 980*dt.
     ScriptedRig inside;
-    inside.sd.hoverPullDownAccel = 60000.f;
-    inside.query.scriptedSweeps = { floorHitAt(24.f, inside.probeLength()) };
+    inside.sd.hoverPullDownAccel = 600.f;
+    inside.query.scriptedSweeps = { floorHitAt(0.24f, inside.probeLength()) };
     inside.tick(1u);
-    const float insideServo = glm::max(inside.sd.hoverStiffness * (inside.sd.rideHeight - 24.f),
+    const float insideServo = glm::max(inside.sd.hoverStiffness * (inside.sd.rideHeight - 0.24f),
                                        -inside.sd.hoverPullDownAccel);
     const float insideExpected = (inside.sd.gravity + insideServo) * kDt;
     INFO("clearance 24, knob 60000: servo=" << insideServo << " (|.| < "
-         << inside.sd.hoverMaxAccel << ") -> commanded " << inside.state.velocity.z
+         << inside.sd.hoverMaxAccel << ") -> commanded " << simFrame::height(inside.state.velocity)
          << " expected " << insideExpected);
     REQUIRE(glm::abs(insideServo) < inside.sd.hoverMaxAccel);        // the premise
-    REQUIRE(insideServo == Catch::Approx(inside.sd.hoverStiffness * -14.f).margin(1e-2f));
-    REQUIRE(inside.state.velocity.z == Catch::Approx(insideExpected).margin(1e-3f));
-    REQUIRE(glm::abs(inside.state.velocity.z) < bound);              // this arm is UNSATURATED
+    REQUIRE(insideServo == Catch::Approx(inside.sd.hoverStiffness * -0.14f).margin(1e-4f));
+    REQUIRE(simFrame::height(inside.state.velocity) == Catch::Approx(insideExpected).margin(1.0000001e-5f));
+    REQUIRE(glm::abs(simFrame::height(inside.state.velocity)) < bound);              // this arm is UNSATURATED
 
     // 2. BEYOND IT, DOWNWARD. At clearance 45 -- deep in the snap band, a real step-down -- the
     //    spring asks for -74060 and the clamp holds the total to `gravity - hoverMaxAccel`. The
     //    commanded velocity lands exactly on the asymmetric bound, which is what pins the
     //    `+ |gravity|` half of it.
     ScriptedRig high;
-    high.sd.hoverPullDownAccel = 60000.f;
-    high.query.scriptedSweeps = { floorHitAt(45.f, high.probeLength()) };
+    high.sd.hoverPullDownAccel = 600.f;
+    high.query.scriptedSweeps = { floorHitAt(0.45f, high.probeLength()) };
     high.tick(1u);
-    const float highServo = glm::max(high.sd.hoverStiffness * (high.sd.rideHeight - 45.f),
+    const float highServo = glm::max(high.sd.hoverStiffness * (high.sd.rideHeight - 0.45f),
                                      -high.sd.hoverPullDownAccel);
     INFO("clearance 45, knob 60000: servo=" << highServo << " -> clamped -> commanded "
-         << high.state.velocity.z);
+         << simFrame::height(high.state.velocity));
     REQUIRE(glm::abs(highServo) > high.sd.hoverMaxAccel);            // the premise: it WOULD overshoot
-    REQUIRE(high.state.velocity.z == Catch::Approx(-bound).margin(1e-3f));
+    REQUIRE(simFrame::height(high.state.velocity) == Catch::Approx(-bound).margin(1.0000001e-5f));
     REQUIRE(high.support() == movement::SupportState::Supported);
     // ...and NOT the tidier wrong bound. This row is what a case written against
     // `hoverMaxAccel * kDt` would have failed on.
-    REQUIRE(high.state.velocity.z != Catch::Approx(-high.sd.hoverMaxAccel * kDt).margin(1e-3f));
+    REQUIRE(simFrame::height(high.state.velocity) != Catch::Approx(-high.sd.hoverMaxAccel * kDt).margin(1.0000001e-5f));
     // ...and at the SHIPPED knob the same clearance is one tick of gravity, which is the
     // difference F1 made and the reason both arms above had to be re-pointed.
     ScriptedRig shippedKnob;
-    shippedKnob.query.scriptedSweeps = { floorHitAt(45.f, shippedKnob.probeLength()) };
+    shippedKnob.query.scriptedSweeps = { floorHitAt(0.45f, shippedKnob.probeLength()) };
     shippedKnob.tick(1u);
     REQUIRE(shippedKnob.sd.hoverPullDownAccel == 0.f);
-    REQUIRE(shippedKnob.state.velocity.z
-            == Catch::Approx(shippedKnob.gravityPerTick()).margin(1e-3f));
+    REQUIRE(simFrame::height(shippedKnob.state.velocity)
+            == Catch::Approx(shippedKnob.gravityPerTick()).margin(1.0000001e-5f));
 
     // 3. BEYOND IT, UPWARD, AND IT IS THE *DAMPER* THAT SATURATES -- not the spring. At ride
     //    height the spring term is identically zero, so a fast fall is arrested purely by
-    //    `-c*vUp`: at -600 cm/s that asks for +35204, and the clamp holds the total to
+    //    `-c*vUp`: at -6 m/s that asks for +352.04, and the clamp holds the total to
     //    `gravity + hoverMaxAccel`. There is no clearance error large enough to saturate upward
-    //    on its own (the largest possible is `rideHeight` = 10 cm, worth 22140), which is why
+    //    on its own (the largest possible is `rideHeight` = 0.1 m, worth 221.4), which is why
     //    this arm is driven by velocity rather than by position.
     ScriptedRig fast;
     seatOnFlatGroundAtRideHeight(fast);
-    fast.state.velocity = glm::vec3(0.f, 0.f, -600.f);
+    fast.state.velocity = glm::vec3(0.f, -6.f, -0.f);
     fast.tick(1u);
-    const float fastServo = -fast.sd.hoverDamping * -600.f - fast.sd.gravity;
+    const float fastServo = -fast.sd.hoverDamping * -6.f - fast.sd.gravity;
     INFO("ride height, falling at -600: servo=" << fastServo << " -> clamped -> commanded "
-         << fast.state.velocity.z);
+         << simFrame::height(fast.state.velocity));
     REQUIRE(fastServo > fast.sd.hoverMaxAccel);                      // the premise
-    REQUIRE(fast.state.velocity.z
-            == Catch::Approx(-600.f + (fast.sd.gravity + fast.sd.hoverMaxAccel) * kDt).margin(1e-3f));
+    REQUIRE(simFrame::height(fast.state.velocity)
+            == Catch::Approx(-6.f + (fast.sd.gravity + fast.sd.hoverMaxAccel) * kDt).margin(1.0000001e-5f));
     // The upward saturation is the OTHER side of the asymmetry: `hoverMaxAccel - |gravity|`.
-    REQUIRE(fast.state.velocity.z - (-600.f)
-            == Catch::Approx((fast.sd.hoverMaxAccel - glm::abs(fast.sd.gravity)) * kDt).margin(1e-3f));
+    REQUIRE(simFrame::height(fast.state.velocity) - (-6.f)
+            == Catch::Approx((fast.sd.hoverMaxAccel - glm::abs(fast.sd.gravity)) * kDt).margin(1.0000001e-5f));
     // ...and the largest clearance error the geometry admits cannot reach the clamp alone.
     REQUIRE(fast.sd.hoverStiffness * fast.sd.rideHeight - fast.sd.gravity
             < fast.sd.hoverMaxAccel);
@@ -1155,7 +1155,7 @@ TEST_CASE("BrawlerMovement.HoverAbsorbsSmallLedge", "[BrawlerMovement]")
 {
     using namespace movementTests;
 
-    // A 9 cm step UP. The ANALYTIC GROUND is the mock here, not a script: the whole claim
+    // A 0.09 m step UP. The ANALYTIC GROUND is the mock here, not a script: the whole claim
     // is that the servo CONVERGES, and convergence needs a ground that responds to the
     // capsule moving. A scripted clearance would be answering its own question.
     //
@@ -1164,23 +1164,23 @@ TEST_CASE("BrawlerMovement.HoverAbsorbsSmallLedge", "[BrawlerMovement]")
     // `maxSnapSpeed` and one unclamped remainder. Those two rows were a property of the clamp, not
     // of the hover, and they are gone with it. What is asserted now is the shape of the response,
     // which is the thing the gains are tuned for:
-    //   * the first tick is `k*e*dt` and is NOT saturated -- 9 cm asks for 20024 cm/s^2 against a
-    //     30000 ceiling, so a 9 cm ledge is inside the servo's linear range;
+    //   * the first tick is `k*e*dt` and is NOT saturated -- 0.09 m asks for 200.24 m/s^2 against a
+    //     300 ceiling, so a 0.09 m ledge is inside the servo's linear range;
     //   * the approach is MONOTONE and never overshoots past ride height, which is the discrete
     //     critical damping ratio doing its job (`discreteCriticalZeta()`; at zeta = 1 this case
     //     rings past ride height and back);
-    //   * it is within 0.05 cm after six ticks.
+    //   * it is within 0.0005 m after six ticks.
     PlaneRig rig;
     rig.state.bodyState.position =
-        glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight));
+        simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight));
 
     rig.tick(0u);
-    REQUIRE(rig.query.lastClearance == Catch::Approx(rig.sd.rideHeight).margin(1e-3f));
-    REQUIRE(rig.state.velocity.z == Catch::Approx(0.f).margin(1e-3f));
+    REQUIRE(rig.query.lastClearance == Catch::Approx(rig.sd.rideHeight).margin(1.0000001e-5f));
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(0.f).margin(1.0000001e-5f));
     rig.engineStep();
 
     // THE LEDGE. Clearance drops 10 -> 1.
-    constexpr float kLedge = 9.f;
+    constexpr float kLedge = 0.09f;
     rig.query.planeOffset += kLedge;
 
     std::vector<float> clearance;
@@ -1189,21 +1189,21 @@ TEST_CASE("BrawlerMovement.HoverAbsorbsSmallLedge", "[BrawlerMovement]")
     {
         rig.tick(t);
         clearance.push_back(rig.query.lastClearance);
-        commanded.push_back(rig.state.velocity.z);
+        commanded.push_back(simFrame::height(rig.state.velocity));
         REQUIRE(rig.support() == movement::SupportState::Supported);   // never flinched
         rig.engineStep();
     }
 
-    INFO("9 cm ledge: clearance=" << clearance[0] << ", " << clearance[1] << ", " << clearance[2]
+    INFO("0.09 m ledge: clearance=" << clearance[0] << ", " << clearance[1] << ", " << clearance[2]
          << ", " << clearance[3] << " ... " << clearance.back()
          << "  commanded=" << commanded[0] << ", " << commanded[1] << ", " << commanded[2]
          << " ... " << commanded.back()
-         << "  (k*e*dt for e=9 is " << (9.f * rig.servoStepPerCm())
+         << "  (k*e*dt for e=9 is " << (0.09f * rig.servoStepPerMetre())
          << "; the retired dead-beat clamped this same ledge to maxSnapSpeed = 400)");
 
     // 1. THE FIRST TICK IS `k*e*dt`, EXACTLY, AND UNSATURATED.
-    REQUIRE(clearance[0] == Catch::Approx(rig.sd.rideHeight - kLedge).margin(1e-3f));
-    REQUIRE(commanded[0] == Catch::Approx(kLedge * rig.servoStepPerCm()).margin(1e-2f));
+    REQUIRE(clearance[0] == Catch::Approx(rig.sd.rideHeight - kLedge).margin(1.0000001e-5f));
+    REQUIRE(commanded[0] == Catch::Approx(kLedge * rig.servoStepPerMetre()).margin(1e-4f));
     REQUIRE(commanded[0] < rig.maxVerticalStep());
     REQUIRE(rig.sd.hoverStiffness * kLedge - rig.sd.gravity < rig.sd.hoverMaxAccel);  // the premise
 
@@ -1215,13 +1215,13 @@ TEST_CASE("BrawlerMovement.HoverAbsorbsSmallLedge", "[BrawlerMovement]")
         INFO("tick " << (i + 1) << " clearance=" << clearance[i]
              << " previous=" << clearance[i - 1]);
         REQUIRE(clearance[i] > clearance[i - 1]);                       // strictly rising
-        REQUIRE(clearance[i] <= rig.sd.rideHeight + 1e-3f);             // never past it
+        REQUIRE(clearance[i] <= rig.sd.rideHeight + 1.0000001e-5f);             // never past it
         REQUIRE(commanded[i] < commanded[i - 1]);                       // strictly decelerating
         REQUIRE(commanded[i] > 0.f);                                    // ...and never reverses
     }
 
-    // 3. AND IT IS BACK AT RIDE HEIGHT. Six ticks for a 9 cm ledge, to 0.05 cm.
-    REQUIRE(clearance.back() == Catch::Approx(rig.sd.rideHeight).margin(0.05f));
+    // 3. AND IT IS BACK AT RIDE HEIGHT. Six ticks for a 0.09 m ledge, to 0.0005 m.
+    REQUIRE(clearance.back() == Catch::Approx(rig.sd.rideHeight).margin(0.0005f));
     REQUIRE(rig.sd.hoverDampingRatio >= rig.discreteCriticalZeta());    // why (2) holds
 }
 
@@ -1229,11 +1229,11 @@ TEST_CASE("BrawlerMovement.HoverAbsorbsSmallLedge", "[BrawlerMovement]")
 // ⭐⭐ THE RAMP. USER RULING #26 (a) / TASK 49.
 //
 // THE TARGET IS MEASURED, NOT INVENTED. Task 49 drove the header through
-// `SimulatableBrawler::integrate` against this same analytic 30 deg plane, seeded 1 cm
+// `SimulatableBrawler::integrate` against this same analytic 30 deg plane, seeded 0.01 m
 // above ride height with a zero stick, and recorded the lateral travel over the whole
 // transient on BOTH arms:
-//     post-fix (correct along world up, shipped)   0.000000 cm
-//     pre-fix  (correct along the surface normal)  0.433010 cm per cm of clearance error
+//     post-fix (correct along world up, shipped)   0.000000 m
+//     pre-fix  (correct along the surface normal)  0.433010 m per m of clearance error
 // The pre-fix figure is `sin(theta) * cos(theta) * e` -- the probe is cast FROM the capsule,
 // so a step along `n` also moves the probe origin sideways and the ground under it falls
 // away; the servo gained `s / cos(theta)` of vertical instead of `s` and over-corrected,
@@ -1258,23 +1258,23 @@ TEST_CASE("BrawlerMovement.HoverOnRampDoesNotDrift", "[BrawlerMovement]")
     using namespace movementTests;
 
     constexpr float kSlopeDeg      = 30.f;
-    // ⭐ SEEDED ONE cm *BELOW* RIDE HEIGHT SINCE movement-sim TASK 57 / RULING #29. It used to be
-    // one cm ABOVE, and that is now the arm where the law is gravity and nothing else -- a seed
+    // ⭐ SEEDED 0.01 m *BELOW* RIDE HEIGHT SINCE movement-sim TASK 57 / RULING #29. It used to be
+    // 0.01 m ABOVE, and that is now the arm where the law is gravity and nothing else -- a seed
     // there would have measured a falling body, not the servo transient this case is about. The
     // AXIS property (no lateral component at any slope) is unchanged and is still the subject;
     // only the side of `e == 0` the transient is driven from moved, and the closed form below is
     // the same one with the sign flipped.
-    constexpr float kSeedError     = 1.f;    // cm BELOW ride height
+    constexpr float kSeedError     = 0.01f;    // m BELOW ride height
     constexpr int   kTicks         = 8;
     // Task 49 AC-1, MEASURED on a two-arm rig. Do not re-derive it here.
-    constexpr float kPreFixLateralPerCmOfError = 0.433010f;
+    constexpr float kPreFixLateralPerUnitError = 0.433010f;
 
     PlaneRig rig;
     rig.query.planeNormal = slopeNormal(kSlopeDeg);
-    rig.state.bodyState.position = glm::vec3(
-        0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight - kSeedError));
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f),
+        seedZForClearance(rig.query, rig.sd.rideHeight - kSeedError));
 
-    const float startX = rig.state.bodyState.position.x;
+    const float startX = simFrame::forwardRight(rig.state.bodyState.position).x;
 
     std::vector<float>     clearance;
     std::vector<glm::vec3> commanded;
@@ -1286,16 +1286,16 @@ TEST_CASE("BrawlerMovement.HoverOnRampDoesNotDrift", "[BrawlerMovement]")
         rig.engineStep();
     }
 
-    const float driftX = rig.state.bodyState.position.x - startX;
+    const float driftX = simFrame::forwardRight(rig.state.bodyState.position).x - startX;
 
-    INFO("30 deg ramp, uv = 0, seeded " << kSeedError << " cm high.\n"
+    INFO("30 deg ramp, uv = 0, seeded " << kSeedError << " m high.\n"
          "  clearance[0]=" << clearance[0] << "  clearance[1]=" << clearance[1]
          << "  clearance[last]=" << clearance.back() << "\n"
          "  |commanded[0]|=" << glm::length(commanded[0])
-         << "  commanded[0]=(" << commanded[0].x << ", " << commanded[0].y << ", "
-         << commanded[0].z << ")\n"
-         "  lateral drift=" << driftX << " cm   (measured pre-fix: "
-         << kPreFixLateralPerCmOfError * kSeedError << " cm)");
+         << "  commanded[0]=(" << simFrame::forwardRight(commanded[0]).x << ", " << simFrame::forwardRight(commanded[0]).y << ", "
+         << simFrame::height(commanded[0]) << ")\n"
+         "  lateral drift=" << driftX << " m   (measured pre-fix: "
+         << kPreFixLateralPerUnitError * kSeedError << " m)");
 
     // ---- THE CONTROL ROWS. Without these a servo that did NOTHING would also not drift,
     //      and the case would be the strongest kind of vacuous: green because nothing ran.
@@ -1304,40 +1304,40 @@ TEST_CASE("BrawlerMovement.HoverOnRampDoesNotDrift", "[BrawlerMovement]")
     //      they fence is the RIG, and a control row that moved with the subject would fence
     //      nothing. (Measured on the two-arm control: both PASS in both arms.)
     REQUIRE(rig.support() == movement::SupportState::Supported);
-    REQUIRE(clearance[0] == Catch::Approx(rig.sd.rideHeight - kSeedError).margin(1e-3f));
+    REQUIRE(clearance[0] == Catch::Approx(rig.sd.rideHeight - kSeedError).margin(1.0000001e-5f));
     // The servo ACTUATED. ⚠ The VALUE moved with ruling #28 (`k*e*dt`, not the dead-beat's
     // `e/dt`), but the row keeps the property that made it a control: it is a MAGNITUDE and a
     // starting clearance, so it reads the same under the pre-task-49 composition as under this
     // one, and it fences the rig rather than the subject.
     REQUIRE(glm::length(commanded[0])
-            == Catch::Approx(kSeedError * rig.servoStepPerCm()).margin(1e-2f));
+            == Catch::Approx(kSeedError * rig.servoStepPerMetre()).margin(1e-4f));
 
     // ---- THE ASSERTIONS. Measured and actuated on the SAME axis, so the correction has no
     //      horizontal component at any slope and there is nothing to drift.
     //
     // 1. THE COMMAND IS PURELY VERTICAL. Under the pre-fix composition this term is
-    //    `n * velocityUp`, whose X is `-sin(theta) * velocityUp` = +17.6 cm/s here.
-    REQUIRE(commanded[0].x == 0.f);
-    REQUIRE(commanded[0].z == Catch::Approx(kSeedError * rig.servoStepPerCm()).margin(1e-2f));
+    //    `n * velocityUp`, whose forward component is `-sin(theta) * velocityUp` = +0.176 m/s here.
+    REQUIRE(simFrame::forwardRight(commanded[0]).x == 0.f);
+    REQUIRE(simFrame::height(commanded[0]) == Catch::Approx(kSeedError * rig.servoStepPerMetre()).margin(1e-4f));
 
     // 2. AND THE TRANSIENT IS THE SPRING'S, NOT A ONE-TICK CLOSURE. From rest the first tick is
     //    `v1 = -k*y0*dt` and position integrates with the NEW velocity (semi-implicit Euler), so
     //        y1 = y0 + v1*dt = y0 * (1 - (omega*dt)^2)
-    //    = 0.412222 cm of the 1 cm seed left. ⚠ The retired dead-beat row asserted
+    //    = 0.00412222 m of the 0.01 m seed left. ⚠ The retired dead-beat row asserted
     //    `clearance[1] == rideHeight` here; that was the CLAMP-FREE gain-1 law and is gone.
     //    Pre-task-49 the gain was 1/cos(theta), so this row still moves with the axis too.
     const float W = rig.sd.hoverFrequency * kDt;
     REQUIRE(clearance[1]
-            == Catch::Approx(rig.sd.rideHeight - kSeedError * (1.f - W * W)).margin(1e-3f));
+            == Catch::Approx(rig.sd.rideHeight - kSeedError * (1.f - W * W)).margin(1.0000001e-5f));
     //    ...and eight ticks is enough to be back, which is what the gains are chosen for.
-    REQUIRE(clearance.back() == Catch::Approx(rig.sd.rideHeight).margin(1e-3f));
+    REQUIRE(clearance.back() == Catch::Approx(rig.sd.rideHeight).margin(1.0000001e-5f));
 
     // 3. AND THERE IS NO LATERAL TRAVEL AT ALL.
-    REQUIRE(glm::abs(driftX) < kPreFixLateralPerCmOfError * kSeedError * 0.01f);
-    // ...in fact EXACTLY zero: step 5 composes `up * velocityUp` with `up` = (0,0,1) and a
-    // zero tangential term, so the X component is 0 identically rather than merely small.
+    REQUIRE(glm::abs(driftX) < kPreFixLateralPerUnitError * kSeedError * 0.01f);
+    // ...in fact EXACTLY zero: step 5 composes `up * velocityUp` with `up` = (0,1,0) and a
+    // zero tangential term, so the forward component is 0 identically rather than merely small.
     REQUIRE(driftX == 0.f);
-    REQUIRE(rig.state.bodyState.position.y == 0.f);
+    REQUIRE(simFrame::forwardRight(rig.state.bodyState.position).y == 0.f);
 }
 
 // ===========================================================================
@@ -1350,36 +1350,36 @@ TEST_CASE("BrawlerMovement.UnsupportedIsPureGravity", "[BrawlerMovement]")
 
     ScriptedRig rig;
     rig.query.scriptedSweeps.clear();                    // nothing under the capsule
-    rig.state.velocity = glm::vec3(0.f, 0.f, -100.f);
+    rig.state.velocity = glm::vec3(0.f, -1.f, -0.f);
 
     // 1. THE EXISTING FALL SPEED IS KEPT AND ADDED TO -- there is no hold, no servo and no
     //    reset while airborne. Three ticks, each a pure accumulation of `gravity * dt`.
-    float previous = rig.state.velocity.z;
+    float previous = simFrame::height(rig.state.velocity);
     for (std::uint32_t t = 1u; t <= 3u; ++t)
     {
         rig.tick(t);
-        INFO("tick " << t << " vz=" << rig.state.velocity.z
-             << " delta=" << (rig.state.velocity.z - previous));
+        INFO("tick " << t << " vz=" << simFrame::height(rig.state.velocity)
+             << " delta=" << (simFrame::height(rig.state.velocity) - previous));
         REQUIRE(rig.support() == movement::SupportState::Unsupported);
-        REQUIRE(rig.state.velocity.z - previous
-                == Catch::Approx(rig.gravityPerTick()).margin(1e-3f));
-        previous = rig.state.velocity.z;
+        REQUIRE(simFrame::height(rig.state.velocity) - previous
+                == Catch::Approx(rig.gravityPerTick()).margin(1.0000001e-5f));
+        previous = simFrame::height(rig.state.velocity);
     }
-    REQUIRE(rig.state.velocity.z
-            == Catch::Approx(-100.f + 3.f * rig.gravityPerTick()).margin(1e-3f));
+    REQUIRE(simFrame::height(rig.state.velocity)
+            == Catch::Approx(-1.f + 3.f * rig.gravityPerTick()).margin(1.0000001e-5f));
 
     // 2. AND THE FALL IS BOUNDED. One tick short of terminal, the clamp lands the speed
     //    ON `-terminalFallSpeed` rather than past it, and holds it there.
     ScriptedRig terminal;
     terminal.query.scriptedSweeps.clear();
     terminal.state.velocity =
-        glm::vec3(0.f, 0.f, -terminal.sd.terminalFallSpeed + 5.f);
+        simFrame::withHeight(glm::vec3(0.f), -terminal.sd.terminalFallSpeed + 0.05f);
     terminal.tick(1u);
-    REQUIRE(terminal.state.velocity.z
-            == Catch::Approx(-terminal.sd.terminalFallSpeed).margin(1e-4f));
+    REQUIRE(simFrame::height(terminal.state.velocity)
+            == Catch::Approx(-terminal.sd.terminalFallSpeed).margin(1e-6f));
     terminal.tick(2u);
-    REQUIRE(terminal.state.velocity.z
-            == Catch::Approx(-terminal.sd.terminalFallSpeed).margin(1e-4f));
+    REQUIRE(simFrame::height(terminal.state.velocity)
+            == Catch::Approx(-terminal.sd.terminalFallSpeed).margin(1e-6f));
 }
 
 TEST_CASE("BrawlerMovement.AuthoredGravityWhileUnsupported", "[BrawlerMovement]")
@@ -1392,17 +1392,17 @@ TEST_CASE("BrawlerMovement.AuthoredGravityWhileUnsupported", "[BrawlerMovement]"
     ScriptedRig heavy;
     heavy.query.scriptedSweeps.clear();
     heavy.tick(1u);
-    REQUIRE(heavy.state.velocity.z == Catch::Approx(heavy.gravityPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::height(heavy.state.velocity) == Catch::Approx(heavy.gravityPerTick()).margin(1e-6f));
 
     ScriptedRig floaty;
     floaty.query.scriptedSweeps.clear();
     floaty.sd.gravity = heavy.sd.gravity * 0.5f;
     floaty.tick(1u);
-    REQUIRE(floaty.state.velocity.z == Catch::Approx(floaty.gravityPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::height(floaty.state.velocity) == Catch::Approx(floaty.gravityPerTick()).margin(1e-6f));
 
-    INFO("heavy vz=" << heavy.state.velocity.z << "  floaty vz=" << floaty.state.velocity.z);
-    REQUIRE(floaty.state.velocity.z
-            == Catch::Approx(heavy.state.velocity.z * 0.5f).margin(1e-4f));
+    INFO("heavy vz=" << simFrame::height(heavy.state.velocity) << "  floaty vz=" << simFrame::height(floaty.state.velocity));
+    REQUIRE(simFrame::height(floaty.state.velocity)
+            == Catch::Approx(simFrame::height(heavy.state.velocity) * 0.5f).margin(1e-6f));
 
     // ⛔ AND THE PAIRING THAT MAKES IT SOUND: the BODY's own gravity is OFF at the
     // descriptor. With the body re-placed from `State` every tick, engine gravity would
@@ -1423,10 +1423,10 @@ TEST_CASE("BrawlerMovement.AuthoredGravityWhileUnsupported", "[BrawlerMovement]"
 // ⭐ WHAT THE CASES BELOW MEASURE, AND WHICH OF THEM DISCRIMINATE. Every one was run against a
 // scratch restoration of the dead-beat (impl notes §2 records the RED output); the arms are named
 // in each case rather than claimed in general:
-//     RED under the dead-beat   HoverHoldsRideHeight arm 2 (-500 -> 0.000000 vs -24.666668)
-//                               UpwardLaunchIsDampedNotOverwritten (2000 -> 0.000000 vs 1483.67)
-//                               NoVelocityStepAtSupportBoundary (972.00 vs 483.67 cm/s step)
-//                               HoverCatchesSnapBandDrop (six ticks of a -400 PLATEAU)
+//     RED under the dead-beat   HoverHoldsRideHeight arm 2 (-5 -> 0.000000 vs -0.24666668)
+//                               UpwardLaunchIsDampedNotOverwritten (20 -> 0.000000 vs 14.8367)
+//                               NoVelocityStepAtSupportBoundary (9.7200 vs 4.8367 m/s step)
+//                               HoverCatchesSnapBandDrop (six ticks of a -4 PLATEAU)
 //                               GravityRunsWhileSupported (no such term to starve)
 //     GREEN in BOTH arms        LedgeFallStartsFromRest -- and it says so, with both arms'
 //                               measured numbers, because the AC's premise did not reproduce.
@@ -1447,20 +1447,21 @@ namespace movementTests
 // Geometry, from first principles, quoting no part of the sub-simulation. The movement probe is
 // always swept straight down, so this models that case only (and asserts it). For an upright
 // capsule of radius r whose lower hemisphere centre is `q` (edge at the origin):
-//   * q.x <= 0 -- the capsule is over the TOP FACE. It contacts at `q.z - r`, normal +Z.
-//   * 0 < q.x < r -- the capsule clears the top face and contacts the EDGE LINE itself. The swept
-//     sphere touches the edge when `(q.z - t)^2 + q.x^2 == r^2`, i.e. `t = q.z - sqrt(r^2 - q.x^2)`,
-//     and the contact normal points from the edge to the sphere centre: `(q.x, 0, h) / r` with
-//     `h = sqrt(r^2 - q.x^2)`.
-//   * q.x >= r -- nothing under the capsule at all.
-// ⭐ THE EDGE NORMAL TILTS, AND THAT IS WHAT ENDS SUPPORT. Its z component is `h / r`, so it
-// passes `maxSlopeAngleDeg` = 45 deg when `q.x` reaches `r / sqrt(2)` = 28.99 cm -- the character
+// (`qx` is q's forward offset past the edge, `qz` its height):
+//   * qx <= 0 -- the capsule is over the TOP FACE. It contacts at `qz - r`, normal up.
+//   * 0 < qx < r -- the capsule clears the top face and contacts the EDGE LINE itself. The swept
+//     sphere touches the edge when `(qz - t)^2 + qx^2 == r^2`, i.e. `t = qz - sqrt(r^2 - qx^2)`,
+//     and the contact normal points from the edge to the sphere centre: forward `qx`, up `h`, over `r`,
+//     with `h = sqrt(r^2 - qx^2)`.
+//   * qx >= r -- nothing under the capsule at all.
+// ⭐ THE EDGE NORMAL TILTS, AND THAT IS WHAT ENDS SUPPORT. Its up component is `h / r`, so it
+// passes `maxSlopeAngleDeg` = 45 deg when `qx` reaches `r / sqrt(2)` = 0.2899 m -- the character
 // detaches while the probe is still BLOCKED, on the normal test, not on running out of reach.
 // That is what a real sweep against a real box does, and it is why this case needs a mock that
 // answers with a normal rather than a scripted clearance.
 //
 // ⚠ THERE IS NO SOLVER HERE, deliberately: the subject is step 4's law, and `drivesBody` stays
-// false so step 6' never runs. The body sinks about 0.5 cm past the floor plane over the traverse,
+// false so step 6' never runs. The body sinks about 0.005 m past the floor plane over the traverse,
 // which a real depenetration would have taken out; it does not touch what is asserted.
 // ---------------------------------------------------------------------------
 struct LedgeQueryAdapter
@@ -1498,17 +1499,17 @@ struct LedgeQueryAdapter
 
         const float length = glm::length(delta);
         REQUIRE(length > 0.f);
-        REQUIRE(delta.x == 0.f);              // this mock models the straight-down sweep only
-        REQUIRE(delta.y == 0.f);
-        REQUIRE(delta.z < 0.f);
+        REQUIRE(simFrame::forwardRight(delta).x == 0.f);              // this mock models the straight-down sweep only
+        REQUIRE(simFrame::forwardRight(delta).y == 0.f);
+        REQUIRE(simFrame::height(delta) < 0.f);
 
         const glm::vec3 centre   = glm::vec3(pose[3]) + probeOffset;
         const float     axisHalf = probeHalfHeight - probeRadius;
-        const float     qx       = centre.x - edgeX;
-        const float     qz       = centre.z - axisHalf;
+        const float     qx       = simFrame::forwardRight(centre).x - edgeX;
+        const float     qz       = simFrame::height(centre) - axisHalf;
 
         float     travel = 0.f;
-        glm::vec3 normal(0.f, 0.f, 1.f);
+        glm::vec3 normal = glm::vec3(0.f, 1.f, -0.f);
         if (qx <= 0.f)
         {
             travel = qz - probeRadius;
@@ -1517,7 +1518,7 @@ struct LedgeQueryAdapter
         {
             const float h = glm::sqrt(probeRadius * probeRadius - qx * qx);
             travel = qz - h;
-            normal = glm::vec3(qx, 0.f, h) / probeRadius;
+            normal = glm::vec3(0.f, h, -qx) / probeRadius;
         }
         else
         {
@@ -1538,7 +1539,7 @@ struct LedgeQueryAdapter
         hit.blocked     = true;
         hit.fraction    = travel / length;
         hit.normal      = normal;
-        hit.impactPoint = centre + glm::vec3(0.f, 0.f, -travel);
+        hit.impactPoint = centre + simFrame::withHeight(glm::vec3(0.f), -travel);
         lastBlocked     = true;
         lastClearance   = travel;
         lastNormal      = normal;
@@ -1685,12 +1686,12 @@ TEST_CASE("BrawlerMovement.DiscreteCriticalDampingIsMonotone", "[BrawlerMovement
         PlaneRig rig;
         rig.sd.hoverDampingRatio = zeta;
         rig.sd.hoverDamping      = 2.f * zeta * rig.sd.hoverFrequency;   // the derived pair, kept true
-        // ⭐ SEEDED ONE cm *BELOW* RIDE HEIGHT SINCE movement-sim TASK 57 / RULING #29 -- the
+        // ⭐ SEEDED 0.01 m *BELOW* RIDE HEIGHT SINCE movement-sim TASK 57 / RULING #29 -- the
         // servo only exists on that side now, and a seed above it would trace gravity's parabola
         // instead of the recurrence this case is about. The magnitudes are unchanged: the
         // linearised recurrence is the same one, driven from the other side of `e == 0`.
         rig.state.bodyState.position =
-            glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight - 1.f));
+            simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight - 0.01f));
 
         std::vector<float> error;
         for (std::uint32_t t = 0u; t < 8u; ++t)
@@ -1758,19 +1759,19 @@ TEST_CASE("BrawlerMovement.GravityRunsWhileSupported", "[BrawlerMovement]")
 
     ScriptedRig starved;
     seatOnFlatGroundAtRideHeight(starved);
-    starved.sd.hoverMaxAccel = 500.f;                       // below |gravity| = 980
+    starved.sd.hoverMaxAccel = 5.f;                       // below |gravity| = 980
     REQUIRE(starved.sd.hoverMaxAccel < glm::abs(starved.sd.gravity));   // the premise
 
     const float sinkPerTick = (starved.sd.gravity + starved.sd.hoverMaxAccel) * kDt;
     for (std::uint32_t t = 1u; t <= 3u; ++t)
     {
         starved.tick(t);
-        INFO("tick " << t << " vz=" << starved.state.velocity.z
+        INFO("tick " << t << " vz=" << simFrame::height(starved.state.velocity)
              << " expected " << (sinkPerTick * float(t)));
         REQUIRE(starved.support() == movement::SupportState::Supported);   // it IS supported
-        REQUIRE(starved.state.velocity.z
-                == Catch::Approx(sinkPerTick * float(t)).margin(1e-3f));
-        REQUIRE(starved.state.velocity.z < 0.f);                           // ...and sinking
+        REQUIRE(simFrame::height(starved.state.velocity)
+                == Catch::Approx(sinkPerTick * float(t)).margin(1.0000001e-5f));
+        REQUIRE(simFrame::height(starved.state.velocity) < 0.f);                           // ...and sinking
     }
 
     // CONTROL -- the SAME rig with the shipped ceiling holds ride height exactly. So the sink is
@@ -1779,10 +1780,10 @@ TEST_CASE("BrawlerMovement.GravityRunsWhileSupported", "[BrawlerMovement]")
     seatOnFlatGroundAtRideHeight(healthy);
     healthy.tick(1u);
     REQUIRE(healthy.support() == movement::SupportState::Supported);
-    REQUIRE(healthy.state.velocity.z == 0.f);
+    REQUIRE(simFrame::height(healthy.state.velocity) == 0.f);
     // ...and what the servo is holding up against is exactly one gravity.
     REQUIRE(healthy.sd.hoverStiffness * 0.f - healthy.sd.gravity
-            == Catch::Approx(-healthy.sd.gravity).margin(1e-4f));
+            == Catch::Approx(-healthy.sd.gravity).margin(1e-6f));
 }
 
 // ---------------------------------------------------------------------------
@@ -1792,8 +1793,8 @@ TEST_CASE("BrawlerMovement.GravityRunsWhileSupported", "[BrawlerMovement]")
 // The retired law ASSIGNED `velocityUp` while on `Floor`, so the tick a fall entered the band it
 // threw away however much momentum the character had and replaced it with a clamped position
 // correction. MEASURED on a 10 m fall: the dead-beat's worst per-tick `|delta velocity.up|` is
-// 972.00 cm/s -- it destroyed 972 cm/s of real motion in one tick -- against 483.67 under this law,
-// inside the 516.33 bound. Nothing here is ever assigned, so the bound is structural.
+// 9.7200 m/s -- it destroyed 9.72 m/s of real motion in one tick -- against 4.8367 under this law,
+// inside the 5.1633 bound. Nothing here is ever assigned, so the bound is structural.
 //
 // ⚠ THE BOUND IS `(hoverMaxAccel + |gravity|)*dt`, NOT `hoverMaxAccel*dt`. The clamp bounds the
 // SERVO TERM, and the servo term carries the `- gravity` feed-forward, so the total acceleration
@@ -1806,9 +1807,9 @@ TEST_CASE("BrawlerMovement.NoVelocityStepAtSupportBoundary", "[BrawlerMovement]"
     using namespace movementTests;
 
     PlaneRig rig;
-    constexpr float kDropHeight = 1000.f;      // 10 m: enters the band at ~1372 cm/s
+    constexpr float kDropHeight = 10.f;      // 10 m: enters the band at ~13.72 m/s
     rig.state.bodyState.position =
-        glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight + kDropHeight));
+        simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight + kDropHeight));
 
     float        worstStep      = 0.f;
     int          worstTick      = -1;
@@ -1821,9 +1822,9 @@ TEST_CASE("BrawlerMovement.NoVelocityStepAtSupportBoundary", "[BrawlerMovement]"
 
     for (std::uint32_t t = 0u; t < 400u; ++t)
     {
-        const float before = rig.state.velocity.z;
+        const float before = simFrame::height(rig.state.velocity);
         rig.tick(t);
-        const float step = glm::abs(rig.state.velocity.z - before);
+        const float step = glm::abs(simFrame::height(rig.state.velocity) - before);
 
         if (rig.support() == movement::SupportState::Supported)   everSupported = true;
         if (rig.support() == movement::SupportState::Unsupported) everUnsupported = true;
@@ -1842,7 +1843,7 @@ TEST_CASE("BrawlerMovement.NoVelocityStepAtSupportBoundary", "[BrawlerMovement]"
         rig.engineStep();
     }
 
-    INFO("10 m fall: entered the band at " << entrySpeed << " cm/s, step at that flip "
+    INFO("10 m fall: entered the band at " << entrySpeed << " m/s, step at that flip "
          << stepAtTheFlip << ", worst step " << worstStep << " at tick " << worstTick
          << ", bound (hoverMaxAccel + |gravity|)*dt = " << rig.maxVerticalStep()
          << " (the retired dead-beat's worst step on this same fall: 972.00)");
@@ -1851,21 +1852,21 @@ TEST_CASE("BrawlerMovement.NoVelocityStepAtSupportBoundary", "[BrawlerMovement]"
     REQUIRE(everUnsupported);                                   // it fell
     REQUIRE(everSupported);                                     // it landed
     REQUIRE(boundaryFlips >= 1);                                // it crossed
-    REQUIRE(entrySpeed < -1000.f);                              // FAST when it crossed
+    REQUIRE(entrySpeed < -10.f);                              // FAST when it crossed
     REQUIRE(worstStep > glm::abs(rig.gravityPerTick()) * 2.f);  // the servo really fired
 
     // ---- THE SUBJECT.
-    REQUIRE(worstStep <= rig.maxVerticalStep() + 1e-2f);
-    REQUIRE(stepAtTheFlip <= rig.maxVerticalStep() + 1e-2f);
+    REQUIRE(worstStep <= rig.maxVerticalStep() + 1e-4f);
+    REQUIRE(stepAtTheFlip <= rig.maxVerticalStep() + 1e-4f);
     // ...and it settles where it should, so the bound was not bought by doing nothing.
-    REQUIRE(rig.query.lastClearance == Catch::Approx(rig.sd.rideHeight).margin(1e-2f));
+    REQUIRE(rig.query.lastClearance == Catch::Approx(rig.sd.rideHeight).margin(1e-4f));
     REQUIRE(rig.support() == movement::SupportState::Supported);
 }
 
 // ---------------------------------------------------------------------------
-// A DROP OF `snapDistance`, CAUGHT -- and caught WITHOUT the retired 400 cm/s constant descent.
+// A DROP OF `snapDistance`, CAUGHT -- and caught WITHOUT the retired 4 m/s constant descent.
 //
-// The floor falls away by exactly `snapDistance`, which puts clearance at 50.000000 == the probe's
+// The floor falls away by exactly `snapDistance`, which puts clearance at 0.5 == the probe's
 // whole reach: the last reading that is still support at all, and the same edge task 9 q3 measured
 // ruling #13's constants against.
 //
@@ -1877,10 +1878,10 @@ TEST_CASE("BrawlerMovement.NoVelocityStepAtSupportBoundary", "[BrawlerMovement]"
 //
 // ⭐⭐ RE-PINNED AGAIN BY movement-sim TASK 57 / RULING #29, and this is the case where the
 // user-visible change lives. Under task 56 the two-sided spring SATURATED into this drop
-// (-516.333 cm/s on the first tick) and had it caught in 8 ticks; the descent is now GRAVITY, so
-// the same 40 cm takes ~18 ticks to fall and ~22 to settle, and the character DIPS about 1.6 cm
-// below ride height on the way in because the whole fall now has to be absorbed by the 10 cm
-// below ride height instead of by the 40 above it. That is the shape of a step-down under
+// (-5.16333 m/s on the first tick) and had it caught in 8 ticks; the descent is now GRAVITY, so
+// the same 0.4 m takes ~18 ticks to fall and ~22 to settle, and the character DIPS about 0.016 m
+// below ride height on the way in because the whole fall now has to be absorbed by the 0.1 m
+// below ride height instead of by the 0.4 m above it. That is the shape of a step-down under
 // "supported means held up, never pulled down", and whether it feels right is the user's PIE
 // call on `hoverPullDownAccel` -- `PullDownKnobRecapturesStep` measures both knob settings, and
 // `FreeFallAcceleratesAtGravity` owns the "every tick is gravity" statement.
@@ -1891,9 +1892,9 @@ TEST_CASE("BrawlerMovement.HoverCatchesSnapBandDrop", "[BrawlerMovement]")
 
     PlaneRig rig;
     rig.state.bodyState.position =
-        glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight));
+        simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight));
     rig.tick(0u);
-    REQUIRE(rig.state.velocity.z == Catch::Approx(0.f).margin(1e-4f));
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(0.f).margin(1e-6f));
     rig.engineStep();
 
     rig.query.planeOffset -= rig.sd.snapDistance;          // THE DROP
@@ -1905,11 +1906,11 @@ TEST_CASE("BrawlerMovement.HoverCatchesSnapBandDrop", "[BrawlerMovement]")
     {
         rig.tick(t);
         clearance.push_back(rig.query.lastClearance);
-        speed.push_back(rig.state.velocity.z);
+        speed.push_back(simFrame::height(rig.state.velocity));
         rig.engineStep();
         if (caughtAtTick < 0
-            && glm::abs(rig.query.lastClearance - rig.sd.rideHeight) < 0.05f
-            && glm::abs(rig.state.velocity.z) < 25.f)
+            && glm::abs(rig.query.lastClearance - rig.sd.rideHeight) < 0.0005f
+            && glm::abs(simFrame::height(rig.state.velocity)) < 0.25f)
             caughtAtTick = int(t);
     }
 
@@ -1922,14 +1923,14 @@ TEST_CASE("BrawlerMovement.HoverCatchesSnapBandDrop", "[BrawlerMovement]")
 
     // ---- PREMISE. The drop really put the character at the far edge of the band, still supported.
     REQUIRE(clearance[0]
-            == Catch::Approx(rig.sd.rideHeight + rig.sd.snapDistance).margin(1e-3f));
+            == Catch::Approx(rig.sd.rideHeight + rig.sd.snapDistance).margin(1.0000001e-5f));
     REQUIRE(rig.support() == movement::SupportState::Supported);
 
     // ---- 1. NO PLATEAU. Under the dead-beat ticks 0-5 all read -400.000000 exactly.
     for (std::size_t i = 1; i < 8; ++i)
     {
         INFO("tick " << (i + 1) << " speed=" << speed[i] << " previous=" << speed[i - 1]);
-        REQUIRE(speed[i] != Catch::Approx(speed[i - 1]).margin(1e-3f));
+        REQUIRE(speed[i] != Catch::Approx(speed[i - 1]).margin(1.0000001e-5f));
     }
 
     // ---- 2. AND THE PEAK IS NOT THE FIRST TICK: the law ACCELERATES into the catch. The
@@ -1941,9 +1942,9 @@ TEST_CASE("BrawlerMovement.HoverCatchesSnapBandDrop", "[BrawlerMovement]")
 
     // ---- 3. CAUGHT, and settled at ride height. ⚠ THE "NEVER PAST RIDE HEIGHT" ROW IS GONE
     //         (task 57): the descent is gravity now, so the character arrives at ride height at
-    //         ~280 cm/s and the servo has only the 10 cm below it to absorb that. The dip is
+    //         ~2.8 m/s and the servo has only the 0.1 m below it to absorb that. The dip is
     //         REAL, is bounded, and is asserted as such rather than denied. It is also strictly
-    //         smaller than what the 10 cm band could absorb at full saturation, which is the row
+    //         smaller than what the 0.1 m band could absorb at full saturation, which is the row
     //         that says the character did not bottom out into the geometry.
     const float arrivalSpeed =
         glm::sqrt(2.f * glm::abs(rig.sd.gravity) * rig.sd.snapDistance);
@@ -1952,22 +1953,22 @@ TEST_CASE("BrawlerMovement.HoverCatchesSnapBandDrop", "[BrawlerMovement]")
     //     is not saturated at small errors, so it always needs MORE than this -- which is why this
     //     is the LOWER bound and asserting it as an upper one is the mistake it looks like.
     //   * CRITICALLY DAMPED: `v0 / (omega * e)`, the peak of `v0*t*exp(-omega*t)`, which is what
-    //     this servo actually is. 2.24 cm at the shipped gains against the measured 1.65.
+    //     this servo actually is. 0.0224 m at the shipped gains against the measured 0.0165.
     const float saturatedDip =
         arrivalSpeed * arrivalSpeed / (2.f * (rig.sd.hoverMaxAccel - glm::abs(rig.sd.gravity)));
     const float criticallyDampedDip =
         arrivalSpeed / (rig.sd.hoverFrequency * glm::exp(1.f));
     float minClearance = 1e9f;
     for (const float c : clearance) minClearance = glm::min(minClearance, c);
-    INFO("arrival speed " << arrivalSpeed << " cm/s, dip " << (rig.sd.rideHeight - minClearance)
-         << " cm; saturated floor " << saturatedDip
-         << " cm, critically-damped peak " << criticallyDampedDip << " cm");
+    INFO("arrival speed " << arrivalSpeed << " m/s, dip " << (rig.sd.rideHeight - minClearance)
+         << " m; saturated floor " << saturatedDip
+         << " m, critically-damped peak " << criticallyDampedDip << " m");
     REQUIRE(caughtAtTick > 0);
     REQUIRE(caughtAtTick <= 30);
     REQUIRE(minClearance > 0.f);                                       // did NOT bottom out
-    REQUIRE(rig.sd.rideHeight - minClearance >= saturatedDip - 1e-3f);
-    REQUIRE(rig.sd.rideHeight - minClearance <= criticallyDampedDip + 1e-3f);
-    REQUIRE(clearance.back() == Catch::Approx(rig.sd.rideHeight).margin(1e-3f));
+    REQUIRE(rig.sd.rideHeight - minClearance >= saturatedDip - 1.0000001e-5f);
+    REQUIRE(rig.sd.rideHeight - minClearance <= criticallyDampedDip + 1.0000001e-5f);
+    REQUIRE(clearance.back() == Catch::Approx(rig.sd.rideHeight).margin(1.0000001e-5f));
     REQUIRE(rig.sd.hoverDampingRatio >= rig.discreteCriticalZeta());   // why (3) holds
 }
 
@@ -1977,7 +1978,7 @@ TEST_CASE("BrawlerMovement.HoverCatchesSnapBandDrop", "[BrawlerMovement]")
 //
 // ⭐ THE DIP ROW IS WHAT DISCRIMINATES THE SHIPPED zeta. At the discrete critical zeta the
 // approach is monotone and the minimum clearance IS ride height; at the continuous-time zeta = 1
-// the same landing dips to 9.9874 cm and rings back. Both are stable; only one is smooth.
+// the same landing dips to 0.099874 m and rings back. Both are stable; only one is smooth.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerMovement.LandingSettlesWithoutBounce", "[BrawlerMovement]")
 {
@@ -1985,7 +1986,7 @@ TEST_CASE("BrawlerMovement.LandingSettlesWithoutBounce", "[BrawlerMovement]")
 
     PlaneRig rig;
     rig.state.bodyState.position =
-        glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight + 200.f));
+        simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight + 2.f));
 
     bool  contacted        = false;
     bool  wasSupported     = false;
@@ -1995,7 +1996,7 @@ TEST_CASE("BrawlerMovement.LandingSettlesWithoutBounce", "[BrawlerMovement]")
 
     for (std::uint32_t t = 0u; t < 400u; ++t)
     {
-        const float before = rig.state.velocity.z;
+        const float before = simFrame::height(rig.state.velocity);
         rig.tick(t);
         const bool supported = rig.support() == movement::SupportState::Supported;
         if (supported && !contacted) { contacted = true; impactSpeed = before; }
@@ -2007,32 +2008,32 @@ TEST_CASE("BrawlerMovement.LandingSettlesWithoutBounce", "[BrawlerMovement]")
 
     // ⭐⭐ THE DIP IS REAL SINCE movement-sim TASK 57 / RULING #29, AND THAT IS THE POINT OF THE
     // CHANGE, NOT A REGRESSION. Under task 56 the two-sided spring braked the fall through the
-    // 40 cm ABOVE ride height, so this landing never dipped at all. With the servo one-sided the
-    // whole arrival has to be absorbed by the 10 cm BELOW ride height -- the suspension
+    // 0.4 m ABOVE ride height, so this landing never dipped at all. With the servo one-sided the
+    // whole arrival has to be absorbed by the 0.1 m BELOW ride height -- the suspension
     // compresses, which is what a landing looks like. It is bounded, it does not bounce, and it
     // settles exactly at ride height.
-    // ⚠ THE NUMBER TO CARRY INTO PIE: the 10 cm below ride height can absorb at most
-    // `sqrt(2*(hoverMaxAccel - |gravity|)*rideHeight)` = 761.8 cm/s at the shipped constants. A
+    // ⚠ THE NUMBER TO CARRY INTO PIE: the 0.1 m below ride height can absorb at most
+    // `sqrt(2*(hoverMaxAccel - |gravity|)*rideHeight)` = 7.618 m/s at the shipped constants. A
     // fall arriving faster than that BOTTOMS OUT and the capsule meets the geometry, where
-    // depenetration and step 6's landing rule take over. `terminalFallSpeed` is 2000, so a long
+    // depenetration and step 6's landing rule take over. `terminalFallSpeed` is 20, so a long
     // fall WILL do that -- which is one of the two constants ruling #29 leaves open.
     const float bottomOutSpeed = glm::sqrt(
         2.f * (rig.sd.hoverMaxAccel - glm::abs(rig.sd.gravity)) * rig.sd.rideHeight);
 
-    INFO("2 m landing: impact speed " << impactSpeed << " cm/s, Unsupported re-entries after "
+    INFO("2 m landing: impact speed " << impactSpeed << " m/s, Unsupported re-entries after "
          << "first contact " << reEntries << ", minimum clearance " << minClearance
-         << " (dip " << (rig.sd.rideHeight - minClearance) << " cm)"
+         << " (dip " << (rig.sd.rideHeight - minClearance) << " m)"
          << ", settled at " << rig.query.lastClearance
-         << "; the band below ride height saturates at " << bottomOutSpeed << " cm/s"
+         << "; the band below ride height saturates at " << bottomOutSpeed << " m/s"
          << " (task 56 did not dip at all here; zeta = 1 dipped to 9.9874)");
 
     REQUIRE(contacted);                              // premise: it landed
-    REQUIRE(impactSpeed < -500.f);                   // premise: hard enough to bounce
+    REQUIRE(impactSpeed < -5.f);                   // premise: hard enough to bounce
     REQUIRE(reEntries == 0);                         // no bounce back out of the band
     REQUIRE(minClearance > 0.f);                     // ...and it did NOT bottom out
-    REQUIRE(minClearance < rig.sd.rideHeight - 1.f); // THE COMPRESSION IS REAL -- task 57
-    REQUIRE(rig.query.lastClearance == Catch::Approx(rig.sd.rideHeight).margin(1e-3f));
-    REQUIRE(rig.state.velocity.z == Catch::Approx(0.f).margin(1e-2f));
+    REQUIRE(minClearance < rig.sd.rideHeight - 0.01f); // THE COMPRESSION IS REAL -- task 57
+    REQUIRE(rig.query.lastClearance == Catch::Approx(rig.sd.rideHeight).margin(1.0000001e-5f));
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(0.f).margin(1e-4f));
 }
 
 // ---------------------------------------------------------------------------
@@ -2040,7 +2041,7 @@ TEST_CASE("BrawlerMovement.LandingSettlesWithoutBounce", "[BrawlerMovement]")
 // its own momentum.
 //
 // The retired law ASSIGNED `velocityUp` from clearance on every `Floor` tick, so an upward
-// knockback applied while standing was destroyed on the very next tick: 2000 cm/s -> 0.000000, and
+// knockback applied while standing was destroyed on the very next tick: 20 m/s -> 0.000000, and
 // the character never left the band at all. That is the same mechanism, in the other direction, as
 // the fall momentum destroyed in `NoVelocityStepAtSupportBoundary`.
 //
@@ -2049,7 +2050,7 @@ TEST_CASE("BrawlerMovement.LandingSettlesWithoutBounce", "[BrawlerMovement]")
 // exactly what that task's branch will do. What is measured is the VERTICAL LAW's response to an
 // upward velocity while supported, and that is complete today.
 // ⚠ It is also why step 2 needs a detach gate for jump (task 21): while the character is at or
-// BELOW ride height the damper still takes up to 516.33 cm/s per tick off the ascent, and the
+// BELOW ride height the damper still takes up to 5.1633 m/s per tick off the ascent, and the
 // probe still reads walkable ground. ⭐ TASK 57 / RULING #29 SHRANK THAT WINDOW BUT DID NOT CLOSE
 // IT: once the ascent carries the character ABOVE ride height the law is gravity alone, so only
 // the first tick or two of a launch are damped now. At the knockback speed that was already
@@ -2061,25 +2062,25 @@ TEST_CASE("BrawlerMovement.UpwardLaunchIsDampedNotOverwritten", "[BrawlerMovemen
 
     PlaneRig rig;
     rig.state.bodyState.position =
-        glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight));
-    rig.state.velocity = glm::vec3(0.f, 0.f, rig.knockbackSpeed());
+        simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight));
+    rig.state.velocity = simFrame::withHeight(glm::vec3(0.f), rig.knockbackSpeed());
 
     const float launch = rig.knockbackSpeed();
     rig.tick(0u);
 
-    INFO("launched at " << launch << " cm/s while supported -> " << rig.state.velocity.z
+    INFO("launched at " << launch << " m/s while supported -> " << simFrame::height(rig.state.velocity)
          << " (the retired dead-beat assigned 0.000000 and the launch died on the spot); "
          << "one tick of servo authority = " << rig.maxVerticalStep());
 
     // 1. ⭐ IT SURVIVED THE TICK. RED under the dead-beat, which read exactly 0.000000 here.
     REQUIRE(rig.support() == movement::SupportState::Supported);   // still in the band
-    REQUIRE(rig.state.velocity.z > 0.f);
-    REQUIRE(rig.state.velocity.z != 0.f);
+    REQUIRE(simFrame::height(rig.state.velocity) > 0.f);
+    REQUIRE(simFrame::height(rig.state.velocity) != 0.f);
 
     // 2. ...DAMPED BY EXACTLY THE SERVO'S AUTHORITY, no more and no less. The damper term at
-    //    2000 cm/s asks for far more than the ceiling, so this tick saturates.
-    REQUIRE(rig.state.velocity.z
-            == Catch::Approx(launch - rig.maxVerticalStep()).margin(1e-2f));
+    //    20 m/s asks for far more than the ceiling, so this tick saturates.
+    REQUIRE(simFrame::height(rig.state.velocity)
+            == Catch::Approx(launch - rig.maxVerticalStep()).margin(1e-4f));
     REQUIRE(rig.sd.hoverDamping * launch - rig.sd.gravity > rig.sd.hoverMaxAccel);   // saturated
 
     // 3. AND IT LEAVES THE BAND ON ITS OWN MOMENTUM, still climbing.
@@ -2091,15 +2092,15 @@ TEST_CASE("BrawlerMovement.UpwardLaunchIsDampedNotOverwritten", "[BrawlerMovemen
         if (rig.support() == movement::SupportState::Unsupported) leftAtTick = int(t);
         rig.engineStep();
     }
-    INFO("left the band at tick " << leftAtTick << " with vz=" << rig.state.velocity.z);
+    INFO("left the band at tick " << leftAtTick << " with vz=" << simFrame::height(rig.state.velocity));
     REQUIRE(leftAtTick > 0);
-    REQUIRE(rig.state.velocity.z > 0.f);
+    REQUIRE(simFrame::height(rig.state.velocity) > 0.f);
     // ...and once out, it is pure gravity: the servo term is gone, nothing was assigned.
-    const float beforeBallistic = rig.state.velocity.z;
+    const float beforeBallistic = simFrame::height(rig.state.velocity);
     rig.tick(9u);
     REQUIRE(rig.support() == movement::SupportState::Unsupported);
-    REQUIRE(rig.state.velocity.z
-            == Catch::Approx(beforeBallistic + rig.gravityPerTick()).margin(1e-3f));
+    REQUIRE(simFrame::height(rig.state.velocity)
+            == Catch::Approx(beforeBallistic + rig.gravityPerTick()).margin(1.0000001e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -2110,13 +2111,13 @@ TEST_CASE("BrawlerMovement.UpwardLaunchIsDampedNotOverwritten", "[BrawlerMovemen
 // PREMISE DID NOT REPRODUCE, and it was measured on both laws before this case was written:
 //
 //   arm                        steady hover, ground vanishes     first-principles ledge corner
-//   dead-beat (retired)        vUp = -16.333334 (= gravity*dt)   detaches at -107.07 cm/s
-//   ruling #28 (shipped)       vUp = -16.333334 (= gravity*dt)   detaches at -101.61 cm/s
+//   dead-beat (retired)        vUp = -0.16333334 (= gravity*dt)  detaches at -1.0707 m/s
+//   ruling #28 (shipped)       vUp = -0.16333334 (= gravity*dt)  detaches at -1.0161 m/s
 //
 // ⭐ WHY, stated plainly so nobody re-derives it: the dead-beat only commands `-maxSnapSpeed` when
-// the clearance error EXCEEDS `maxSnapSpeed*dt` = 6.67 cm, i.e. when the floor recedes faster than
-// 400 cm/s. A walk-off at `maxWalkSpeed` = 100 cm/s never does: the probe's clearance grows at the
-// rate the capsule's lower hemisphere loses the ledge corner, which reaches ~107 cm/s at the angle
+// the clearance error EXCEEDS `maxSnapSpeed*dt` = 0.0667 m, i.e. when the floor recedes faster than
+// 4 m/s. A walk-off at `maxWalkSpeed` = 1 m/s never does: the probe's clearance grows at the
+// rate the capsule's lower hemisphere loses the ledge corner, which reaches ~1.07 m/s at the angle
 // where the corner normal passes `maxSlopeAngleDeg` and support ends. BOTH laws are TRACKING that
 // recession, and both retain the tracking velocity -- the character genuinely has it.
 // ⭐ WHAT RULING #28 CHANGED IS PROVENANCE, NOT MAGNITUDE: the retained velocity is now something
@@ -2139,23 +2140,23 @@ TEST_CASE("BrawlerMovement.LedgeFallStartsFromRest", "[BrawlerMovement]")
     seatOnFlatGroundAtRideHeight(walkOff);
     walkOff.tick(1u);
     REQUIRE(walkOff.support() == movement::SupportState::Supported);
-    REQUIRE(walkOff.state.velocity.z == 0.f);                     // AT REST, exactly
+    REQUIRE(simFrame::height(walkOff.state.velocity) == 0.f);                     // AT REST, exactly
 
     walkOff.query.scriptedSweeps.clear();                         // over the edge
     walkOff.tick(2u);
     REQUIRE(walkOff.support() == movement::SupportState::Unsupported);
-    REQUIRE(walkOff.state.velocity.z
-            == Catch::Approx(walkOff.gravityPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::height(walkOff.state.velocity)
+            == Catch::Approx(walkOff.gravityPerTick()).margin(1e-6f));
     walkOff.tick(3u);
-    REQUIRE(walkOff.state.velocity.z
-            == Catch::Approx(2.f * walkOff.gravityPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::height(walkOff.state.velocity)
+            == Catch::Approx(2.f * walkOff.gravityPerTick()).margin(1e-6f));
 
     // ---- SECTION 2: the real geometry. Walk off a ledge corner at full stick.
     LedgeRig rig;
     rig.query.configureFrom(rig.sd);
     rig.query.edgeX = 0.f;
     rig.state.bodyState.position =
-        glm::vec3(-30.f, 0.f, rig.sd.capsuleHalfHeight + rig.sd.rideHeight);
+        glm::vec3(0.f, rig.sd.capsuleHalfHeight + rig.sd.rideHeight, 0.3f);
 
     float detachSpeed   = 0.f;
     int   detachTick    = -1;
@@ -2165,23 +2166,23 @@ TEST_CASE("BrawlerMovement.LedgeFallStartsFromRest", "[BrawlerMovement]")
 
     for (std::uint32_t t = 0u; t < 120u; ++t)
     {
-        const float before = rig.state.velocity.z;
+        const float before = simFrame::height(rig.state.velocity);
         rig.tick(t, stick(1.f, 0.f));
 
         if (t == 10u)                     // well before the edge: settled hover
         {
-            steadyHoverVz   = rig.state.velocity.z;
+            steadyHoverVz   = simFrame::height(rig.state.velocity);
             steadyClearance = rig.query.lastClearance;
         }
         if (detachTick < 0 && t > 0u
             && rig.support() == movement::SupportState::Unsupported)
         {
             detachTick  = int(t);
-            detachSpeed = rig.state.velocity.z;
+            detachSpeed = simFrame::height(rig.state.velocity);
         }
         else if (detachTick > 0 && int(t) <= detachTick + 4)
         {
-            ballisticDeltas.push_back(rig.state.velocity.z - before);
+            ballisticDeltas.push_back(simFrame::height(rig.state.velocity) - before);
         }
         rig.engineStep();
     }
@@ -2193,8 +2194,8 @@ TEST_CASE("BrawlerMovement.LedgeFallStartsFromRest", "[BrawlerMovement]")
          << ", support ends when the corner normal passes " << rig.sd.maxSlopeAngleDeg << " deg");
 
     // 1. PREMISE: it really was in a settled hover before the edge, and it really did detach.
-    REQUIRE(steadyClearance == Catch::Approx(rig.sd.rideHeight).margin(1e-3f));
-    REQUIRE(steadyHoverVz == Catch::Approx(0.f).margin(1e-3f));
+    REQUIRE(steadyClearance == Catch::Approx(rig.sd.rideHeight).margin(1.0000001e-5f));
+    REQUIRE(steadyHoverVz == Catch::Approx(0.f).margin(1.0000001e-5f));
     REQUIRE(detachTick > 10);
 
     // 2. THE RETAINED VELOCITY IS INSIDE THE LAW'S OWN AUTHORITY -- it is a tracked recession, not
@@ -2202,14 +2203,14 @@ TEST_CASE("BrawlerMovement.LedgeFallStartsFromRest", "[BrawlerMovement]")
     REQUIRE(glm::abs(detachSpeed) <= rig.maxVerticalStep());
     REQUIRE(detachSpeed < 0.f);
     // ...and it is not any authored constant: not the walk speed, not terminal fall.
-    REQUIRE(glm::abs(detachSpeed) != Catch::Approx(rig.sd.maxWalkSpeed).margin(1.f));
+    REQUIRE(glm::abs(detachSpeed) != Catch::Approx(rig.sd.maxWalkSpeed).margin(0.01f));
     REQUIRE(glm::abs(detachSpeed) < rig.sd.terminalFallSpeed);
 
     // 3. AND EVERY TICK AFTER DETACHMENT IS EXACTLY ONE `gravity*dt`. Nothing else is acting: the
     //    servo term is gone the moment support is, and no branch re-assigns anything.
     REQUIRE(ballisticDeltas.size() >= 3u);
     for (const float delta : ballisticDeltas)
-        REQUIRE(delta == Catch::Approx(rig.gravityPerTick()).margin(1e-3f));
+        REQUIRE(delta == Catch::Approx(rig.gravityPerTick()).margin(1.0000001e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -2219,7 +2220,7 @@ TEST_CASE("BrawlerMovement.LedgeFallStartsFromRest", "[BrawlerMovement]")
 // predicate was filled, because "a vacuity pin that outlives its vacuity is a false comfort". Task
 // 27 fills it — and NOT with the enumerator the old fence anticipated. There is no `Launched`
 // state by design (user ruling 2026-09-12); the arm is keyed on what actually matters,
-// `committed && dot(velocity, up) > 0`, so it is FALSE for every XY knockback that ships today
+// `committed && dot(velocity, up) > 0`, so it is FALSE for every horizontal knockback that ships today
 // and TRUE the day a lift is authored, with no enumerator knowledge at all.
 //
 // ⛔ BOTH ARMS ARE DRIVEN HERE, which is what the old case could not do. Two of the three inputs
@@ -2239,9 +2240,9 @@ TEST_CASE("BrawlerMovement.XYKnockbackDoesNotDetach", "[BrawlerMovement]")
     // ARM 1 -- NOT COMMITTED. Nothing detaches, at any vertical speed, with any flags bit set.
     // This is the whole of the old vacuity case, kept: it is the shipped answer for walking,
     // braking, falling and flinching, and the arm every other case in this file runs under.
-    for (const float vz : { 0.f, 5000.f, -5000.f })
+    for (const float vz : { 0.f, 50.f, -50.f })
     {
-        state.velocity = glm::vec3(0.f, 0.f, vz);
+        state.velocity = simFrame::withHeight(glm::vec3(0.f), vz);
         for (const std::uint8_t flags : { std::uint8_t(0u), std::uint8_t(0xFFu) })
         {
             state.flags = flags;
@@ -2250,25 +2251,25 @@ TEST_CASE("BrawlerMovement.XYKnockbackDoesNotDetach", "[BrawlerMovement]")
         }
     }
 
-    // ARM 2 -- COMMITTED AND PURELY HORIZONTAL: the shipped knockback. `hitDirectionXY` is an XY
-    // unit vector and the assignment writes the tangential channels only, so the vertical channel
+    // ARM 2 -- COMMITTED AND PURELY HORIZONTAL: the shipped knockback. `hitDirectionXY` is a horizontal
+    // (forward, right) unit vector and the assignment writes the tangential channels only, so the vertical channel
     // is whatever the hover servo left there. On flat ground in the steady state that is exactly
     // zero, and `> 0.f` is STRICT, so a 5 m shove stays SUPPORTED and keeps its hover.
     state.flags = 0u;
-    state.velocity = glm::vec3(2000.f, -2000.f, 0.f);
+    state.velocity = glm::vec3(-20.f, 0.f, -20.f);
     REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, true));
 
     // ...and a committed body still SETTLING downward does not detach either. Detaching on a
     // negative vertical channel would drop a knockback out of support on any tick the servo is
     // pulling it back to ride height.
-    state.velocity = glm::vec3(2000.f, 0.f, -1.f);
+    state.velocity = glm::vec3(0.f, -0.01f, -20.f);
     REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, true));
 
     // ARM 3 -- COMMITTED AND RISING: the arm the fence was written for, and the one an authored
     // lift (a launcher, a ski jump) reaches without adding a single enumerator.
-    state.velocity = glm::vec3(0.f, 0.f, 1.f);
+    state.velocity = glm::vec3(0.f, 0.01f, -0.f);
     REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, true));
-    state.velocity = glm::vec3(2000.f, 0.f, 2000.f);
+    state.velocity = glm::vec3(0.f, 20.f, -20.f);
     REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, true));
 
     // ⭐ THE DISCRIMINATOR. The same rising velocity, uncommitted, does NOT detach — which is what
@@ -2310,7 +2311,7 @@ TEST_CASE("BrawlerMovement.DrivesBodyFalseSkipsAdapterWrites", "[BrawlerMovement
     REQUIRE(rig.derived.lastPushOut == glm::vec3(0.f));
 
     // 3. THE STATE WAS STILL COMPUTED IN FULL -- that is the whole point of the flag.
-    REQUIRE(rig.state.velocity.x > 0.f);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x > 0.f);
     REQUIRE(rig.support() == movement::SupportState::Supported);
 
     // CONTROL -- the same three ticks with the flag flipped DO write, so the assertions
@@ -2378,7 +2379,7 @@ TEST_CASE("BrawlerMovement.CapturedPushOutAdoptedIntoPosition", "[BrawlerMovemen
 {
     using namespace movementTests;
 
-    constexpr glm::vec3 kPushOut(3.f, 0.f, 0.f);
+    constexpr glm::vec3 kPushOut = glm::vec3(0.f, 0.f, -0.03f);
 
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
@@ -2391,23 +2392,23 @@ TEST_CASE("BrawlerMovement.CapturedPushOutAdoptedIntoPosition", "[BrawlerMovemen
     REQUIRE(rig.state.velocity == glm::vec3(0.f));
     const glm::vec3 commanded = rig.state.bodyState.position;
 
-    // THE SOLVER SEPARATED THE CAPSULE FROM SOMETHING, 3 cm along +X.
+    // THE SOLVER SEPARATED THE CAPSULE FROM SOMETHING, 0.03 m forward.
     rig.engineStepAndCapture(commanded + rig.state.velocity * kDt + kPushOut,
                              /*solverVelocity*/ glm::vec3(0.f));
 
     rig.tick(2u);
 
     // 1. STEP 6' RECOVERED IT EXACTLY -- `captured - (positionCmd + velocity * dt)`.
-    INFO("lastPushOut=(" << rig.derived.lastPushOut.x << ", " << rig.derived.lastPushOut.y
-         << ", " << rig.derived.lastPushOut.z << ")");
-    REQUIRE(rig.derived.lastPushOut.x == Catch::Approx(kPushOut.x).margin(1e-4f));
-    REQUIRE(rig.derived.lastPushOut.y == Catch::Approx(0.f).margin(1e-4f));
+    INFO("lastPushOut=(" << simFrame::forwardRight(rig.derived.lastPushOut).x << ", " << simFrame::forwardRight(rig.derived.lastPushOut).y
+         << ", " << simFrame::height(rig.derived.lastPushOut) << ")");
+    REQUIRE(simFrame::forwardRight(rig.derived.lastPushOut).x == Catch::Approx(simFrame::forwardRight(kPushOut).x).margin(1e-6f));
+    REQUIRE(simFrame::forwardRight(rig.derived.lastPushOut).y == Catch::Approx(0.f).margin(1e-6f));
     REQUIRE(glm::length(rig.derived.lastPushOut) > movement::kPushOutEps);
 
     // 2. ⭐ AND THE ADOPTION IS STRUCTURAL: the sim did NOT fight the solver back. The
     //    position it carries -- and the pose it hands the body on this very tick -- is the
     //    pushed-out one.
-    REQUIRE(rig.state.bodyState.position.x == Catch::Approx(commanded.x + kPushOut.x).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.bodyState.position).x == Catch::Approx(simFrame::forwardRight(commanded).x + simFrame::forwardRight(kPushOut).x).margin(1e-6f));
     REQUIRE(glm::vec3(rig.phys.setTransformCalls.back().transform[3])
             == rig.state.bodyState.position);
 
@@ -2442,34 +2443,34 @@ TEST_CASE("BrawlerMovement.WallPushOutZeroesIntoWallComponent", "[BrawlerMovemen
     seatOnFlatGroundAtRideHeight(rig);
     rig.sd.drivesBody   = true;
     rig.sd.acceleration = 0.f;
-    rig.state.bodyState.position = glm::vec3(kWallX, 0.f, 96.f + rig.sd.rideHeight);
-    rig.state.velocity = glm::vec3(100.f, 50.f, 0.f);
+    rig.state.bodyState.position = glm::vec3(0.f, 0.96f + rig.sd.rideHeight, -kWallX);
+    rig.state.velocity = glm::vec3(0.5f, 0.f, -1.f);
 
     rig.tick(1u, stick(1.f, 0.f));
-    REQUIRE(rig.state.velocity == glm::vec3(100.f, 50.f, 0.f));   // the pass-through premise
+    REQUIRE(rig.state.velocity == glm::vec3(0.5f, 0.f, -1.f));   // the pass-through premise
     REQUIRE(rig.hasCommandBit());
 
-    // THE SOLVER: integrate the command, then refuse to let X past the wall. Written from
+    // THE SOLVER: integrate the command, then refuse to let the forward component past the wall. Written from
     // first principles and deliberately NOT from step 6's own arithmetic.
     glm::vec3 solved = rig.state.bodyState.position + rig.state.velocity * kDt;
-    if (solved.x > kWallX)
-        solved.x = kWallX;
+    if (simFrame::forwardRight(solved).x > kWallX)
+        solved = simFrame::fromForwardRight(glm::vec2(kWallX, simFrame::forwardRight(solved).y), simFrame::height(solved));
     rig.engineStepAndCapture(solved, /*solverVelocity*/ glm::vec3(0.f));
 
     rig.tick(2u, stick(1.f, 0.f));
 
-    INFO("pushOut=(" << rig.derived.lastPushOut.x << ", " << rig.derived.lastPushOut.y
-         << ", " << rig.derived.lastPushOut.z << ")  velocity=("
-         << rig.state.velocity.x << ", " << rig.state.velocity.y << ", "
-         << rig.state.velocity.z << ")");
+    INFO("pushOut=(" << simFrame::forwardRight(rig.derived.lastPushOut).x << ", " << simFrame::forwardRight(rig.derived.lastPushOut).y
+         << ", " << simFrame::height(rig.derived.lastPushOut) << ")  velocity=("
+         << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << ", "
+         << simFrame::height(rig.state.velocity) << ")");
 
     REQUIRE(glm::length(rig.derived.lastPushOut) > movement::kPushOutEps);
-    REQUIRE(rig.derived.lastPushOut.x < 0.f);                    // it pushed back along -X
+    REQUIRE(simFrame::forwardRight(rig.derived.lastPushOut).x < 0.f);                    // it pushed back, against forward
 
     // ⭐ THE ONE AUTHORED CONTACT RULE: kill the component driving into the obstacle, KEEP
-    // THE REST. The +Y half is untouched, which is the fighting-game corner slide.
-    REQUIRE(rig.state.velocity.x == Catch::Approx(0.f).margin(1e-3f));
-    REQUIRE(rig.state.velocity.y == Catch::Approx(50.f).margin(1e-3f));
+    // THE REST. The rightward half is untouched, which is the fighting-game corner slide.
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(0.f).margin(1.0000001e-5f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(0.5f).margin(1.0000001e-5f));
 
     // CONTROL -- the same tick with nothing in the way. Both components survive, so the
     // zero above is the wall and not the fixture.
@@ -2477,15 +2478,15 @@ TEST_CASE("BrawlerMovement.WallPushOutZeroesIntoWallComponent", "[BrawlerMovemen
     seatOnFlatGroundAtRideHeight(open);
     open.sd.drivesBody   = true;
     open.sd.acceleration = 0.f;
-    open.state.bodyState.position = glm::vec3(kWallX, 0.f, 96.f + open.sd.rideHeight);
-    open.state.velocity = glm::vec3(100.f, 50.f, 0.f);
+    open.state.bodyState.position = glm::vec3(0.f, 0.96f + open.sd.rideHeight, -kWallX);
+    open.state.velocity = glm::vec3(0.5f, 0.f, -1.f);
     open.tick(1u, stick(1.f, 0.f));
     open.engineStepAndCapture(open.state.bodyState.position + open.state.velocity * kDt,
                               glm::vec3(0.f));
     open.tick(2u, stick(1.f, 0.f));
     REQUIRE(open.derived.lastPushOut == glm::vec3(0.f));
-    REQUIRE(open.state.velocity.x == Catch::Approx(100.f).margin(1e-3f));
-    REQUIRE(open.state.velocity.y == Catch::Approx(50.f).margin(1e-3f));
+    REQUIRE(simFrame::forwardRight(open.state.velocity).x == Catch::Approx(1.f).margin(1.0000001e-5f));
+    REQUIRE(simFrame::forwardRight(open.state.velocity).y == Catch::Approx(0.5f).margin(1.0000001e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -2507,15 +2508,15 @@ TEST_CASE("BrawlerMovement.ContactImpulseNeverEntersVelocity", "[BrawlerMovement
     using namespace movementTests;
 
     constexpr glm::vec3 kSolverVelocityA(0.f, 0.f, 0.f);
-    constexpr glm::vec3 kSolverVelocityB(-777.f, 999.f, 555.f);
-    constexpr glm::vec3 kPushOut(3.f, 0.f, 0.f);
+    constexpr glm::vec3 kSolverVelocityB = glm::vec3(9.99f, 5.55f, 7.77f);
+    constexpr glm::vec3 kPushOut = glm::vec3(0.f, 0.f, -0.03f);
 
     auto runTwoTicks = [](glm::vec3 solverVelocity, glm::vec3 extraPosition)
     {
         ScriptedRig rig;
         seatOnFlatGroundAtRideHeight(rig);
         rig.sd.drivesBody = true;
-        rig.state.velocity = glm::vec3(40.f, 0.f, 0.f);
+        rig.state.velocity = glm::vec3(0.f, 0.f, -0.4f);
 
         rig.tick(1u, stick(1.f, 0.f));
         rig.engineStepAndCapture(
@@ -2533,7 +2534,7 @@ TEST_CASE("BrawlerMovement.ContactImpulseNeverEntersVelocity", "[BrawlerMovement
     const std::vector<std::uint8_t> perturbedVelocity =
         runTwoTicks(kSolverVelocityB, glm::vec3(0.f));
     const std::vector<std::uint8_t> perturbedPosition =
-        runTwoTicks(kSolverVelocityA, glm::vec3(0.f, 0.f, 1.f));
+        runTwoTicks(kSolverVelocityA, glm::vec3(0.f, 0.01f, -0.f));
 
     // ⚠⚠ THE ONE SPAN THAT IS EXPECTED TO MOVE, AND WHY IT IS EXCLUDED RATHER THAN
     // ASSERTED AWAY. `bodyState` is the FIRST entry of `SerializableFields<State>` and
@@ -2634,7 +2635,7 @@ TEST_CASE("BrawlerMovement.CadenceHoldsBetweenCommits", "[BrawlerMovement]")
     // The commit boundary.
     rig.tick(rig.sd.stepPeriodTicks, stick(1.f, 0.f));
     REQUIRE(rig.state.committedStepDir == glm::vec2(1.f, 0.f));
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.sd.stepSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.sd.stepSpeed).margin(1e-6f));
 
     // ⭐ NOW FLICK THE STICK THE OTHER WAY FOR THE WHOLE STEP. A mid-step flick must not
     // steer the character; both the committed direction AND the world velocity are held.
@@ -2642,16 +2643,16 @@ TEST_CASE("BrawlerMovement.CadenceHoldsBetweenCommits", "[BrawlerMovement]")
     {
         rig.tick(t, stick(-1.f, 0.f));
         INFO("tick " << t << " dir=(" << rig.state.committedStepDir.x << ", "
-             << rig.state.committedStepDir.y << ") vx=" << rig.state.velocity.x);
+             << rig.state.committedStepDir.y << ") vx=" << simFrame::forwardRight(rig.state.velocity).x);
         REQUIRE(rig.state.committedStepDir == glm::vec2(1.f, 0.f));
-        REQUIRE(rig.state.velocity.x == Catch::Approx(rig.sd.stepSpeed).margin(1e-4f));
+        REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.sd.stepSpeed).margin(1e-6f));
         REQUIRE(rig.state.stepStartTick == rig.sd.stepPeriodTicks);
     }
 
     // ...and the NEXT boundary is where the flick finally lands.
     rig.tick(2u * rig.sd.stepPeriodTicks, stick(-1.f, 0.f));
     REQUIRE(rig.state.committedStepDir == glm::vec2(-1.f, 0.f));
-    REQUIRE(rig.state.velocity.x == Catch::Approx(-rig.sd.stepSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(-rig.sd.stepSpeed).margin(1e-6f));
 }
 
 TEST_CASE("BrawlerMovement.CadenceFreezeEatsStepKeepsTimer", "[BrawlerMovement]")
@@ -2682,7 +2683,7 @@ TEST_CASE("BrawlerMovement.CadenceFreezeEatsStepKeepsTimer", "[BrawlerMovement]"
     rig.tick(rig.sd.stepPeriodTicks + 1u, stick(1.f, 0.f));
     REQUIRE(rig.state.committedStepDir == glm::vec2(1.f, 0.f));
     REQUIRE(rig.state.stepStartTick == rig.sd.stepPeriodTicks + 1u);
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.sd.stepSpeed).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.sd.stepSpeed).margin(1e-6f));
 }
 
 TEST_CASE("BrawlerMovement.CadenceNeutralAtCommitStands", "[BrawlerMovement]")
@@ -2785,7 +2786,7 @@ TEST_CASE("BrawlerMovement.DeterministicReplay", "[BrawlerMovement]")
         PlaneRig rig;
         rig.sd.drivesBody = true;
         rig.state.bodyState.position =
-            glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight + 3.f));
+            simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight + 0.03f));
 
         for (int i = 0; i < kTicks; ++i)
         {
@@ -2794,14 +2795,14 @@ TEST_CASE("BrawlerMovement.DeterministicReplay", "[BrawlerMovement]")
             // A script with every branch in it: a turning stick, periodic freezes, a
             // ledge, a fall off the end of the world, and a respawn.
             const float phase = static_cast<float>(i) * 0.05f;
-            const glm::vec3 stickWorld(glm::cos(phase), glm::sin(phase), 0.f);
+            const glm::vec3 stickWorld = simFrame::fromForwardRight(glm::vec2(glm::cos(phase), glm::sin(phase)), 0.f);
             const std::uint8_t inputFlags =
                 (i % 17 == 0) ? movement::kInputFlagHoldGuard : std::uint8_t{ 0u };
 
-            if (i == 30) rig.query.planeOffset += 9.f;         // a ledge
-            if (i == 55) rig.query.planeOffset -= 400.f;       // the floor drops away
-            if (i == 80) { rig.ic.teleportPending = 1u; rig.ic.teleportPos = glm::vec3(5.f, -7.f, 130.f); }
-            if (i == 90) rig.query.planeOffset += 400.f;       // and comes back
+            if (i == 30) rig.query.planeOffset += 0.09f;         // a ledge
+            if (i == 55) rig.query.planeOffset -= 4.f;       // the floor drops away
+            if (i == 80) { rig.ic.teleportPending = 1u; rig.ic.teleportPos = glm::vec3(-0.07f, 1.3f, -0.05f); }
+            if (i == 90) rig.query.planeOffset += 4.f;       // and comes back
 
             rig.machineState.m_currentState = (i % 23 == 0)
                 ? DAttackState::HitFlinch
@@ -2896,7 +2897,7 @@ namespace movementTests
 //     `GetUnscaledCapsuleHalfHeight()`. UE 5.6's `CapsuleComponent.h` documents that field as
 //     "Half-height, from center of capsule to the end of top or bottom hemisphere."
 // Both APIs agree, which matters: they are different engine types and either could have
-// differed. So the shipped `{42, 96}` capsule's bottom tip is at `centre.z - 96`.
+// differed. So the shipped `{0.42, 0.96}` capsule's bottom tip is 0.96 below its centre.
 //
 // THE SELECTION RULE IS A TRANSCRIPTION, NOT A HYPOTHESIS. It is copied from
 // `Plugins/OGSimulation/Source/OGSimulationUnreal/ChaosSpatialQueryAdapter.cpp::sweep`:
@@ -2910,7 +2911,7 @@ struct WorldSweepQueryAdapter
 {
     struct Plane
     {
-        glm::vec3   n{ 0.f, 0.f, 1.f };
+        glm::vec3   n = glm::vec3(0.f, 1.f, -0.f);
         float       offset = 0.f;
         const char* name   = "";
     };
@@ -2950,7 +2951,7 @@ struct WorldSweepQueryAdapter
 
     static float capsuleGap(const Plane& plane, const glm::vec3& centre, float r, float hh)
     {
-        const glm::vec3 axis(0.f, 0.f, hh - r);
+        const glm::vec3 axis = simFrame::withHeight(glm::vec3(0.f), hh - r);
         const float a = glm::dot(plane.n, centre + axis) - plane.offset;
         const float b = glm::dot(plane.n, centre - axis) - plane.offset;
         return glm::min(a, b) - r;
@@ -3057,7 +3058,7 @@ struct WorldSweepQueryAdapter
         return p + correction;
     }
 
-    // The clearance the BODY actually has along -Z, computed from the body's own geometry.
+    // The clearance the BODY actually has downward, computed from the body's own geometry.
     // Independent of the probe descriptor, which is the whole point: it is what the probe's
     // answer is checked AGAINST.
     float trueBodyClearance(const glm::vec3& centre) const
@@ -3065,7 +3066,7 @@ struct WorldSweepQueryAdapter
         float nearest = 1e9f;
         for (const Plane& solid : solids)
         {
-            const float rate = solid.n.z;            // -dot(n, (0,0,-1))
+            const float rate = simFrame::height(solid.n);            // -dot(n, (0,0,-1))
             if (rate <= 0.f)
                 continue;
             const float gap = capsuleGap(solid, centre, bodyRadius, bodyHalfHeight);
@@ -3081,12 +3082,12 @@ using WorldRig = Rig<WorldSweepQueryAdapter>;
 
 inline WorldSweepQueryAdapter::Plane analyticFloor()
 {
-    return WorldSweepQueryAdapter::Plane{ glm::vec3(0.f, 0.f, 1.f), 0.f, "floor" };
+    return WorldSweepQueryAdapter::Plane{ glm::vec3(0.f, 1.f, -0.f), 0.f, "floor" };
 }
 // Solid at x >= wallX:  dot(n, p) - offset == wallX - p.x.
 inline WorldSweepQueryAdapter::Plane analyticWall(float wallX)
 {
-    return WorldSweepQueryAdapter::Plane{ glm::vec3(-1.f, 0.f, 0.f), -wallX, "wall" };
+    return WorldSweepQueryAdapter::Plane{ glm::vec3(0.f, 0.f, 1.f), -wallX, "wall" };
 }
 
 } // namespace movementTests
@@ -3095,7 +3096,7 @@ inline WorldSweepQueryAdapter::Plane analyticWall(float wallX)
 // THE DEFECT, STATED DIRECTLY: a character walking into a wall must stay on the floor.
 //
 // RED BEFORE THE FIX -- with the body-sized probe this case reported hundreds of ticks
-// Airborne at `clearance == 0` and a `pos.z` excursion from 96 to 181 cm.
+// Airborne at `clearance == 0` and a height excursion from 0.96 to 1.81 m.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerMovement.WallPressKeepsTheCharacterOnTheFloor", "[BrawlerMovement]")
 {
@@ -3109,10 +3110,10 @@ TEST_CASE("BrawlerMovement.WallPressKeepsTheCharacterOnTheFloor", "[BrawlerMovem
     rig.query.configureFrom(rig.sd);
     rig.query.solids = { analyticFloor(), analyticWall(kWallX) };
 
-    // Hover steady state, 40 cm short of contact. The body's bottom tip is at
-    // `centre.z - capsuleHalfHeight` under the TOTAL half-height convention established above.
+    // Hover steady state, 0.4 m short of contact. The body's bottom tip is at
+    // `height(centre) - capsuleHalfHeight` under the TOTAL half-height convention established above.
     const float seatZ = rig.sd.capsuleHalfHeight + rig.sd.rideHeight;
-    rig.state.bodyState.position = glm::vec3(kWallX - rig.sd.capsuleRadius - 40.f, 0.f, seatZ);
+    rig.state.bodyState.position = glm::vec3(0.f, seatZ, -(kWallX - rig.sd.capsuleRadius - 0.4f));
     rig.state.positionCmd        = rig.state.bodyState.position;
 
     const float contactX = kWallX - rig.sd.capsuleRadius;
@@ -3138,7 +3139,7 @@ TEST_CASE("BrawlerMovement.WallPressKeepsTheCharacterOnTheFloor", "[BrawlerMovem
         const std::uint8_t kind = static_cast<std::uint8_t>(rig.support());
         // "Pressed" == the solver has the body against the wall. Measured from POSITION, not
         // from the surface kind, so the window cannot be defined by the thing under test.
-        const bool pressed = rig.state.bodyState.position.x >= contactX - 1e-3f;
+        const bool pressed = simFrame::forwardRight(rig.state.bodyState.position).x >= contactX - 1.0000001e-5f;
         if (pressed)
         {
             everTouchedTheWall = true;
@@ -3147,10 +3148,10 @@ TEST_CASE("BrawlerMovement.WallPressKeepsTheCharacterOnTheFloor", "[BrawlerMovem
                 ++transitionsAfterContact;
             if (kind == static_cast<std::uint8_t>(movement::SupportState::Supported))
                 ++floorTicksWhilePressed;
-            minZWhilePressed         = glm::min(minZWhilePressed, rig.state.bodyState.position.z);
-            maxZWhilePressed         = glm::max(maxZWhilePressed, rig.state.bodyState.position.z);
+            minZWhilePressed         = glm::min(minZWhilePressed, simFrame::height(rig.state.bodyState.position));
+            maxZWhilePressed         = glm::max(maxZWhilePressed, simFrame::height(rig.state.bodyState.position));
             minClearanceWhilePressed = glm::min(minClearanceWhilePressed, rig.query.lastClearance);
-            maxIntoWallVelocity      = glm::max(maxIntoWallVelocity, velocityBefore.x);
+            maxIntoWallVelocity      = glm::max(maxIntoWallVelocity, simFrame::forwardRight(velocityBefore).x);
             maxPushOutMagnitude      = glm::max(maxPushOutMagnitude,
                                                 glm::length(rig.derived.lastPushOut));
         }
@@ -3174,7 +3175,7 @@ TEST_CASE("BrawlerMovement.WallPressKeepsTheCharacterOnTheFloor", "[BrawlerMovem
     //      initiative keeps finding. Every row here is GREEN in the RED run too.
     REQUIRE(everTouchedTheWall);                                  // the body reached the wall
     REQUIRE(pressedTicks > 200);                                  // and stayed there
-    REQUIRE(rig.state.bodyState.position.x == Catch::Approx(contactX).margin(1e-3f));
+    REQUIRE(simFrame::forwardRight(rig.state.bodyState.position).x == Catch::Approx(contactX).margin(1.0000001e-5f));
     REQUIRE(maxIntoWallVelocity > 0.f);                           // it was DRIVING into it
     REQUIRE(maxPushOutMagnitude > movement::kPushOutEps);         // the solver pushed back
     REQUIRE(rig.hasCommandBit());                                 // step 6' was un-gated
@@ -3183,9 +3184,9 @@ TEST_CASE("BrawlerMovement.WallPressKeepsTheCharacterOnTheFloor", "[BrawlerMovem
     //      character is standing on, how high it hovers, or which surface it reports.
     REQUIRE(transitionsAfterContact == 0);
     REQUIRE(floorTicksWhilePressed == pressedTicks);
-    REQUIRE(minClearanceWhilePressed == Catch::Approx(rig.sd.rideHeight).margin(1e-3f));
-    REQUIRE(minZWhilePressed == Catch::Approx(seatZ).margin(1e-3f));
-    REQUIRE(maxZWhilePressed == Catch::Approx(seatZ).margin(1e-3f));
+    REQUIRE(minClearanceWhilePressed == Catch::Approx(rig.sd.rideHeight).margin(1.0000001e-5f));
+    REQUIRE(minZWhilePressed == Catch::Approx(seatZ).margin(1.0000001e-5f));
+    REQUIRE(maxZWhilePressed == Catch::Approx(seatZ).margin(1.0000001e-5f));
 
     // ---- AND THE ONE AUTHORED CONTACT RULE STILL FIRES. The fix is to the PROBE, not to
     //      step 6', so the corner clamp must be exactly as it was.
@@ -3198,8 +3199,8 @@ TEST_CASE("BrawlerMovement.WallPressKeepsTheCharacterOnTheFloor", "[BrawlerMovem
     //      directly by setting `acceleration = 0`; this case cannot -- it needs a real walk to
     //      reach the wall at all. What a BROKEN clamp would look like here is the value
     //      climbing to `maxWalkSpeed` and staying there, which this row excludes.
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.accelPerTick()).margin(1e-3f));
-    REQUIRE(rig.state.velocity.x < rig.sd.maxWalkSpeed);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.accelPerTick()).margin(1.0000001e-5f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x < rig.sd.maxWalkSpeed);
     //      ...and 275 ticks of driving into it moved the body not one cm past contact.
     REQUIRE(maxIntoWallVelocity <= rig.sd.maxWalkSpeed);
 }
@@ -3217,14 +3218,14 @@ TEST_CASE("BrawlerMovement.GroundProbeMeasuresTheBodysClearanceOnFlatGround", "[
 {
     using namespace movementTests;
 
-    for (const float seededClearance : { 3.f, 10.f, 25.f })
+    for (const float seededClearance : { 0.03f, 0.1f, 0.25f })
     {
         WorldRig rig;
         rig.query.configureFrom(rig.sd);
         rig.query.solids = { analyticFloor() };
 
         rig.state.bodyState.position =
-            glm::vec3(0.f, 0.f, rig.sd.capsuleHalfHeight + seededClearance);
+            simFrame::withHeight(glm::vec3(0.f), rig.sd.capsuleHalfHeight + seededClearance);
         rig.tick(1u);
 
         const float trueClearance = rig.query.trueBodyClearance(rig.state.bodyState.position);
@@ -3233,11 +3234,11 @@ TEST_CASE("BrawlerMovement.GroundProbeMeasuresTheBodysClearanceOnFlatGround", "[
              << "  body=" << trueClearance
              << "  probeRadius=" << rig.query.probeRadius
              << "  probeHalfHeight=" << rig.query.probeHalfHeight
-             << "  probeOffset.z=" << rig.query.probeOffset.z);
+             << "  probeOffset.z=" << simFrame::height(rig.query.probeOffset));
 
         REQUIRE(rig.query.lastBlocked);
-        REQUIRE(trueClearance == Catch::Approx(seededClearance).margin(1e-4f));
-        REQUIRE(rig.query.lastClearance == Catch::Approx(trueClearance).margin(1e-4f));
+        REQUIRE(trueClearance == Catch::Approx(seededClearance).margin(1e-6f));
+        REQUIRE(rig.query.lastClearance == Catch::Approx(trueClearance).margin(1e-6f));
     }
 }
 
@@ -3249,17 +3250,17 @@ TEST_CASE("BrawlerMovement.GroundProbeMeasuresTheBodysClearanceOnFlatGround", "[
 // so nothing moves; on a slope the contact point sits on the hemisphere, and a smaller
 // hemisphere with the same tip is slightly further from the plane. Derivation:
 //
-//   gap(probe) - gap(body) = n.z * offset.z + (bodyRadius - probeRadius)
-// and with the shipped `offset.z == -(bodyRadius - probeRadius) == -s` that is `s * (1 - n.z)`.
-// Clearance is `gap / n.z`, so
+//   gap(probe) - gap(body) = n.y * offset.y + (bodyRadius - probeRadius)
+// and with the shipped `offset.y == -(bodyRadius - probeRadius) == -s` that is `s * (1 - n.y)`.
+// Clearance is `gap / n.y` (y is up), so
 //
 //   clearanceBias = s * (1/cos(theta) - 1) = s * (sec(theta) - 1)
 //
-// which is 0 on flat ground, `0.155 * s` cm at 30 deg and `0.414 * s` cm at the shipped 45 deg
+// which is 0 on flat ground, `0.155 * s` at 30 deg and `0.414 * s` at the shipped 45 deg
 // `maxSlopeAngleDeg` cap. The character therefore settles that much LOWER on a slope. It is
 // second-order against the `rideHeight * cos(theta)` perpendicular gap the file already
-// documents (7.07 cm at 45 deg), it is one-way, and it is the price of option 1.
-// It is NOT removable by a different offset: zeroing it needs `offset.z = -s / n.z`, which
+// documents (0.0707 m at 45 deg), it is one-way, and it is the price of option 1.
+// It is NOT removable by a different offset: zeroing it needs `offset.y = -s / n.y`, which
 // is slope-dependent and a static descriptor cannot express it.
 //
 // GREEN both before and after the fix -- before, `s` is 0 and the closed form predicts 0 -- so
@@ -3281,39 +3282,39 @@ TEST_CASE("BrawlerMovement.GroundProbeSlopeBiasIsTheShrinkTerm", "[BrawlerMoveme
         REQUIRE(s >= 0.f);
 
         // Seat the BODY at a known true clearance by inverting its OWN gap equation at
-        // x == y == 0, for a plane through the origin:
-        //     gap       = n.z * (z - axisHalf) - r
-        //     clearance = gap / n.z            (the sweep is straight down, rate == n.z)
-        //  => z         = axisHalf + clearance + r / n.z
+        // x == z == 0, for a plane through the origin (y is up):
+        //     gap       = n.y * (y - axisHalf) - r
+        //     clearance = gap / n.y            (the sweep is straight down, rate == n.y)
+        //  => y         = axisHalf + clearance + r / n.y
         // the same inversion `seedZForClearance` above performs. The premise row below
-        // is what fences it: a mis-seeded ramp reads 2.16 cm instead of 10 and would have
+        // is what fences it: a mis-seeded ramp reads 0.0216 m instead of 0.1 and would have
         // made the bias comparison meaningless without ever failing on the bias itself.
-        constexpr float kSeeded = 10.f;
+        constexpr float kSeeded = 0.1f;
         const float axisHalf = rig.sd.capsuleHalfHeight - rig.sd.capsuleRadius;
-        rig.state.bodyState.position = glm::vec3(
-            0.f, 0.f, axisHalf + kSeeded + rig.sd.capsuleRadius / n.z);
+        rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f),
+            axisHalf + kSeeded + rig.sd.capsuleRadius / simFrame::height(n));
 
         rig.tick(1u);
 
         const float trueClearance = rig.query.trueBodyClearance(rig.state.bodyState.position);
-        const float predictedBias = s * (1.f / n.z - 1.f);
+        const float predictedBias = s * (1.f / simFrame::height(n) - 1.f);
         const float measuredBias  = rig.query.lastClearance - trueClearance;
 
         INFO("slope=" << slopeDeg << " deg  s=" << s
              << "  probeRadius=" << rig.query.probeRadius
              << "  probeHalfHeight=" << rig.query.probeHalfHeight
-             << "  probeOffset.z=" << rig.query.probeOffset.z
+             << "  probeOffset.z=" << simFrame::height(rig.query.probeOffset)
              << "  trueClearance=" << trueClearance
              << "  probeClearance=" << rig.query.lastClearance
              << "  measuredBias=" << measuredBias
              << "  predictedBias=" << predictedBias);
 
         REQUIRE(rig.query.lastBlocked);
-        REQUIRE(trueClearance == Catch::Approx(kSeeded).margin(1e-3f));
-        REQUIRE(measuredBias == Catch::Approx(predictedBias).margin(1e-3f));
+        REQUIRE(trueClearance == Catch::Approx(kSeeded).margin(1.0000001e-5f));
+        REQUIRE(measuredBias == Catch::Approx(predictedBias).margin(1.0000001e-5f));
         // ...and on FLAT ground the bias is identically zero, whatever `s` is.
         if (slopeDeg == 0.f)
-            REQUIRE(measuredBias == Catch::Approx(0.f).margin(1e-4f));
+            REQUIRE(measuredBias == Catch::Approx(0.f).margin(1e-6f));
     }
 }
 
@@ -3326,8 +3327,8 @@ TEST_CASE("BrawlerMovement.GroundProbeSlopeBiasIsTheShrinkTerm", "[BrawlerMoveme
 //
 //   R1 THE DOWNWARD PULL WAS BOUNDED BY ACCELERATION, NOT BY SPEED. Above ride height the
 //      task-56 spring pulled toward ride height at `k*e`, clamped only by `hoverMaxAccel`
-//      = 30 g. A clearance that jumps into the band therefore costs -516.333 cm/s in ONE tick
-//      against gravity's -16.333: 31x too fast. FIXED by the ONE-SIDED servo (F1): at or below
+//      = 30 g. A clearance that jumps into the band therefore costs -5.16333 m/s in ONE tick
+//      against gravity's -0.16333: 31x too fast. FIXED by the ONE-SIDED servo (F1): at or below
 //      ride height task 56's full servo, unchanged; above it a bounded spring pull capped at
 //      `hoverPullDownAccel`, whose shipped value is 0 -- gravity and nothing else.
 //   R2 `(u, v, up)` IS NOT AN ORTHONORMAL BASIS ON A SLOPE, and velocity was decomposed with
@@ -3348,7 +3349,7 @@ TEST_CASE("BrawlerMovement.GroundProbeSlopeBiasIsTheShrinkTerm", "[BrawlerMoveme
 // R1, STATED DIRECTLY AND WITHOUT ANY GEOMETRY: above ride height, at the shipped
 // `hoverPullDownAccel == 0`, the vertical acceleration IS gravity. Not approximately.
 //
-// The observable is `state.velocity.z` after one tick from a known `vUp`, which is
+// The observable is the height of `state.velocity` after one tick from a known `vUp`, which is
 // `vUp + accelUp*dt` -- so an exact equality here is an exact equality on `accelUp`.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerMovement.AboveRideHeightIsGravityOnly", "[BrawlerMovement]")
@@ -3358,14 +3359,14 @@ TEST_CASE("BrawlerMovement.AboveRideHeightIsGravityOnly", "[BrawlerMovement]")
     // Every clearance strictly inside the band above ride height, plus the far edge of the
     // probe's reach. All of them classify `Supported`, which is the premise that makes this a
     // statement about the SERVO rather than about the support test.
-    for (const float clearance : { 10.5f, 12.f, 15.f, 24.f, 35.f, 45.f, 50.f })
+    for (const float clearance : { 0.105f, 0.12f, 0.15f, 0.24f, 0.35f, 0.45f, 0.5f })
     {
-        for (const float startVz : { 0.f, -300.f, 300.f })
+        for (const float startVz : { 0.f, -3.f, 3.f })
         {
             ScriptedRig rig;
             rig.query.scriptedSweeps = { floorHitAt(clearance, rig.probeLength()) };
-            rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + clearance);
-            rig.state.velocity = glm::vec3(0.f, 0.f, startVz);
+            rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + clearance);
+            rig.state.velocity = simFrame::withHeight(glm::vec3(0.f), startVz);
             rig.tick(1u);
 
             const float e = rig.sd.rideHeight - clearance;
@@ -3379,39 +3380,39 @@ TEST_CASE("BrawlerMovement.AboveRideHeightIsGravityOnly", "[BrawlerMovement]")
                                 -rig.sd.hoverMaxAccel, rig.sd.hoverMaxAccel)) * kDt;
 
             INFO("clearance=" << clearance << " (e=" << e << ")  startVz=" << startVz
-                 << "  ->  vz=" << rig.state.velocity.z
+                 << "  ->  vz=" << simFrame::height(rig.state.velocity)
                  << "   gravity only would be " << (startVz + rig.gravityPerTick())
                  << "; the task-56 two-sided servo would have been " << twoSided);
 
             REQUIRE(rig.sd.hoverPullDownAccel == 0.f);                    // the shipped knob
             REQUIRE(e < 0.f);                                             // ABOVE ride height
             REQUIRE(rig.support() == movement::SupportState::Supported);  // and still supported
-            REQUIRE(rig.state.velocity.z
-                  == Catch::Approx(startVz + rig.gravityPerTick()).margin(1e-3f));
+            REQUIRE(simFrame::height(rig.state.velocity)
+                  == Catch::Approx(startVz + rig.gravityPerTick()).margin(1.0000001e-5f));
         }
     }
 
-    // ---- AND IT IS NOT VACUOUS: the same rig one cm BELOW ride height is task 56's full servo,
+    // ---- AND IT IS NOT VACUOUS: the same rig 0.01 m BELOW ride height is task 56's full servo,
     //      untouched. F1 changes exactly one arm.
     ScriptedRig low;
-    low.query.scriptedSweeps = { floorHitAt(low.sd.rideHeight - 1.f, low.probeLength()) };
+    low.query.scriptedSweeps = { floorHitAt(low.sd.rideHeight - 0.01f, low.probeLength()) };
     low.tick(1u);
-    REQUIRE(low.state.velocity.z == Catch::Approx(low.servoStepPerCm()).margin(1e-3f));
-    REQUIRE(low.state.velocity.z != Catch::Approx(low.gravityPerTick()).margin(1e-3f));
+    REQUIRE(simFrame::height(low.state.velocity) == Catch::Approx(low.servoStepPerMetre() * 0.01f).margin(1.0000001e-5f));
+    REQUIRE(simFrame::height(low.state.velocity) != Catch::Approx(low.gravityPerTick()).margin(1.0000001e-5f));
 
-    // ---- AND THE KNOB IS THE ONLY WAY BACK TO A DOWNWARD PULL. At 980 the same 45 cm clearance
-    //      commands 2 g, at 60000 it saturates the SAME `hoverMaxAccel` clamp task 56 used.
-    for (const float knob : { 980.f, 60000.f })
+    // ---- AND THE KNOB IS THE ONLY WAY BACK TO A DOWNWARD PULL. At 9.8 the same 0.45 m clearance
+    //      commands 2 g, at 600 it saturates the SAME `hoverMaxAccel` clamp task 56 used.
+    for (const float knob : { 9.8f, 600.f })
     {
         ScriptedRig k;
         k.sd.hoverPullDownAccel = knob;
-        k.query.scriptedSweeps = { floorHitAt(45.f, k.probeLength()) };
+        k.query.scriptedSweeps = { floorHitAt(0.45f, k.probeLength()) };
         k.tick(1u);
-        const float pull = glm::max(k.sd.hoverStiffness * (k.sd.rideHeight - 45.f), -knob);
+        const float pull = glm::max(k.sd.hoverStiffness * (k.sd.rideHeight - 0.45f), -knob);
         const float expected =
             (k.sd.gravity + glm::clamp(pull, -k.sd.hoverMaxAccel, k.sd.hoverMaxAccel)) * kDt;
-        INFO("knob=" << knob << " -> vz=" << k.state.velocity.z << " expected " << expected);
-        REQUIRE(k.state.velocity.z == Catch::Approx(expected).margin(1e-3f));
+        INFO("knob=" << knob << " -> vz=" << simFrame::height(k.state.velocity) << " expected " << expected);
+        REQUIRE(simFrame::height(k.state.velocity) == Catch::Approx(expected).margin(1.0000001e-5f));
     }
 }
 
@@ -3420,7 +3421,7 @@ TEST_CASE("BrawlerMovement.AboveRideHeightIsGravityOnly", "[BrawlerMovement]")
 //
 // The floor drops away by exactly `snapDistance`, which is the largest drop that is still
 // support at all (`clearance == rideHeight + snapDistance == probeLength`, task 9 q3's edge).
-// Under task 56 the FIRST tick of that drop cost -516.333 cm/s -- the whole of R1 in one
+// Under task 56 the FIRST tick of that drop cost -5.16333 m/s -- the whole of R1 in one
 // number, and 31x one tick of gravity. Under ruling #29 every tick of the descent is gravity.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerMovement.FreeFallAcceleratesAtGravity", "[BrawlerMovement]")
@@ -3429,9 +3430,9 @@ TEST_CASE("BrawlerMovement.FreeFallAcceleratesAtGravity", "[BrawlerMovement]")
 
     PlaneRig rig;
     rig.state.bodyState.position =
-        glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight));
+        simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight));
     rig.tick(0u);
-    REQUIRE(rig.state.velocity.z == Catch::Approx(0.f).margin(1e-4f));      // settled
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(0.f).margin(1e-6f));      // settled
     rig.engineStep();
 
     rig.query.planeOffset -= rig.sd.snapDistance;                          // THE DROP
@@ -3442,17 +3443,17 @@ TEST_CASE("BrawlerMovement.FreeFallAcceleratesAtGravity", "[BrawlerMovement]")
     float firstDelta       = 0.f;
     for (std::uint32_t t = 1u; t <= 40u; ++t)
     {
-        const float before = rig.state.velocity.z;
+        const float before = simFrame::height(rig.state.velocity);
         rig.tick(t);
         if (rig.query.lastClearance > rig.sd.rideHeight)          // still ABOVE ride height
-            deltas.push_back(rig.state.velocity.z - before);
+            deltas.push_back(simFrame::height(rig.state.velocity) - before);
         if (t == 1u)
-            firstDelta = rig.state.velocity.z - before;
+            firstDelta = simFrame::height(rig.state.velocity) - before;
         clearance.push_back(rig.query.lastClearance);
         rig.engineStep();
         if (backAtRideHeight < 0
-            && glm::abs(rig.query.lastClearance - rig.sd.rideHeight) < 0.05f
-            && glm::abs(rig.state.velocity.z) < 25.f)
+            && glm::abs(rig.query.lastClearance - rig.sd.rideHeight) < 0.0005f
+            && glm::abs(simFrame::height(rig.state.velocity)) < 0.25f)
             backAtRideHeight = int(t);
     }
 
@@ -3471,17 +3472,17 @@ TEST_CASE("BrawlerMovement.FreeFallAcceleratesAtGravity", "[BrawlerMovement]")
          << " (free-fall arithmetic says " << freeFallTicks << ")");
 
     // ---- PREMISE. The drop really put the character at the far edge of the band, still supported.
-    REQUIRE(clearance[0] == Catch::Approx(rig.sd.rideHeight + rig.sd.snapDistance).margin(1e-3f));
+    REQUIRE(clearance[0] == Catch::Approx(rig.sd.rideHeight + rig.sd.snapDistance).margin(1.0000001e-5f));
     REQUIRE(rig.support() == movement::SupportState::Supported);
     REQUIRE(deltas.size() >= 10u);                          // it really spent the fall up there
 
     // ---- THE SUBJECT. EVERY tick above ride height is one tick of gravity, starting with the
     //      first -- the tick R1 turned into a 31x launch.
-    REQUIRE(firstDelta == Catch::Approx(rig.gravityPerTick()).margin(1e-3f));
+    REQUIRE(firstDelta == Catch::Approx(rig.gravityPerTick()).margin(1.0000001e-5f));
     for (std::size_t i = 0; i < deltas.size(); ++i)
     {
         INFO("above-ride-height tick " << i << " delta=" << deltas[i]);
-        REQUIRE(deltas[i] == Catch::Approx(rig.gravityPerTick()).margin(1e-3f));
+        REQUIRE(deltas[i] == Catch::Approx(rig.gravityPerTick()).margin(1.0000001e-5f));
     }
 
     // ---- AND IT IS CAUGHT WHEN IT ARRIVES, at free-fall time rather than at servo time.
@@ -3492,7 +3493,7 @@ TEST_CASE("BrawlerMovement.FreeFallAcceleratesAtGravity", "[BrawlerMovement]")
     for (std::size_t i = 0; i < clearance.size(); ++i)
     {
         INFO("tick " << (i + 1) << " clearance=" << clearance[i]);
-        REQUIRE(clearance[i] <= rig.sd.rideHeight + rig.sd.snapDistance + 1e-3f);
+        REQUIRE(clearance[i] <= rig.sd.rideHeight + rig.sd.snapDistance + 1.0000001e-5f);
     }
 }
 
@@ -3500,19 +3501,19 @@ TEST_CASE("BrawlerMovement.FreeFallAcceleratesAtGravity", "[BrawlerMovement]")
 // THE LEDGE ITSELF -- and THE ONE CASE WHOSE DESIGNED RED PREMISE DID NOT REPRODUCE AT THE
 // SHIPPED WALK SPEED. Both measurements are in the case, because the difference is the finding.
 //
-// `impl/design_ledge_fall_and_landing.md` §3 predicted a walk-off exiting at ~1500 cm/s under
-// task 56 and ~280 under ruling #29. MEASURED on this rig (`LedgeQueryAdapter`, the swept-capsule
-// corner, task 56's own mock), at the shipped `maxWalkSpeed = 100`:
+// `impl/design_ledge_fall_and_landing.md` §3 predicted a walk-off exiting at ~15 m/s under
+// task 56 and ~2.8 under ruling #29. MEASURED on this rig (`LedgeQueryAdapter`, the swept-capsule
+// corner, task 56's own mock), at the shipped `maxWalkSpeed = 1`:
 //
 //     traverse speed     task 56 exit vz     ruling #29 exit vz     worst downward dv/tick (task 56)
-//         100                -89.73               -94.28                -16.333  (== gravity*dt)
-//         300               -249.97               -76.09                -47.511  (2.9x gravity)
-//         600               -470.67               -49.36               -162.256  (9.9x gravity)
+//         1                  -0.8973              -0.9428               -0.16333  (== gravity*dt)
+//         3                  -2.4997              -0.7609               -0.47511  (2.9x gravity)
+//         6                  -4.7067              -0.4936               -1.62256  (9.9x gravity)
 //
-// WHY: at 100 cm/s the corner's virtual floor recedes no faster than the character was already
+// WHY: at 1 m/s the corner's virtual floor recedes no faster than the character was already
 // falling, so the task-56 spring TRACKED it instead of saturating, and the exit speed is the free
 // fall the traverse bought either way. The launch needs the floor to outrun the servo, which
-// starts at ~300 cm/s of traverse. => THE SUBJECT OF THIS CASE IS THE INVARIANT, NOT THE EXIT
+// starts at ~3 m/s of traverse. => THE SUBJECT OF THIS CASE IS THE INVARIANT, NOT THE EXIT
 // NUMBER: with `hoverPullDownAccel == 0` no tick above ride height may accelerate the character
 // downward faster than gravity. That is the user's complaint, stated as a law, and it is RED at
 // 300 and 600 and green at 100 in BOTH arms -- which is exactly what the table says.
@@ -3521,14 +3522,14 @@ TEST_CASE("BrawlerMovement.LedgeExitIsFreeFall", "[BrawlerMovement]")
 {
     using namespace movementTests;
 
-    for (const float traverseSpeed : { 100.f, 300.f, 600.f })
+    for (const float traverseSpeed : { 1.f, 3.f, 6.f })
     {
         LedgeRig rig;
         rig.query.configureFrom(rig.sd);
         rig.query.edgeX      = 0.f;
         rig.sd.maxWalkSpeed  = traverseSpeed;      // a FIXTURE knob; the shipped walk is 100
         rig.state.bodyState.position =
-            glm::vec3(-60.f, 0.f, rig.sd.capsuleHalfHeight + rig.sd.rideHeight);
+            glm::vec3(0.f, rig.sd.capsuleHalfHeight + rig.sd.rideHeight, 0.6f);
 
         float worstDownStep = 0.f;
         int   worstTick     = -1;
@@ -3545,10 +3546,10 @@ TEST_CASE("BrawlerMovement.LedgeExitIsFreeFall", "[BrawlerMovement]")
                 rig.support() == movement::SupportState::Supported;
             rig.tick(t, stick(1.f, 0.f));
 
-            if (t == 5u) { steadyClearance = rig.query.lastClearance; steadyVz = rig.state.velocity.z; }
-            // ⚠ MEASURED ON THE VERTICAL CHANNEL, NOT ON `velocity.z`, and gated on being ABOVE
+            if (t == 5u) { steadyClearance = rig.query.lastClearance; steadyVz = simFrame::height(rig.state.velocity); }
+            // ⚠ MEASURED ON THE VERTICAL CHANNEL, NOT ON THE VELOCITY'S HEIGHT, and gated on being ABOVE
             // RIDE HEIGHT. Two corrections, both of which this row needed:
-            //   * on a tilted corner normal `velocity.z` carries the TANGENTIAL channel's own
+            //   * on a tilted corner normal the velocity's height carries the TANGENTIAL channel's own
             //     vertical component, so its per-tick change is not what step 4 did. `channelsOf`
             //     against the frame the tick actually used (`derived.surfaceNormal`) is.
             //   * the one-sided law only promises "gravity and nothing else" ABOVE ride height. At
@@ -3566,14 +3567,14 @@ TEST_CASE("BrawlerMovement.LedgeExitIsFreeFall", "[BrawlerMovement]")
                 && rig.support() == movement::SupportState::Unsupported)
             {
                 exitTick  = int(t);
-                exitSpeed = rig.state.velocity.z;
+                exitSpeed = simFrame::height(rig.state.velocity);
             }
             else if (exitTick > 0 && int(t) <= exitTick + 4)
-                ballistic.push_back(rig.state.velocity.z - velocityBefore.z);
+                ballistic.push_back(simFrame::height(rig.state.velocity) - simFrame::height(velocityBefore));
             rig.engineStep();
         }
 
-        INFO("traverse " << traverseSpeed << " cm/s: settled clearance=" << steadyClearance
+        INFO("traverse " << traverseSpeed << " m/s: settled clearance=" << steadyClearance
              << " vz=" << steadyVz
              << "; exit at tick " << exitTick << " with vz=" << exitSpeed
              << "; worst downward step " << worstDownStep << " at tick " << worstTick
@@ -3581,26 +3582,26 @@ TEST_CASE("BrawlerMovement.LedgeExitIsFreeFall", "[BrawlerMovement]")
              << "; the task-56 servo's bound was " << -rig.maxVerticalStep() << ")");
 
         // ---- PREMISES: it really hovered, and it really left. Green in both arms.
-        REQUIRE(steadyClearance == Catch::Approx(rig.sd.rideHeight).margin(0.5f));
+        REQUIRE(steadyClearance == Catch::Approx(rig.sd.rideHeight).margin(0.005f));
         REQUIRE(exitTick > 5);
         REQUIRE(exitSpeed < 0.f);
 
         // ---- THE SUBJECT. Nothing pulls the character down harder than gravity, ever.
-        REQUIRE(worstDownStep >= rig.gravityPerTick() - 1e-2f);
+        REQUIRE(worstDownStep >= rig.gravityPerTick() - 1e-4f);
         // ...so the exit speed cannot exceed what free fall over the same traverse would give.
         REQUIRE(glm::abs(exitSpeed) < glm::abs(rig.gravityPerTick()) * float(exitTick));
 
         // ---- AND THE FALL AFTER IT IS BALLISTIC, exactly one gravity per tick.
         REQUIRE(ballistic.size() >= 3u);
         for (const float d : ballistic)
-            REQUIRE(d == Catch::Approx(rig.gravityPerTick()).margin(1e-3f));
+            REQUIRE(d == Catch::Approx(rig.gravityPerTick()).margin(1.0000001e-5f));
     }
 }
 
 // ---------------------------------------------------------------------------
 // THE KNOB WORKS, AND THE DEFAULT IS NOT REQUIRED TO. Both arms of `hoverPullDownAccel` on the
-// SAME 40 cm step-down, so the case is its own control: at 0 the step is a gravity fall (~17
-// ticks), at 980 it is 2 g (~12), and neither overshoots past ride height.
+// SAME 0.4 m step-down, so the case is its own control: at 0 the step is a gravity fall (~17
+// ticks), at 9.8 it is 2 g (~12), and neither overshoots past ride height.
 // THIS IS THE ONLY CASE THAT MAY SHIP A NON-ZERO `hoverPullDownAccel`. The shipped default is
 // 0 and is the user's (ruling #29); this case proves the knob is wired, not that it should move.
 // ---------------------------------------------------------------------------
@@ -3612,12 +3613,12 @@ TEST_CASE("BrawlerMovement.PullDownKnobRecapturesStep", "[BrawlerMovement]")
     int   descentAt[2] = { -1, -1 };   // clearance first back DOWN to ride height
     float dip[2]       = { 0.f, 0.f };
     int arm = 0;
-    for (const float knob : { 0.f, 980.f })
+    for (const float knob : { 0.f, 9.8f })
     {
         PlaneRig rig;
         rig.sd.hoverPullDownAccel = knob;
         rig.state.bodyState.position =
-            glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight));
+            simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight));
         rig.tick(0u);
         rig.engineStep();
         rig.query.planeOffset -= rig.sd.snapDistance;
@@ -3631,41 +3632,41 @@ TEST_CASE("BrawlerMovement.PullDownKnobRecapturesStep", "[BrawlerMovement]")
             if (descentAt[arm] < 0 && rig.query.lastClearance <= rig.sd.rideHeight)
                 descentAt[arm] = int(t);
             if (caughtAt[arm] < 0
-                && glm::abs(rig.query.lastClearance - rig.sd.rideHeight) < 0.05f
-                && glm::abs(rig.state.velocity.z) < 25.f)
+                && glm::abs(rig.query.lastClearance - rig.sd.rideHeight) < 0.0005f
+                && glm::abs(simFrame::height(rig.state.velocity)) < 0.25f)
                 caughtAt[arm] = int(t);
         }
         dip[arm] = rig.sd.rideHeight - minClearance;
 
         // The free-fall time for the drop at the TOTAL downward acceleration this knob buys:
-        // `sqrt(2h/a)/dt` with `a = |gravity| + knob`. 17.14 ticks at 0, 12.13 at 980 -- and the
-        // second is the design note's own "40 cm in 12 ticks".
+        // `sqrt(2h/a)/dt` with `a = |gravity| + knob`. 17.14 ticks at 0, 12.13 at 9.8 -- and the
+        // second is the design note's own "40 cm in 12 ticks" (0.4 m).
         const float predictedDescent =
             glm::sqrt(2.f * rig.sd.snapDistance / (glm::abs(rig.sd.gravity) + knob)) / kDt;
 
         INFO("hoverPullDownAccel=" << knob << ": clearance back at ride height on tick "
              << descentAt[arm] << " (free-fall arithmetic " << predictedDescent
              << "), settled on tick " << caughtAt[arm]
-             << ", dip below ride height " << dip[arm] << " cm");
+             << ", dip below ride height " << dip[arm] << " m");
         REQUIRE(caughtAt[arm] > 0);
         REQUIRE(descentAt[arm] > 0);
         // THE DESCENT IS THE KNOB'S OWN ARITHMETIC, to within a tick of discretisation.
         REQUIRE(float(descentAt[arm]) == Catch::Approx(predictedDescent).margin(1.5f));
-        // AND IT DOES NOT BOTTOM OUT: the dip stays inside the 10 cm below ride height.
+        // AND IT DOES NOT BOTTOM OUT: the dip stays inside the 0.1 m below ride height.
         REQUIRE(dip[arm] < rig.sd.rideHeight);
         ++arm;
     }
 
     INFO("descent ticks: hoverPullDownAccel 0 -> " << descentAt[0] << ", 980 -> " << descentAt[1]
          << ";  settle ticks: " << caughtAt[0] << " -> " << caughtAt[1]
-         << ";  dips: " << dip[0] << " -> " << dip[1] << " cm");
+         << ";  dips: " << dip[0] << " -> " << dip[1] << " m");
     // ⭐ THE KNOB'S WHOLE CONTENT: 980 is strictly faster on both clocks...
     REQUIRE(descentAt[1] < descentAt[0]);
     REQUIRE(caughtAt[1]  < caughtAt[0]);
     // ...and it recaptures the step inside the AC's 13 ticks while the default does not.
     // ⚠ THE AC'S "13 TICKS" IS THE *DESCENT*, NOT THE SETTLE. Measured, the settle takes 18
-    // ticks at 980 and 22 at 0, because the servo also has to absorb the arrival speed the fall
-    // bought (280 cm/s at 0, 397 at 980). The design note's 12 is `sqrt(2*40/1960)/dt`, which is
+    // ticks at 9.8 and 22 at 0, because the servo also has to absorb the arrival speed the fall
+    // bought (2.8 m/s at 0, 3.97 at 9.8). The design note's 12 is `sqrt(2*0.4/19.6)/dt`, which is
     // the row above; recorded here so the two clocks are not confused again.
     REQUIRE(descentAt[1] <= 13);
     REQUIRE(descentAt[0] >  13);
@@ -3675,8 +3676,8 @@ TEST_CASE("BrawlerMovement.PullDownKnobRecapturesStep", "[BrawlerMovement]")
 
 // ---------------------------------------------------------------------------
 // R2'S MIRROR, WHICH NOBODY HAD WALKED: the walk's OWN vertical component was read back as `vUp`
-// and DAMPED. Walking at 600 cm/s along a 30 deg plane genuinely rises at 300 cm/s, and task 56's
-// servo saw that as something to fight: `-hoverDamping * 300` = -17 112 cm/s^2 of correction.
+// and DAMPED. Walking at 6 m/s along a 30 deg plane genuinely rises at 3 m/s, and task 56's
+// servo saw that as something to fight: `-hoverDamping * 3` = -171.12 m/s^2 of correction.
 //
 // Under the dual basis the two channels are complementary: a velocity that is PURELY along the
 // slope has vertical channel ZERO, and the servo sees nothing to do.
@@ -3686,7 +3687,7 @@ TEST_CASE("BrawlerMovement.SlopeWalkDoesNotExciteTheServo", "[BrawlerMovement]")
     using namespace movementTests;
 
     constexpr float kSlopeDeg = 30.f;
-    constexpr float kWalk     = 600.f;
+    constexpr float kWalk     = 6.f;
 
     // BOTH DIRECTIONS, because the defect is SIGNED: task 56 read the walk's own vertical
     // component as `vUp` and damped it, so the character settled HIGH walking uphill and LOW
@@ -3697,11 +3698,11 @@ TEST_CASE("BrawlerMovement.SlopeWalkDoesNotExciteTheServo", "[BrawlerMovement]")
         rig.sd.maxWalkSpeed   = kWalk;                  // a FIXTURE knob; the shipped walk is 100
         rig.query.planeNormal = slopeNormal(kSlopeDeg);
         rig.state.bodyState.position =
-            glm::vec3(0.f, 0.f, seedZForClearance(rig.query, rig.sd.rideHeight));
+            simFrame::withHeight(glm::vec3(0.f), seedZForClearance(rig.query, rig.sd.rideHeight));
 
         // The tangent frame this rig produces, from the header's own `buildTangentFrame`, so the
         // expected numbers are the frame's and not a second derivation.
-        glm::vec3 u(1.f, 0.f, 0.f), v(0.f, 1.f, 0.f);
+        glm::vec3 u(simFrame::kForward), v(simFrame::kRight);
         movement::buildTangentFrame(rig.query.planeNormal, u, v);
         const float s = glm::dot(u, movement::kWorldUp);
 
@@ -3720,7 +3721,7 @@ TEST_CASE("BrawlerMovement.SlopeWalkDoesNotExciteTheServo", "[BrawlerMovement]")
                 const glm::vec3 ch = channelsOf(V, rig.query.planeNormal);
                 worstVertical   = glm::max(worstVertical, glm::abs(ch.z));
                 tailSpeedAlongU = ch.x;
-                tailVz          = V.z;
+                tailVz          = simFrame::height(V);
             }
         }
 
@@ -3730,9 +3731,9 @@ TEST_CASE("BrawlerMovement.SlopeWalkDoesNotExciteTheServo", "[BrawlerMovement]")
         // it is the whole price of "gravity and nothing else above ride height".
         const float rippleBound = glm::abs(rig.sd.gravity) * kDt * kDt;
         // What task 56's servo settled at: the plain dot read `kWalk*s` as `vUp`, and the steady
-        // state that leaves is `e = -hoverDamping*kWalk*s*... ` -- measured, 0.4197 cm, sign
+        // state that leaves is `e = -hoverDamping*kWalk*s*... ` -- measured, 0.004197 m, sign
         // following the walk. Spelled as the measurement rather than re-derived.
-        const float taskFiftySixOffset = 0.4197f;
+        const float taskFiftySixOffset = 0.004197f;
 
         INFO((stickX > 0.f ? "UPHILL" : "DOWNHILL") << " 30 deg walk at " << kWalk
              << ": s=dot(u,up)=" << s
@@ -3740,19 +3741,19 @@ TEST_CASE("BrawlerMovement.SlopeWalkDoesNotExciteTheServo", "[BrawlerMovement]")
              << "  worst |vertical channel|=" << worstVertical
              << "  tangential=" << tailSpeedAlongU << "  world vz=" << tailVz
              << "  (task 56 read the walk's own " << (stickX * kWalk * s)
-             << " cm/s as vUp and damped it with " << (-rig.sd.hoverDamping * stickX * kWalk * s)
-             << " cm/s^2, settling " << taskFiftySixOffset
-             << " cm off ride height; one-tick ripple bound " << rippleBound << " cm)");
+             << " m/s as vUp and damped it with " << (-rig.sd.hoverDamping * stickX * kWalk * s)
+             << " m/s^2, settling " << taskFiftySixOffset
+             << " m off ride height; one-tick ripple bound " << rippleBound << " m)");
 
         // ---- PREMISES. It really is on a slope, really walking along it, really supported, and
         //      really climbing/descending -- the vertical motion the servo must NOT see is real.
         REQUIRE(s == Catch::Approx(glm::sin(glm::radians(kSlopeDeg))).margin(1e-5f));
         REQUIRE(rig.support() == movement::SupportState::Supported);
-        REQUIRE(tailSpeedAlongU == Catch::Approx(stickX * kWalk).margin(1.f));
+        REQUIRE(tailSpeedAlongU == Catch::Approx(stickX * kWalk).margin(0.01f));
         // ⚠ The margin is the RIPPLE, not slop: `tailVz` is sampled on whatever phase of the
         // one-tick limit cycle the last tick landed on, so it moves by up to `|gravity|*dt`.
         REQUIRE(glm::abs(tailVz)
-                == Catch::Approx(kWalk * s).margin(glm::abs(rig.gravityPerTick()) + 1.f));
+                == Catch::Approx(kWalk * s).margin(glm::abs(rig.gravityPerTick()) + 0.01f));
 
         // ---- A GUARD, NOT THE SUBJECT -- and it is bounded by the RIPPLE, not by zero, which is
         //      the honest reading and was not the one this row started with. Task 56 settled with
@@ -3761,13 +3762,13 @@ TEST_CASE("BrawlerMovement.SlopeWalkDoesNotExciteTheServo", "[BrawlerMovement]")
         //      and out of `e == 0` and the vertical channel swings by exactly one tick of gravity.
         //      What actually differs between the two laws is WHERE the character settles, and
         //      that is the pair of rows below.
-        REQUIRE(worstVertical <= glm::abs(rig.gravityPerTick()) + 1e-2f);
+        REQUIRE(worstVertical <= glm::abs(rig.gravityPerTick()) + 1e-4f);
 
         // ---- THE SUBJECT. The character rides at RIDE HEIGHT in both directions. The lower
         //      bound is the one-tick ripple; the upper bound is exact, because with the servo
         //      one-sided nothing can hold the character ABOVE ride height at all.
-        REQUIRE(minClearance >= rig.sd.rideHeight - rippleBound - 1e-3f);
-        REQUIRE(maxClearance <= rig.sd.rideHeight + 1e-3f);
+        REQUIRE(minClearance >= rig.sd.rideHeight - rippleBound - 1.0000001e-5f);
+        REQUIRE(maxClearance <= rig.sd.rideHeight + 1.0000001e-5f);
     }
 }
 
@@ -3776,8 +3777,8 @@ TEST_CASE("BrawlerMovement.SlopeWalkDoesNotExciteTheServo", "[BrawlerMovement]")
 // land, not fly. This rig has a SOLVER (`WorldSweepQueryAdapter::depenetrate`) and `drivesBody`
 // on, so step 6' is live and both the decomposition and the contact rule are in the path.
 //
-// THE PRE-FIX BEHAVIOUR IS NOT A SLIDE, IT IS A DIVERGENCE. The design note predicted ~1000
-// cm/s down-slope; MEASURED on this rig the task-56 tree reaches 1.5e5 cm/s and keeps going,
+// THE PRE-FIX BEHAVIOUR IS NOT A SLIDE, IT IS A DIVERGENCE. The design note predicted ~10
+// m/s down-slope; MEASURED on this rig the task-56 tree reaches 1.5e3 m/s and keeps going,
 // because the leak is a positive feedback loop: the fall leaks into the tangential channel, the
 // tangential term has its own vertical component, and that comes back as more "fall".
 // ---------------------------------------------------------------------------
@@ -3786,7 +3787,7 @@ TEST_CASE("BrawlerMovement.VerticalFallOntoSlopeDoesNotSlide", "[BrawlerMovement
     using namespace movementTests;
 
     constexpr float kSlopeDeg = 30.f;
-    constexpr float kDrop     = 200.f;
+    constexpr float kDrop     = 2.f;
 
     WorldRig rig;
     rig.sd.drivesBody = true;                     // step 6' must be live: R3 is one of the subjects
@@ -3795,18 +3796,18 @@ TEST_CASE("BrawlerMovement.VerticalFallOntoSlopeDoesNotSlide", "[BrawlerMovement
     rig.query.solids = { WorldSweepQueryAdapter::Plane{ n, 0.f, "slope" } };
 
     const float axisHalf = rig.sd.capsuleHalfHeight - rig.sd.capsuleRadius;
-    rig.state.bodyState.position = glm::vec3(
-        0.f, 0.f, axisHalf + rig.sd.rideHeight + kDrop + rig.sd.capsuleRadius / n.z);
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f),
+        axisHalf + rig.sd.rideHeight + kDrop + rig.sd.capsuleRadius / simFrame::height(n));
     rig.state.positionCmd = rig.state.bodyState.position;
 
-    const float startX = rig.state.bodyState.position.x;
+    const float startX = simFrame::forwardRight(rig.state.bodyState.position).x;
 
     int   firstSupported  = -1;
     float impactSpeed     = 0.f;
     float worstTangential = 0.f;
     for (std::uint32_t t = 0u; t < 120u; ++t)
     {
-        const float before = rig.state.velocity.z;
+        const float before = simFrame::height(rig.state.velocity);
         rig.tick(t, stick(0.f, 0.f));
         if (firstSupported < 0 && rig.support() == movement::SupportState::Supported)
         {
@@ -3816,41 +3817,41 @@ TEST_CASE("BrawlerMovement.VerticalFallOntoSlopeDoesNotSlide", "[BrawlerMovement
         if (firstSupported >= 0 && int(t) <= firstSupported + 30)
         {
             // The speed ALONG the slope: the horizontal component is the whole of it here,
-            // because the plane tilts in XZ only.
+            // because the plane tilts in the forward-up plane only.
             worstTangential = glm::max(worstTangential,
-                                       glm::length(glm::vec2(rig.state.velocity.x,
-                                                             rig.state.velocity.y)));
+                                       glm::length(simFrame::forwardRight(
+                                                             rig.state.velocity)));
         }
         rig.state.bodyState.position =
             rig.query.depenetrate(rig.state.bodyState.position + rig.state.velocity * kDt);
     }
 
-    const float driftX = rig.state.bodyState.position.x - startX;
+    const float driftX = simFrame::forwardRight(rig.state.bodyState.position).x - startX;
 
     INFO("2 m fall onto " << kSlopeDeg << " deg: first supported at tick " << firstSupported
-         << " at " << impactSpeed << " cm/s"
+         << " at " << impactSpeed << " m/s"
          << "; worst horizontal speed in the 30 ticks after contact = " << worstTangential
-         << "; drift " << driftX << " cm; settled clearance " << rig.query.lastClearance
-         << "  (the design note predicted ~1000 cm/s of slide; the task-56 tree DIVERGES)");
+         << "; drift " << driftX << " m; settled clearance " << rig.query.lastClearance
+         << "  (the design note predicted ~10 m/s of slide; the task-56 tree DIVERGES)");
 
     // ---- PREMISES. It really fell, really arrived fast, and really landed.
     REQUIRE(firstSupported > 0);
-    REQUIRE(impactSpeed < -400.f);
+    REQUIRE(impactSpeed < -4.f);
     REQUIRE(rig.support() == movement::SupportState::Supported);
 
     // ---- WHICH FIX THIS CASE ACTUALLY MEASURES, MEASURED RATHER THAN ASSUMED. Poisoned back to
-    //      plain dot products (F2 off) it goes RED at 1102.20 cm/s of slide; poisoned back to the
+    //      plain dot products (F2 off) it goes RED at 11.0220 m/s of slide; poisoned back to the
     //      unconditional into-contact kill (F3 off) it stays GREEN, because under ruling #29 the
     //      servo catches this 2 m fall inside the band and the solver never has to separate
     //      anything -- `lastPushOut` is zero for the whole run. So THIS case is F2's, and
     //      `DiagonalLandingKeepsHorizontalSpeed` is F3's. R3 is reachable only by a fall the
-    //      10 cm below ride height cannot absorb (761.8 cm/s at the shipped constants).
+    //      0.1 m below ride height cannot absorb (7.618 m/s at the shipped constants).
     //
     // ---- THE SUBJECT. A vertical fall lands dead: no tangential speed, no drift, and it is
     //      sitting at ride height when it is over.
-    REQUIRE(worstTangential < 50.f);
-    REQUIRE(glm::abs(driftX) < 1.f);
-    REQUIRE(rig.query.lastClearance == Catch::Approx(rig.sd.rideHeight).margin(0.5f));
+    REQUIRE(worstTangential < 0.5f);
+    REQUIRE(glm::abs(driftX) < 0.01f);
+    REQUIRE(rig.query.lastClearance == Catch::Approx(rig.sd.rideHeight).margin(0.005f));
 }
 
 // ---------------------------------------------------------------------------
@@ -3866,8 +3867,8 @@ TEST_CASE("BrawlerMovement.VerticalFallOntoSlopeDoesNotSlide", "[BrawlerMovement
 //
 // THE END-OF-TICK ARITHMETIC, spelled once: step 6' removes one authored component from the
 // velocity, step 3 passes the tangential part through unchanged, and step 4 adds ONE tick of
-// gravity to the vertical part. So a LANDING leaves `(vx, vy, gravity*dt)` and an into-contact
-// kill leaves `(kill.x, kill.y, kill.z + gravity*dt)`.
+// gravity to the vertical part. So a LANDING leaves `(vx, gravity*dt, vz)` and an into-contact
+// kill leaves `(kill.x, kill.y + gravity*dt, kill.z)` (y is up).
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerMovement.DiagonalLandingKeepsHorizontalSpeed", "[BrawlerMovement]")
 {
@@ -3876,21 +3877,21 @@ TEST_CASE("BrawlerMovement.DiagonalLandingKeepsHorizontalSpeed", "[BrawlerMoveme
     // A landing is a contact whose normal is WALKABLE. 44 deg is inside the shipped 45 deg cap.
     const glm::vec3 landingNormal = slopeNormal(44.f);
 
-    // ---- 1. THE DIAGONAL LANDING. 300 cm/s of walk plus 800 cm/s of fall, onto a 44 deg face.
+    // ---- 1. THE DIAGONAL LANDING. 3 m/s of walk plus 8 m/s of fall, onto a 44 deg face.
     ScriptedRig rig;
     rig.query.scriptedSweeps.clear();                    // AIRBORNE: step 4 is gravity alone
     rig.sd.drivesBody   = true;
     rig.sd.acceleration = 0.f;
-    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
-    rig.state.velocity  = glm::vec3(300.f, 0.f, -800.f);
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
+    rig.state.velocity  = glm::vec3(0.f, -8.f, -3.f);
     rig.tick(1u, stick(1.f, 0.f));
     REQUIRE(rig.support() == movement::SupportState::Unsupported);
-    REQUIRE(rig.state.velocity.x == Catch::Approx(300.f).margin(1e-3f));   // pass-through premise
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(3.f).margin(1.0000001e-5f));   // pass-through premise
     REQUIRE(rig.hasCommandBit());
 
     const glm::vec3 arriving = rig.state.velocity;
-    // THE SOLVER: it separated the body along the face normal by 2 cm.
-    rig.engineStepAndCapture(rig.state.bodyState.position + arriving * kDt + landingNormal * 2.f,
+    // THE SOLVER: it separated the body along the face normal by 0.02 m.
+    rig.engineStepAndCapture(rig.state.bodyState.position + arriving * kDt + landingNormal * 0.02f,
                              glm::vec3(0.f));
     rig.tick(2u, stick(1.f, 0.f));
 
@@ -3899,13 +3900,13 @@ TEST_CASE("BrawlerMovement.DiagonalLandingKeepsHorizontalSpeed", "[BrawlerMoveme
     const glm::vec3 intoContactKill =
         arriving - glm::dot(arriving, landingNormal) * landingNormal;
 
-    INFO("diagonal landing on 44 deg: arriving=(" << arriving.x << ", "
-         << arriving.y << ", " << arriving.z << ")  ->  ("
-         << rig.state.velocity.x << ", " << rig.state.velocity.y << ", "
-         << rig.state.velocity.z << ")"
-         << "\n  the task-56 into-contact kill would have given (" << intoContactKill.x
-         << ", " << intoContactKill.y << ", "
-         << (intoContactKill.z + rig.gravityPerTick())
+    INFO("diagonal landing on 44 deg: arriving=(" << simFrame::forwardRight(arriving).x << ", "
+         << simFrame::forwardRight(arriving).y << ", " << simFrame::height(arriving) << ")  ->  ("
+         << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << ", "
+         << simFrame::height(rig.state.velocity) << ")"
+         << "\n  the task-56 into-contact kill would have given (" << simFrame::forwardRight(intoContactKill).x
+         << ", " << simFrame::forwardRight(intoContactKill).y << ", "
+         << (simFrame::height(intoContactKill) + rig.gravityPerTick())
          << ") -- the horizontal REVERSES");
 
     REQUIRE(glm::length(rig.derived.lastPushOut) > movement::kPushOutEps);
@@ -3913,38 +3914,38 @@ TEST_CASE("BrawlerMovement.DiagonalLandingKeepsHorizontalSpeed", "[BrawlerMoveme
             >= rig.sd.cosMaxSlope);                       // the premise: it IS a landing
     // ...and the two arms really do disagree on this push-out, which is what makes the rows below
     // a measurement of F3's branch rather than of the fixture.
-    REQUIRE(intoContactKill.x < 0.f);
-    REQUIRE(rig.state.velocity.x == Catch::Approx(300.f).margin(1e-3f));
-    REQUIRE(rig.state.velocity.y == Catch::Approx(0.f).margin(1e-3f));
-    REQUIRE(rig.state.velocity.z
-          == Catch::Approx(rig.gravityPerTick()).margin(1e-3f));
+    REQUIRE(simFrame::forwardRight(intoContactKill).x < 0.f);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(3.f).margin(1.0000001e-5f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(0.f).margin(1.0000001e-5f));
+    REQUIRE(simFrame::height(rig.state.velocity)
+          == Catch::Approx(rig.gravityPerTick()).margin(1.0000001e-5f));
 
-    // ---- 2. THE STRAIGHT-DOWN LANDING, which is the design note's own 1000 cm/s number.
+    // ---- 2. THE STRAIGHT-DOWN LANDING, which is the design note's own 10 m/s number.
     ScriptedRig plumb;
     plumb.query.scriptedSweeps.clear();
     plumb.sd.drivesBody   = true;
     plumb.sd.acceleration = 0.f;
     const glm::vec3 thirty = slopeNormal(30.f);
-    plumb.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + plumb.sd.rideHeight);
-    plumb.state.velocity  = glm::vec3(0.f, 0.f, -2000.f);
+    plumb.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + plumb.sd.rideHeight);
+    plumb.state.velocity  = glm::vec3(0.f, -20.f, -0.f);
     plumb.tick(1u, stick(0.f, 0.f));
     const glm::vec3 falling = plumb.state.velocity;
-    plumb.engineStepAndCapture(plumb.state.bodyState.position + falling * kDt + thirty * 2.f,
+    plumb.engineStepAndCapture(plumb.state.bodyState.position + falling * kDt + thirty * 0.02f,
                                glm::vec3(0.f));
     plumb.tick(2u, stick(0.f, 0.f));
     const glm::vec3 deflected = falling - glm::dot(falling, thirty) * thirty;
-    INFO("plumb 2000 cm/s fall onto 30 deg: -> (" << plumb.state.velocity.x << ", "
-         << plumb.state.velocity.y << ", " << plumb.state.velocity.z
-         << ")  the task-56 rule deflected it to (" << deflected.x << ", " << deflected.y
-         << ", " << deflected.z << "), |horizontal| = " << glm::abs(deflected.x)
-         << ", down-slope = " << (glm::abs(deflected.x) / glm::cos(glm::radians(30.f))));
-    // THE DESIGN NOTE'S OWN NUMBER, confirmed on the shipped constants: 866.025 cm/s of horizontal
-    // is 1000.000 cm/s along a 30 deg face. That is what the character used to be given.
-    REQUIRE(glm::abs(deflected.x) == Catch::Approx(866.025f).margin(1.f));
-    REQUIRE(plumb.state.velocity.x == Catch::Approx(0.f).margin(1e-3f));
-    REQUIRE(plumb.state.velocity.y == Catch::Approx(0.f).margin(1e-3f));
-    REQUIRE(plumb.state.velocity.z
-          == Catch::Approx(plumb.gravityPerTick()).margin(1e-3f));
+    INFO("plumb 20 m/s fall onto 30 deg: -> (" << simFrame::forwardRight(plumb.state.velocity).x << ", "
+         << simFrame::forwardRight(plumb.state.velocity).y << ", " << simFrame::height(plumb.state.velocity)
+         << ")  the task-56 rule deflected it to (" << simFrame::forwardRight(deflected).x << ", " << simFrame::forwardRight(deflected).y
+         << ", " << simFrame::height(deflected) << "), |horizontal| = " << glm::abs(simFrame::forwardRight(deflected).x)
+         << ", down-slope = " << (glm::abs(simFrame::forwardRight(deflected).x) / glm::cos(glm::radians(30.f))));
+    // THE DESIGN NOTE'S OWN NUMBER, confirmed on the shipped constants: 8.66025 m/s of horizontal
+    // is 10.00000 m/s along a 30 deg face. That is what the character used to be given.
+    REQUIRE(glm::abs(simFrame::forwardRight(deflected).x) == Catch::Approx(8.660251f).margin(0.01f));
+    REQUIRE(simFrame::forwardRight(plumb.state.velocity).x == Catch::Approx(0.f).margin(1.0000001e-5f));
+    REQUIRE(simFrame::forwardRight(plumb.state.velocity).y == Catch::Approx(0.f).margin(1.0000001e-5f));
+    REQUIRE(simFrame::height(plumb.state.velocity)
+          == Catch::Approx(plumb.gravityPerTick()).margin(1.0000001e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -3958,9 +3959,9 @@ TEST_CASE("BrawlerMovement.WallContactStillKillsIntoWallComponent", "[BrawlerMov
 
     struct Arm { glm::vec3 normal; const char* what; };
     const Arm arms[] = {
-        { glm::vec3(-1.f, 0.f, 0.f), "a vertical wall" },
+        { glm::vec3(0.f, 0.f, 1.f), "a vertical wall" },
         { slopeNormal(46.f),         "a face one degree past the walkable cap" },
-        { glm::normalize(glm::vec3(-1.f, 0.f, 0.25f)), "another brawler riding up" },
+        { glm::normalize(glm::vec3(0.f, 0.25f, 1.f)), "another brawler riding up" },
     };
 
     for (const Arm& arm : arms)
@@ -3969,38 +3970,38 @@ TEST_CASE("BrawlerMovement.WallContactStillKillsIntoWallComponent", "[BrawlerMov
         rig.query.scriptedSweeps.clear();                // AIRBORNE, exactly as the landing case
         rig.sd.drivesBody   = true;
         rig.sd.acceleration = 0.f;
-        rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
-        rig.state.velocity  = glm::vec3(100.f, 50.f, -300.f);
+        rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
+        rig.state.velocity  = glm::vec3(0.5f, -3.f, -1.f);
         rig.tick(1u, stick(1.f, 0.f));
         const glm::vec3 arriving = rig.state.velocity;
-        rig.engineStepAndCapture(rig.state.bodyState.position + arriving * kDt + arm.normal * 2.f,
+        rig.engineStepAndCapture(rig.state.bodyState.position + arriving * kDt + arm.normal * 0.02f,
                                  glm::vec3(0.f));
         rig.tick(2u, stick(1.f, 0.f));
 
         // The into-contact kill, then step 4's one tick of gravity on the vertical.
         const glm::vec3 killed  = arriving - glm::dot(arriving, arm.normal) * arm.normal;
-        const glm::vec3 expected(killed.x, killed.y, killed.z + rig.gravityPerTick());
+        const glm::vec3 expected = simFrame::fromForwardRight(simFrame::forwardRight(killed), simFrame::height(killed) + rig.gravityPerTick());
         // What the LANDING arm would have produced instead, so the case names both.
-        const glm::vec3 landingWouldGive(arriving.x, arriving.y, rig.gravityPerTick());
+        const glm::vec3 landingWouldGive = simFrame::fromForwardRight(simFrame::forwardRight(arriving), rig.gravityPerTick());
 
-        INFO(arm.what << ": n=(" << arm.normal.x << ", " << arm.normal.y << ", "
-             << arm.normal.z << ")  dot(n, up)=" << glm::dot(arm.normal, movement::kWorldUp)
+        INFO(arm.what << ": n=(" << simFrame::forwardRight(arm.normal).x << ", " << simFrame::forwardRight(arm.normal).y << ", "
+             << simFrame::height(arm.normal) << ")  dot(n, up)=" << glm::dot(arm.normal, movement::kWorldUp)
              << " < cosMaxSlope=" << rig.sd.cosMaxSlope
-             << "  ->  (" << rig.state.velocity.x << ", " << rig.state.velocity.y << ", "
-             << rig.state.velocity.z << "); into-contact kill + gravity says (" << expected.x
-             << ", " << expected.y << ", " << expected.z
-             << "); the landing arm would have said (" << landingWouldGive.x << ", "
-             << landingWouldGive.y << ", " << landingWouldGive.z << ")");
+             << "  ->  (" << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << ", "
+             << simFrame::height(rig.state.velocity) << "); into-contact kill + gravity says (" << simFrame::forwardRight(expected).x
+             << ", " << simFrame::forwardRight(expected).y << ", " << simFrame::height(expected)
+             << "); the landing arm would have said (" << simFrame::forwardRight(landingWouldGive).x << ", "
+             << simFrame::forwardRight(landingWouldGive).y << ", " << simFrame::height(landingWouldGive) << ")");
 
         // The premise that puts this arm on the WALL side of F3's branch...
         REQUIRE(glm::dot(arm.normal, movement::kWorldUp) < rig.sd.cosMaxSlope);
         REQUIRE(glm::length(rig.derived.lastPushOut) > movement::kPushOutEps);
         // ...and the premise that makes the rows below discriminate: the two arms disagree here.
-        REQUIRE(glm::length(expected - landingWouldGive) > 1.f);
+        REQUIRE(glm::length(expected - landingWouldGive) > 0.01f);
 
-        REQUIRE(rig.state.velocity.x == Catch::Approx(expected.x).margin(1e-3f));
-        REQUIRE(rig.state.velocity.y == Catch::Approx(expected.y).margin(1e-3f));
-        REQUIRE(rig.state.velocity.z == Catch::Approx(expected.z).margin(1e-3f));
+        REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(simFrame::forwardRight(expected).x).margin(1.0000001e-5f));
+        REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(simFrame::forwardRight(expected).y).margin(1.0000001e-5f));
+        REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(simFrame::height(expected)).margin(1.0000001e-5f));
     }
 }
 
@@ -4042,22 +4043,22 @@ TEST_CASE("BrawlerMovement.LaunchedDecelsAtLaunchDecel", "[BrawlerMovement]")
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
 
-    // 1. THE USER'S NUMBER, AS AN IDENTITY OVER THE SHIPPED CONSTANTS. 2000^2 / 8000 = 500 cm.
+    // 1. THE USER'S NUMBER, AS AN IDENTITY OVER THE SHIPPED CONSTANTS. 20^2 / 80 = 5 m.
     INFO("knockbackSpeed=" << rig.knockbackSpeed() << " launchDecel=" << rig.sd.launchDecel
-         << " -> v^2/(2a)=" << rig.knockbackDistance() << " cm over "
+         << " -> v^2/(2a)=" << rig.knockbackDistance() << " m over "
          << rig.knockbackSlideSeconds() << " s");
-    REQUIRE(rig.knockbackDistance() == Catch::Approx(500.f).margin(1e-3f));
+    REQUIRE(rig.knockbackDistance() == Catch::Approx(5.f).margin(1.0000001e-5f));
     REQUIRE(rig.knockbackSlideSeconds() == Catch::Approx(0.5f).margin(1e-6f));
 
     // 2. THE ASSIGNMENT, on the hit tick and keyed on the hit -- not on the machine's timer.
     const glm::vec3 startPosition = rig.state.bodyState.position;
     rig.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
     rig.tick(1u, stick(0.f, 0.f));
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.knockbackSpeed()).margin(1e-3f));
-    REQUIRE(rig.state.velocity.y == Catch::Approx(0.f).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.knockbackSpeed()).margin(1.0000001e-5f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(0.f).margin(1e-6f));
     // Steady hover at ride height: the vertical channel is identically zero, so the whole of the
     // velocity is the knockback. That is what makes the rows below exact rather than approximate.
-    REQUIRE(rig.state.velocity.z == Catch::Approx(0.f).margin(1e-4f));
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(0.f).margin(1e-6f));
     rig.engineStep();
 
     // 3. THE DECAY IS `launchDecel`, EVERY TICK, AND IT REACHES EXACTLY ZERO. `moveTowards`
@@ -4065,52 +4066,53 @@ TEST_CASE("BrawlerMovement.LaunchedDecelsAtLaunchDecel", "[BrawlerMovement]")
     //    on 0.000000 rather than overshooting into a backwards crawl.
     const float perTick = rig.sd.launchDecel * kDt;
     int zeroAtTick = -1;
-    float travelled = rig.state.velocity.x * kDt;   // the hit tick's own displacement
+    float travelled = simFrame::forwardRight(rig.state.velocity).x * kDt;   // the hit tick's own displacement
     for (std::uint32_t t = 2u; t <= 40u; ++t)
     {
-        const float before = rig.state.velocity.x;
+        const float before = simFrame::forwardRight(rig.state.velocity).x;
         rig.tick(t, stick(0.f, 0.f));
-        const float after = rig.state.velocity.x;
+        const float after = simFrame::forwardRight(rig.state.velocity).x;
         if (zeroAtTick < 0)
         {
             INFO("tick " << t << ": " << before << " -> " << after << " (step " << perTick << ")");
-            REQUIRE(before - after == Catch::Approx(glm::min(perTick, before)).margin(1e-3f));
+            REQUIRE(before - after == Catch::Approx(glm::min(perTick, before)).margin(1.0000001e-5f));
             if (after == 0.f) zeroAtTick = int(t);
         }
-        travelled += rig.state.velocity.x * kDt;
+        travelled += simFrame::forwardRight(rig.state.velocity).x * kDt;
         rig.engineStep();
     }
 
     // EXACTLY zero -- and at tick 32, which is THIRTY-ONE decay ticks after the hit tick and not
     // the thirty the real arithmetic names. ⛔ THIS IS THE FLOAT NOTE THE DESIGN ASKED TO BE
-    // PINNED RATHER THAN HAND-TUNED, and it is MEASURED: `4000 * (1/60)` is 66.666664, not
-    // 66.666667, so thirty steps remove 1999.99992 and leave 8e-5 cm/s behind -- one more tick,
+    // PINNED RATHER THAN HAND-TUNED, and the tick is MEASURED (this row): `40 * (1/60)` is 0.6666667
+    // in float (0x3f2aaaab), and thirty float subtractions from 20 leave a residue of about 6e-7 m/s
+    // (emulated in float32; it was 8e-5 cm/s when the sim ran in centimetres) -- one more tick,
     // which `moveTowards` then takes all the way to the endpoint. A 30-or-31-step exit was
     // anticipated (both are "lockout >= slide"); the row pins WHICH, so a future retune that
     // changes it has to be looked at rather than absorbed.
-    INFO("reached zero at tick " << zeroAtTick << "; travelled " << travelled << " cm");
+    INFO("reached zero at tick " << zeroAtTick << "; travelled " << travelled << " m");
     REQUIRE(zeroAtTick == 32);
-    REQUIRE(rig.state.velocity.x == 0.f);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == 0.f);
 
     // 4. ...AND IT STAYS AT ZERO: the decay does not push the character backwards once it arrives,
     //    and nothing re-reads `knockbackSpeed` after the hit tick.
     rig.tick(41u, stick(0.f, 0.f));
-    REQUIRE(rig.state.velocity.x == 0.f);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == 0.f);
 
     // 5. THE DISTANCE, MEASURED, AGAINST THE CLOSED FORM PLUS ITS OWN DISCRETISATION TERM.
     //    Summing v*dt over the N+1 ticks of a linear ramp gives dt*(N+1)*v0/2, which is
-    //    v0^2/(2a) + v0*dt/2 exactly -- half a tick of the launch speed, 16.667 cm at the shipped
-    //    pair. ⛔ Asserting the bare 500 here would have been wrong by that term and would have
+    //    v0^2/(2a) + v0*dt/2 exactly -- half a tick of the launch speed, 0.16667 m at the shipped
+    //    pair. ⛔ Asserting the bare 5 here would have been wrong by that term and would have
     //    had to be absorbed into a loose margin; naming it keeps the row exact and keeps the
     //    closed form in row 1 where it belongs.
     const float discreteExpectation =
         rig.knockbackDistance() + rig.knockbackSpeed() * kDt * 0.5f;
-    INFO("travelled " << travelled << " cm; closed form " << rig.knockbackDistance()
+    INFO("travelled " << travelled << " m; closed form " << rig.knockbackDistance()
          << " + half a tick of launch speed " << (rig.knockbackSpeed() * kDt * 0.5f)
          << " = " << discreteExpectation);
-    REQUIRE(travelled == Catch::Approx(discreteExpectation).margin(1e-2f));
-    REQUIRE(rig.state.bodyState.position.x - startPosition.x
-            == Catch::Approx(discreteExpectation).margin(1e-2f));
+    REQUIRE(travelled == Catch::Approx(discreteExpectation).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.bodyState.position).x - simFrame::forwardRight(startPosition).x
+            == Catch::Approx(discreteExpectation).margin(1e-4f));
 }
 
 // ---------------------------------------------------------------------------
@@ -4127,32 +4129,32 @@ TEST_CASE("BrawlerMovement.KnockbackHitLaunches", "[BrawlerMovement]")
     rig.hit(HitReactionKind::Knockback, first, 0.f);
     rig.tick(1u, stick(-1.f, 0.f));   // the stick is IGNORED: the arm is committed, not modelled
 
-    INFO("velocity=(" << rig.state.velocity.x << ", " << rig.state.velocity.y << ", "
-         << rig.state.velocity.z << ") for direction (" << first.x << ", " << first.y << ")");
-    REQUIRE(rig.state.velocity.x == Catch::Approx(first.x * rig.knockbackSpeed()).margin(1e-2f));
-    REQUIRE(rig.state.velocity.y == Catch::Approx(first.y * rig.knockbackSpeed()).margin(1e-2f));
+    INFO("velocity=(" << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << ", "
+         << simFrame::height(rig.state.velocity) << ") for direction (" << first.x << ", " << first.y << ")");
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(first.x * rig.knockbackSpeed()).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(first.y * rig.knockbackSpeed()).margin(1e-4f));
     // ⭐ THE SPEED IS THE SPEED, not its projection: `u` and `v` are orthonormal, so mapping the
-    // world XY direction onto them component-wise preserves the magnitude exactly.
-    REQUIRE(glm::length(glm::vec2(rig.state.velocity.x, rig.state.velocity.y))
-            == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+    // horizontal world direction onto them component-wise preserves the magnitude exactly.
+    REQUIRE(glm::length(simFrame::forwardRight(rig.state.velocity))
+            == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
 
     // One tick of decay, so the re-launch below is measurably a REPLACEMENT and not an addition.
     rig.tick(2u, stick(0.f, 0.f));
-    const float decayed = glm::length(glm::vec2(rig.state.velocity.x, rig.state.velocity.y));
-    REQUIRE(decayed == Catch::Approx(rig.knockbackSpeed() - rig.sd.launchDecel * kDt).margin(1e-2f));
+    const float decayed = glm::length(simFrame::forwardRight(rig.state.velocity));
+    REQUIRE(decayed == Catch::Approx(rig.knockbackSpeed() - rig.sd.launchDecel * kDt).margin(1e-4f));
 
     // ⛔ RE-LAUNCH REPLACES. Revision 5's "consecutive hits SUM" is superseded by revision 6's
     // assignment (architect review 2026-09-12 section 2.4): the second hit's direction and speed
     // are the whole of the answer, and the decayed remainder of the first is discarded. A sum
-    // would read ~3933 cm/s here, and in a direction neither hit asked for.
+    // would read ~39.33 m/s here, and in a direction neither hit asked for.
     const glm::vec2 second(0.f, 1.f);
     rig.hit(HitReactionKind::Knockback, second, 0.f);
     rig.tick(3u, stick(0.f, 0.f));
-    INFO("re-launched to (" << rig.state.velocity.x << ", " << rig.state.velocity.y << ")");
-    REQUIRE(rig.state.velocity.x == Catch::Approx(0.f).margin(1e-2f));
-    REQUIRE(rig.state.velocity.y == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
-    REQUIRE(glm::length(glm::vec2(rig.state.velocity.x, rig.state.velocity.y))
-            == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+    INFO("re-launched to (" << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << ")");
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(0.f).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
+    REQUIRE(glm::length(simFrame::forwardRight(rig.state.velocity))
+            == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
 }
 
 // ---------------------------------------------------------------------------
@@ -4165,7 +4167,7 @@ TEST_CASE("BrawlerMovement.StunHitFreezesWithoutKnockback", "[BrawlerMovement]")
 
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
-    rig.state.velocity = glm::vec3(rig.sd.maxWalkSpeed, 0.f, 0.f);
+    rig.state.velocity = glm::vec3(0.f, 0.f, -rig.sd.maxWalkSpeed);
 
     const glm::vec3 startPosition = rig.state.bodyState.position;
     rig.hit(HitReactionKind::Stun, glm::vec2(0.f), 0.3f);
@@ -4190,7 +4192,7 @@ TEST_CASE("BrawlerMovement.StunHitFreezesWithoutKnockback", "[BrawlerMovement]")
     knocked.tick(1u, stick(0.f, 0.f));
     REQUIRE(knocked.machineState.m_currentState == rig.machineState.m_currentState);
     REQUIRE_FALSE(knocked.frozenBit());
-    REQUIRE(knocked.state.velocity.x == Catch::Approx(knocked.knockbackSpeed()).margin(1e-2f));
+    REQUIRE(simFrame::forwardRight(knocked.state.velocity).x == Catch::Approx(knocked.knockbackSpeed()).margin(1e-4f));
 }
 
 // ---------------------------------------------------------------------------
@@ -4210,8 +4212,8 @@ TEST_CASE("BrawlerMovement.StunDuringSlideKillsMomentum", "[BrawlerMovement]")
     // Mid-slide, with real momentum left: the premise that makes the kill measurable.
     for (std::uint32_t t = 2u; t <= 10u; ++t)
         rig.tick(t, stick(0.f, 0.f));
-    const float midSlide = rig.state.velocity.x;
-    INFO("mid-slide speed " << midSlide << " cm/s when the stun lands");
+    const float midSlide = simFrame::forwardRight(rig.state.velocity).x;
+    INFO("mid-slide speed " << midSlide << " m/s when the stun lands");
     REQUIRE(midSlide > 0.5f * rig.knockbackSpeed());
 
     rig.hit(HitReactionKind::Stun, glm::vec2(0.f), 0.3f);
@@ -4220,7 +4222,7 @@ TEST_CASE("BrawlerMovement.StunDuringSlideKillsMomentum", "[BrawlerMovement]")
     // ⛔ DEAD, not decayed: the stun freezes, and a freeze is exact this tick (see
     // `FrozenIsExactThisTick`). `midSlide - launchDecel*dt` would be the decay's answer.
     REQUIRE(rig.state.velocity == glm::vec3(0.f));
-    REQUIRE(midSlide - rig.sd.launchDecel * kDt > 1.f);   // ...and the decay would NOT have been 0
+    REQUIRE(midSlide - rig.sd.launchDecel * kDt > 0.01f);   // ...and the decay would NOT have been 0
     rig.tick(12u, stick(0.f, 0.f));
     REQUIRE(rig.state.velocity == glm::vec3(0.f));
 }
@@ -4240,33 +4242,33 @@ TEST_CASE("BrawlerMovement.HoldGuardDoesNotFreezeASlide", "[BrawlerMovement]")
     rig.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
 
     rig.tick(1u, stick(0.f, 0.f), movement::kInputFlagHoldGuard);
-    INFO("holdGuard held through the launch tick: v.x=" << rig.state.velocity.x);
-    REQUIRE(rig.state.velocity.x == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+    INFO("holdGuard held through the launch tick: v.x=" << simFrame::forwardRight(rig.state.velocity).x);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
 
     rig.tick(2u, stick(0.f, 0.f), movement::kInputFlagHoldGuard);
-    REQUIRE(rig.state.velocity.x
-            == Catch::Approx(rig.knockbackSpeed() - rig.sd.launchDecel * kDt).margin(1e-2f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x
+            == Catch::Approx(rig.knockbackSpeed() - rig.sd.launchDecel * kDt).margin(1e-4f));
 
     // CONTROL -- the same input with no knockback freezes, so the bit really is live in this
     // fixture and the rows above are a statement about the ORDER, not about a dead input path.
     ScriptedRig walking;
     seatOnFlatGroundAtRideHeight(walking);
-    walking.state.velocity = glm::vec3(walking.sd.maxWalkSpeed, 0.f, 0.f);
+    walking.state.velocity = glm::vec3(0.f, 0.f, -walking.sd.maxWalkSpeed);
     walking.tick(1u, stick(1.f, 0.f), movement::kInputFlagHoldGuard);
     REQUIRE(walking.state.velocity == glm::vec3(0.f));
 }
 
 // ---------------------------------------------------------------------------
-// ⭐⭐ A SHOVE ON A SLOPE STAYS ON THE SLOPE. The hit direction is a world XY unit vector and
+// ⭐⭐ A SHOVE ON A SLOPE STAYS ON THE SLOPE. The hit direction is a horizontal (forward, right) unit vector and
 // it is mapped into the tangent frame COMPONENT-WISE (`d.x -> u`, `d.y -> v`), which is exact
-// because `buildTangentFrame` makes `u`'s horizontal projection X-aligned and `v` horizontal
+// because `buildTangentFrame` makes `u`'s horizontal projection forward-aligned and `v` horizontal
 // whenever the normal is walkable. The consequences, both measured here: the launched velocity is
 // PERPENDICULAR to the surface normal, and its horizontal speed is `knockbackSpeed * cos(theta)`
 // -- the character covers 5 m ALONG THE FACE, not 5 m of ground.
 //
 // ⛔ THE PLAUSIBLE WRONG EDIT this case exists to catch is
 // `glm::vec2(dot(dWorld, u), dot(dWorld, v))` -- the projection. It is the reflex spelling, it is
-// dimensionally innocent, and on a 30 degree face it launches at 1732 cm/s instead of 2000, losing
+// dimensionally innocent, and on a 30 degree face it launches at 17.32 m/s instead of 20, losing
 // 13.4 % of the user's 5 m. See `docs/BrawlerMovementSimulation-rationale.md` D-06.
 // [movement-sim task 27]
 // ---------------------------------------------------------------------------
@@ -4279,52 +4281,52 @@ TEST_CASE("BrawlerMovement.SlopeKnockbackStaysOnSlope", "[BrawlerMovement]")
 
     ScriptedRig rig;
     rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight, rig.probeLength(), n) };
-    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
 
     rig.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
     rig.tick(1u, stick(0.f, 0.f));
 
     const glm::vec3 velocity = rig.state.velocity;
-    const float horizontal = glm::length(glm::vec2(velocity.x, velocity.y));
-    INFO("30 deg face: v=(" << velocity.x << ", " << velocity.y << ", " << velocity.z
+    const float horizontal = glm::length(simFrame::forwardRight(velocity));
+    INFO("30 deg face: v=(" << simFrame::forwardRight(velocity).x << ", " << simFrame::forwardRight(velocity).y << ", " << simFrame::height(velocity)
          << ")  |v|=" << glm::length(velocity) << "  horizontal=" << horizontal
          << "  expected horizontal=" << (rig.knockbackSpeed() * glm::cos(glm::radians(theta)))
          << "  dot(v, n)=" << glm::dot(velocity, n));
 
     REQUIRE(rig.support() == movement::SupportState::Supported);
     // 1. ON the face: no component into or out of it.
-    REQUIRE(glm::dot(velocity, n) == Catch::Approx(0.f).margin(1e-2f));
+    REQUIRE(glm::dot(velocity, n) == Catch::Approx(0.f).margin(1e-4f));
     // 2. AT the authored speed, along the face -- this is the row the projection spelling fails.
-    REQUIRE(glm::length(velocity) == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
+    REQUIRE(glm::length(velocity) == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
     // 3. ...so the HORIZONTAL speed is knockbackSpeed * cos(theta), and the case names the number
     //    the wrong spelling would have produced as the full speed.
     REQUIRE(horizontal
-            == Catch::Approx(rig.knockbackSpeed() * glm::cos(glm::radians(theta))).margin(1e-2f));
-    REQUIRE(velocity.z
-            == Catch::Approx(rig.knockbackSpeed() * glm::sin(glm::radians(theta))).margin(1e-2f));
+            == Catch::Approx(rig.knockbackSpeed() * glm::cos(glm::radians(theta))).margin(1e-4f));
+    REQUIRE(simFrame::height(velocity)
+            == Catch::Approx(rig.knockbackSpeed() * glm::sin(glm::radians(theta))).margin(1e-4f));
     // ...and the two are genuinely different, so row 2 discriminates.
-    REQUIRE(glm::abs(glm::length(velocity) - horizontal) > 100.f);
+    REQUIRE(glm::abs(glm::length(velocity) - horizontal) > 1.f);
 
     // 4. THE CHANNELS, read back through the file's own independent dual basis: all of the speed
     //    is in `u`, none in `v`, and the vertical channel is untouched by the assignment.
     const glm::vec3 channels = channelsOf(velocity, n);
-    REQUIRE(channels.x == Catch::Approx(rig.knockbackSpeed()).margin(1e-2f));
-    REQUIRE(channels.y == Catch::Approx(0.f).margin(1e-2f));
-    REQUIRE(channels.z == Catch::Approx(0.f).margin(1e-2f));
+    REQUIRE(channels.x == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
+    REQUIRE(channels.y == Catch::Approx(0.f).margin(1e-4f));
+    REQUIRE(channels.z == Catch::Approx(0.f).margin(1e-4f));
 
     // ⚠ ⚠ MEASURED AND ROUTED, NOT ASSERTED AS DESIRABLE [movement-sim task 27]. The detach
-    // arm the architect ruled is `committed && dot(velocity, up) > 0` -- WORLD z. On flat ground a
-    // knockback's world z is exactly 0 and the arm is false, which is what section 2.5(b) of
+    // arm the architect ruled is `committed && dot(velocity, up) > 0` -- WORLD height. On flat ground a
+    // knockback's world height is exactly 0 and the arm is false, which is what section 2.5(b) of
     // `impl/review_task27_knockback_design.md` means by "false for every XY hit". ON A SLOPE IT IS
-    // NOT: `u.z == sin(theta)`, so an up-slope shove carries `knockbackSpeed * sin(theta)` of
-    // world z -- 1000 cm/s here -- and the NEXT tick's step 2 therefore detaches. The frame does
+    // NOT: `height(u) == sin(theta)`, so an up-slope shove carries `knockbackSpeed * sin(theta)` of
+    // world height -- 10 m/s here -- and the NEXT tick's step 2 therefore detaches. The frame does
     // not move with it (`n` is keyed on `walkable`, not on `support`), so the slide stays on the
     // face; what is lost is the hover hold for the rest of the slide. The number is printed and
     // the state is recorded here rather than hidden, and the finding is routed to the lead in
     // `impl/impl_notes_seam_27.md`.
     rig.tick(2u, stick(0.f, 0.f));
     INFO("tick 2 on the face: support=" << int(rig.support())
-         << " (0 Unsupported, 1 Supported)  v.z=" << rig.state.velocity.z
+         << " (0 Unsupported, 1 Supported)  v.z=" << simFrame::height(rig.state.velocity)
          << "  -- world z carries the TANGENTIAL channel on a slope; the vertical CHANNEL is "
          << channelsOf(rig.state.velocity, n).z);
     REQUIRE(glm::dot(velocity, movement::kWorldUp) > 0.f);
@@ -4341,45 +4343,45 @@ TEST_CASE("BrawlerMovement.KnockbackIntoWallStopsAtWall", "[BrawlerMovement]")
 {
     using namespace movementTests;
 
-    // The wall faces -X; the shove is +X into it, with a +Y component that must SURVIVE.
-    const glm::vec3 wallNormal(-1.f, 0.f, 0.f);
+    // The wall faces backward (normal +Z); the shove is forward into it, with a rightward component that must SURVIVE.
+    const glm::vec3 wallNormal = glm::vec3(0.f, 0.f, 1.f);
 
     ScriptedRig rig;
     rig.query.scriptedSweeps.clear();          // airborne, exactly as the task-54 wall cases
     rig.sd.drivesBody = true;
-    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
 
     const glm::vec2 direction = glm::normalize(glm::vec2(1.f, 1.f));
     rig.hit(HitReactionKind::Knockback, direction, 0.f);
     rig.tick(1u, stick(0.f, 0.f));
 
     const glm::vec3 arriving = rig.state.velocity;
-    REQUIRE(arriving.x == Catch::Approx(direction.x * rig.knockbackSpeed()).margin(1e-2f));
-    REQUIRE(arriving.y == Catch::Approx(direction.y * rig.knockbackSpeed()).margin(1e-2f));
+    REQUIRE(simFrame::forwardRight(arriving).x == Catch::Approx(direction.x * rig.knockbackSpeed()).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(arriving).y == Catch::Approx(direction.y * rig.knockbackSpeed()).margin(1e-4f));
 
     // The solver stops the body at the wall and pushes it out along the normal.
-    rig.engineStepAndCapture(rig.state.bodyState.position + arriving * kDt + wallNormal * 2.f,
+    rig.engineStepAndCapture(rig.state.bodyState.position + arriving * kDt + wallNormal * 0.02f,
                              glm::vec3(0.f));
     rig.tick(2u, stick(0.f, 0.f));
 
-    INFO("into the wall at (" << arriving.x << ", " << arriving.y << ") -> ("
-         << rig.state.velocity.x << ", " << rig.state.velocity.y << "); pushOut.x="
-         << rig.derived.lastPushOut.x);
+    INFO("into the wall at (" << simFrame::forwardRight(arriving).x << ", " << simFrame::forwardRight(arriving).y << ") -> ("
+         << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << "); pushOut.x="
+         << simFrame::forwardRight(rig.derived.lastPushOut).x);
 
     // PREMISE: step 6' really ran and really found the wall.
     REQUIRE(glm::length(rig.derived.lastPushOut) > movement::kPushOutEps);
 
     // 1. THE INTO-WALL COMPONENT IS GONE. Killed by step 6' before step 3 decays anything, so the
-    //    character does not keep pressing 1414 cm/s of nothing into the surface.
-    REQUIRE(rig.state.velocity.x == Catch::Approx(0.f).margin(1e-2f));
+    //    character does not keep pressing 14.14 m/s of nothing into the surface.
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(0.f).margin(1e-4f));
 
     // 2. ...AND THE TANGENTIAL REMAINDER IS STILL DECAYING AT `launchDecel`, not zeroed with it.
     //    `moveTowards` works on the 2D pair, so the step it takes is along the REMAINING
     //    direction: with x killed, the whole of one tick's decay lands on y.
     const float remaining = direction.y * rig.knockbackSpeed();
-    REQUIRE(rig.state.velocity.y
-            == Catch::Approx(remaining - rig.sd.launchDecel * kDt).margin(1e-2f));
-    REQUIRE(rig.state.velocity.y > 0.f);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y
+            == Catch::Approx(remaining - rig.sd.launchDecel * kDt).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y > 0.f);
 }
 
 // ===========================================================================
@@ -4415,7 +4417,7 @@ TEST_CASE("BrawlerMovement.AttackSlideStopsExactlyOnTheLastAttackingTick", "[Bra
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
     const float v0 = rig.sd.maxWalkSpeed;
-    rig.state.velocity = glm::vec3(v0, 0.f, 0.f);
+    rig.state.velocity = glm::vec3(0.f, 0.f, -v0);
     rig.machineState.m_currentState  = DAttackState::Attacking;
     rig.machineState.m_attackEndTick = kTick0 + kN;
 
@@ -4427,11 +4429,11 @@ TEST_CASE("BrawlerMovement.AttackSlideStopsExactlyOnTheLastAttackingTick", "[Bra
 
         const float expected = v0 * float(kN - m) / float(kN);
         INFO("attacking tick " << m << " of " << kN << " (t=" << (kTick0 + m - 1u)
-             << ", R=" << (kN - m + 1u) << "): v=(" << rig.state.velocity.x << ", "
-             << rig.state.velocity.y << ", " << rig.state.velocity.z << ")  expected v.x="
+             << ", R=" << (kN - m + 1u) << "): v=(" << simFrame::forwardRight(rig.state.velocity).x << ", "
+             << simFrame::forwardRight(rig.state.velocity).y << ", " << simFrame::height(rig.state.velocity) << ")  expected v.x="
              << expected);
-        REQUIRE(rig.state.velocity.x == Catch::Approx(expected).margin(1e-3f));
-        REQUIRE(rig.state.velocity.y == Catch::Approx(0.f).margin(1e-4f));
+        REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(expected).margin(1.0000001e-5f));
+        REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(0.f).margin(1e-6f));
     }
 
     // ⭐ EXACT. `float(R-1)/float(R)` is `0.f/1.f` on the last tick, and `currentUV * 0.f` is a
@@ -4442,7 +4444,7 @@ TEST_CASE("BrawlerMovement.AttackSlideStopsExactlyOnTheLastAttackingTick", "[Bra
     // case would pass on a rig that had simply been frozen.
     rig.machineState.m_currentState = DAttackState::Idle;
     rig.tick(kTick0 + kN, stick(0.f, 1.f));
-    REQUIRE(rig.state.velocity.y == Catch::Approx(rig.accelPerTick()).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(rig.accelPerTick()).margin(1e-6f));
     REQUIRE_FALSE(rig.frozenBit());
 }
 
@@ -4465,7 +4467,7 @@ TEST_CASE("BrawlerMovement.AttackSlideDirectionIsLockedAgainstTheStick", "[Brawl
     // OBLIQUE, so neither channel is zero and a component-swap would be visible too.
     const glm::vec2 direction = glm::normalize(glm::vec2(1.f, 2.f));
     const float     v0        = rig.sd.maxWalkSpeed;
-    rig.state.velocity = glm::vec3(direction.x * v0, direction.y * v0, 0.f);
+    rig.state.velocity = glm::vec3(direction.y * v0, 0.f, -(direction.x * v0));
     rig.machineState.m_currentState  = DAttackState::Attacking;
     rig.machineState.m_attackEndTick = kTick0 + kN;
 
@@ -4473,13 +4475,13 @@ TEST_CASE("BrawlerMovement.AttackSlideDirectionIsLockedAgainstTheStick", "[Brawl
     {
         rig.tick(kTick0 + m - 1u, stick(-direction.x, -direction.y));
 
-        const glm::vec2 planar(rig.state.velocity.x, rig.state.velocity.y);
+        const glm::vec2 planar = simFrame::forwardRight(rig.state.velocity);
         const float     speed = glm::length(planar);
         INFO("tick " << m << ": v=(" << planar.x << ", " << planar.y << ")  |v|=" << speed
              << "  expected |v|=" << (v0 * float(kN - m) / float(kN)));
         REQUIRE(speed > 0.f);
         REQUIRE(glm::dot(planar * (1.f / speed), direction) == Catch::Approx(1.f).margin(1e-5f));
-        REQUIRE(speed == Catch::Approx(v0 * float(kN - m) / float(kN)).margin(1e-3f));
+        REQUIRE(speed == Catch::Approx(v0 * float(kN - m) / float(kN)).margin(1.0000001e-5f));
     }
 
     rig.tick(kTick0 + kN - 1u, stick(-direction.x, -direction.y));
@@ -4506,10 +4508,10 @@ TEST_CASE("BrawlerMovement.AttackSlideDoesNotDetachOnASlope", "[BrawlerMovement]
 
     ScriptedRig rig;
     rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight, rig.probeLength(), n) };
-    rig.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + rig.sd.rideHeight);
+    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
 
     // UP the face: the `u` axis of the surface frame, whose world z is `sin(theta)` > 0.
-    glm::vec3 u(1.f, 0.f, 0.f), v(0.f, 1.f, 0.f);
+    glm::vec3 u(simFrame::kForward), v(simFrame::kRight);
     movement::buildTangentFrame(n, u, v);
     const float v0 = rig.sd.maxWalkSpeed;
     rig.state.velocity = u * v0;
@@ -4526,30 +4528,31 @@ TEST_CASE("BrawlerMovement.AttackSlideDoesNotDetachOnASlope", "[BrawlerMovement]
         INFO("up-slope tick " << m << ": support=" << int(rig.support())
              << " (0 Unsupported, 1 Supported)  channels=(" << channels.x << ", " << channels.y
              << ", " << channels.z << ")  expected u-channel="
-             << (v0 * float(kN - m) / float(kN)) << "  v.z=" << rig.state.velocity.z);
+             << (v0 * float(kN - m) / float(kN)) << "  v.z=" << simFrame::height(rig.state.velocity));
 
         // 1. THE HOVER HOLD SURVIVES THE WHOLE SLIDE -- the row the `committed` arm would fail.
         REQUIRE(rig.support() == movement::SupportState::Supported);
         // 2. ...and the ramp is the same ramp, read through the file's own dual basis.
-        REQUIRE(channels.x == Catch::Approx(v0 * float(kN - m) / float(kN)).margin(1e-2f));
-        REQUIRE(channels.y == Catch::Approx(0.f).margin(1e-2f));
+        REQUIRE(channels.x == Catch::Approx(v0 * float(kN - m) / float(kN)).margin(1e-4f));
+        REQUIRE(channels.y == Catch::Approx(0.f).margin(1e-4f));
         // 3. ON the face: the slide follows the surface, it does not lift off it.
-        REQUIRE(glm::dot(rig.state.velocity, n) == Catch::Approx(0.f).margin(1e-2f));
+        REQUIRE(glm::dot(rig.state.velocity, n) == Catch::Approx(0.f).margin(1e-4f));
     }
-    REQUIRE(rig.state.velocity == glm::vec3(0.f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity) == glm::vec2(0.f));
+    REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(0.f).margin(1e-6f));
 
     // ⛔ CONTROL -- the SAME fixture, the SAME up-slope velocity, under a KNOCKBACK, detaches on
     // the second tick. This is G-07's recorded finding reproduced here so the row above is a
     // statement about the BRANCH and not about a fixture that could never detach.
     ScriptedRig launched;
     launched.query.scriptedSweeps = { floorHitAt(launched.sd.rideHeight, launched.probeLength(), n) };
-    launched.state.bodyState.position = glm::vec3(0.f, 0.f, 96.f + launched.sd.rideHeight);
+    launched.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + launched.sd.rideHeight);
     launched.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
     launched.tick(1u, stick(0.f, 0.f));
     REQUIRE(launched.support() == movement::SupportState::Supported);
     launched.tick(2u, stick(0.f, 0.f));
     INFO("control (knockback on the same face): support=" << int(launched.support())
-         << "  v.z=" << launched.state.velocity.z);
+         << "  v.z=" << simFrame::height(launched.state.velocity));
     REQUIRE(launched.support() == movement::SupportState::Unsupported);
 }
 
@@ -4569,22 +4572,22 @@ TEST_CASE("BrawlerMovement.AttackSlideSaturatesWhenTheEndTickIsInThePast", "[Bra
     // ARM 1 -- the end tick is five ticks in the PAST. Unguarded this reads ~v0.
     ScriptedRig past;
     seatOnFlatGroundAtRideHeight(past);
-    past.state.velocity = glm::vec3(past.sd.maxWalkSpeed, 0.f, 0.f);
+    past.state.velocity = glm::vec3(0.f, 0.f, -past.sd.maxWalkSpeed);
     past.machineState.m_currentState  = DAttackState::Attacking;
     past.machineState.m_attackEndTick = kTick - 5u;
     // The stick is held IN the direction of travel, so neither the walk law nor a wrapped factor
     // could have produced the zero this case requires.
     past.tick(kTick, stick(1.f, 0.f));
     INFO("endTick=" << past.machineState.m_attackEndTick << " tick=" << kTick
-         << " -> v=(" << past.state.velocity.x << ", " << past.state.velocity.y << ", "
-         << past.state.velocity.z << ")");
+         << " -> v=(" << simFrame::forwardRight(past.state.velocity).x << ", " << simFrame::forwardRight(past.state.velocity).y << ", "
+         << simFrame::height(past.state.velocity) << ")");
     REQUIRE(past.state.velocity == glm::vec3(0.f));
 
     // ARM 2 -- the EXACT boundary. `m_attackEndTick == tick` is the first value the strict `>`
     // rejects, and it is the one an off-by-one in the write sites would produce.
     ScriptedRig boundary;
     seatOnFlatGroundAtRideHeight(boundary);
-    boundary.state.velocity = glm::vec3(boundary.sd.maxWalkSpeed, 0.f, 0.f);
+    boundary.state.velocity = glm::vec3(0.f, 0.f, -boundary.sd.maxWalkSpeed);
     boundary.machineState.m_currentState  = DAttackState::Attacking;
     boundary.machineState.m_attackEndTick = kTick;
     boundary.tick(kTick, stick(1.f, 0.f));
@@ -4594,11 +4597,11 @@ TEST_CASE("BrawlerMovement.AttackSlideSaturatesWhenTheEndTickIsInThePast", "[Bra
     // above are a statement about the guard and not about a rig that always reads zero.
     ScriptedRig live;
     seatOnFlatGroundAtRideHeight(live);
-    live.state.velocity = glm::vec3(live.sd.maxWalkSpeed, 0.f, 0.f);
+    live.state.velocity = glm::vec3(0.f, 0.f, -live.sd.maxWalkSpeed);
     live.machineState.m_currentState  = DAttackState::Attacking;
     live.machineState.m_attackEndTick = kTick + 2u;
     live.tick(kTick, stick(1.f, 0.f));
-    REQUIRE(live.state.velocity.x == Catch::Approx(0.5f * live.sd.maxWalkSpeed).margin(1e-3f));
+    REQUIRE(simFrame::forwardRight(live.state.velocity).x == Catch::Approx(0.5f * live.sd.maxWalkSpeed).margin(1.0000001e-5f));
 }
 
 // ---------------------------------------------------------------------------
@@ -4620,16 +4623,16 @@ TEST_CASE("BrawlerMovement.AttackSlideRetargetsWhenTheEndTickMoves", "[BrawlerMo
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
     const float v0 = rig.sd.maxWalkSpeed;
-    rig.state.velocity = glm::vec3(v0, 0.f, 0.f);
+    rig.state.velocity = glm::vec3(0.f, 0.f, -v0);
     rig.machineState.m_currentState  = DAttackState::Attacking;
     rig.machineState.m_attackEndTick = kTick0 + kN;
 
     for (std::uint32_t m = 1u; m <= 4u; ++m)
         rig.tick(kTick0 + m - 1u, stick(0.f, 0.f));
 
-    const float midRamp = rig.state.velocity.x;
+    const float midRamp = simFrame::forwardRight(rig.state.velocity).x;
     INFO("mid-ramp after 4 of " << kN << " ticks: v.x=" << midRamp);
-    REQUIRE(midRamp == Catch::Approx(v0 * 6.f / float(kN)).margin(1e-3f));
+    REQUIRE(midRamp == Catch::Approx(v0 * 6.f / float(kN)).margin(1.0000001e-5f));
 
     rig.machineState.m_attackEndTick = kMovedEnd;
     for (std::uint32_t t = 5u; t <= kMovedEnd - 1u; ++t)
@@ -4638,8 +4641,8 @@ TEST_CASE("BrawlerMovement.AttackSlideRetargetsWhenTheEndTickMoves", "[BrawlerMo
         // From tick 5 the factors telescope to `(kMovedEnd - 1 - t) / (kMovedEnd - 5)`.
         const float expected = midRamp * float(kMovedEnd - 1u - t) / float(kMovedEnd - 5u);
         INFO("retargeted tick " << t << " (R=" << (kMovedEnd - t) << "): v.x="
-             << rig.state.velocity.x << " expected " << expected);
-        REQUIRE(rig.state.velocity.x == Catch::Approx(expected).margin(1e-3f));
+             << simFrame::forwardRight(rig.state.velocity).x << " expected " << expected);
+        REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(expected).margin(1.0000001e-5f));
     }
 
     // ...and it is still EXACTLY zero, at the NEW end.
@@ -4663,16 +4666,16 @@ TEST_CASE("BrawlerMovement.HoldGuardDoesNotFreezeAnAttackSlide", "[BrawlerMoveme
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
     const float v0 = rig.sd.maxWalkSpeed;
-    rig.state.velocity = glm::vec3(v0, 0.f, 0.f);
+    rig.state.velocity = glm::vec3(0.f, 0.f, -v0);
     rig.machineState.m_currentState  = DAttackState::Attacking;
     rig.machineState.m_attackEndTick = kTick0 + kN;
 
     rig.tick(kTick0, stick(0.f, 0.f), movement::kInputFlagHoldGuard);
-    INFO("holdGuard held through the first attacking tick: v.x=" << rig.state.velocity.x);
-    REQUIRE(rig.state.velocity.x == Catch::Approx(v0 * 9.f / float(kN)).margin(1e-3f));
+    INFO("holdGuard held through the first attacking tick: v.x=" << simFrame::forwardRight(rig.state.velocity).x);
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(v0 * 9.f / float(kN)).margin(1.0000001e-5f));
 
     rig.tick(kTick0 + 1u, stick(0.f, 0.f), movement::kInputFlagHoldGuard);
-    REQUIRE(rig.state.velocity.x == Catch::Approx(v0 * 8.f / float(kN)).margin(1e-3f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(v0 * 8.f / float(kN)).margin(1.0000001e-5f));
 
     // ⚠ AND THE FROZEN BIT STILL READS FROZEN -- G-23's second paragraph, now true of a guard-held
     // SLIDE as well as a guard-held knockback. Its only reader is the visualizer; recorded, not
@@ -4683,7 +4686,7 @@ TEST_CASE("BrawlerMovement.HoldGuardDoesNotFreezeAnAttackSlide", "[BrawlerMoveme
     // fixture and the rows above are a statement about the ORDER.
     ScriptedRig walking;
     seatOnFlatGroundAtRideHeight(walking);
-    walking.state.velocity = glm::vec3(walking.sd.maxWalkSpeed, 0.f, 0.f);
+    walking.state.velocity = glm::vec3(0.f, 0.f, -walking.sd.maxWalkSpeed);
     walking.tick(1u, stick(1.f, 0.f), movement::kInputFlagHoldGuard);
     REQUIRE(walking.state.velocity == glm::vec3(0.f));
 }

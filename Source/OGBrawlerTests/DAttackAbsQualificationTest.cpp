@@ -54,6 +54,7 @@
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -137,10 +138,10 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 //
 // The fixture is chosen so that everything except `lengthAlongRotationAxis` is held
 // constant between the two overloads:
-//   * rotationAxis == defaultUp() (+Z) and initialAimAngle == 0 about +Z, so the
-//     initial rotation is the identity and
-//         glm::dot(hitDirection, worldSequenceRotationAxis) == hitDirection.z
-//     exactly — the site under test reduces to `abs(hitDirection.z)`.
+//   * rotationAxis == turnAxis() (`simFrame::kTurnAxis`, -Y) and initialAimAngle == 0 about it,
+//     so the initial rotation is the identity and
+//         glm::dot(hitDirection, worldSequenceRotationAxis) == -hitDirection.y
+//     exactly — the site under test reduces to `abs(hitDirection.y)`.
 //   * the sequence's ONE segment spans [0, 7) rad, i.e. wider than a full turn, so
 //     every direction resolves to segment 0 / Damaging. The segment lookup therefore
 //     cannot become a second, uncontrolled discriminator: whatever the overload does
@@ -162,7 +163,7 @@ struct RadialTickResult
     std::size_t guardHits  = 0;
 };
 
-static RadialTickResult radialTick(float hitZ, float halfThickness)
+static RadialTickResult radialTick(float hitHeight, float halfThickness)
 {
     using namespace dAttackRadialSimulation;
 
@@ -172,15 +173,15 @@ static RadialTickResult radialTick(float hitZ, float halfThickness)
             { 0.0f, 0.0f, DAttackRadialSequenceState::Damaging },
             { 0.2f, 7.0f, DAttackRadialSequenceState::Idle } },
         0.1f,
-        DAttackRadialSequence::defaultUp());
+        DAttackRadialSequence::turnAxis());
 
     // DAttackCircle takes THICKNESS; the sim gates on getHalfThickness().
-    DAttackCircle circle(8u, 50.f, 100.f, halfThickness * 2.f, false, 1.f);
+    DAttackCircle circle(8u, 0.5f, 1.f, halfThickness * 2.f, false, 1.f);
     StaticData   staticData(sequences, circle);
 
     InitialConditions ic{};
     ic.initialAimAngle        = 0.f;
-    ic.initialAimRotationAxis = glm::vec3(0.f, 0.f, 1.f);
+    ic.initialAimRotationAxis = glm::vec3(-0.f, -1.f, 0.f);
     ic.activeAttackSequence   = 0u;
 
     State st{};
@@ -196,7 +197,7 @@ static RadialTickResult radialTick(float hitZ, float halfThickness)
     MockPhysicsAdapter physics{ 2 };            // 0 = weapon (own), 1 = capsule (parent)
     MockSpatialQueryAdapter query{};
     SpatialQueryHit hit{};
-    hit.objectPosition   = glm::vec3(75.f, 0.f, hitZ);
+    hit.objectPosition   = glm::vec3(0.f, hitHeight, -0.75f);
     hit.bodyId           = BodyId{ 5u };
     hit.rootBodyId       = BodyId{ 5u };
     hit.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -269,11 +270,11 @@ static dAttackRadialSimulation::InitialConditions machineTick(const glm::vec3& a
 //
 // THE HIGHEST-RISK SITE. `hitDirection` is a raw world-space delta and the axis is a
 // unit vector, so the dot product is a SIGNED DISTANCE along the rotation axis, in
-// centimetres — NOT a cosine. (The backlog's census describes it as "a dot product in
-// (-1,1)"; that is true only for hits within a centimetre of the swing plane. The
-// exposure is broader than the census says and does not depend on sub-unit values:
-// an integer overload throws away the FRACTION at every magnitude, which is why the
-// second SECTION below uses a 5.7 cm offset.)
+// metres — NOT a cosine. (The backlog's census describes it as "a dot product in
+// (-1,1)"; that is true only for hits within a metre of the swing plane, which in metres
+// is every swing in the game. The exposure does not depend on sub-unit values either:
+// an integer overload throws away the FRACTION at every magnitude, which the 0.057 m
+// SECTION below shows at the game's own scale.)
 //
 // The value gates `lengthAlongRotationAxis < halfThickness` — whether a struck body
 // counts as inside the swing disc at all. Under `::abs(int)` the whole expression is
@@ -290,11 +291,11 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
 
     SECTION("POSITIVE CONTROL — a hit inside the disc registers, so 0 is never vacuous")
     {
-        // 0.3 cm off the swing plane, half-thickness 0.5 cm: inside under either
+        // 0.003 m off the swing plane, half-thickness 0.005 m: inside under either
         // overload. This arm does NOT discriminate and is not meant to; it exists so
         // that the "0 hits" in the arms below cannot be read as a rig that never
         // records anything (which is exactly what an un-cleared DerivedState gives).
-        const RadialTickResult r = radialTick(/*hitZ*/ 0.3f, /*halfThickness*/ 0.5f);
+        const RadialTickResult r = radialTick(/*hitHeight*/ 0.003f, /*halfThickness*/ 0.005f);
         INFO("bodyHits = " << r.bodyHits << " (expected 1 under BOTH overloads)");
         REQUIRE(r.bodyHits == 1u);
         REQUIRE(r.guardHits  == 0u);
@@ -302,32 +303,32 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
 
     SECTION("0.6 cm above the swing plane, half-thickness 0.5 cm — OUT of the disc")
     {
-        // float overload: |0.6| = 0.6, and 0.6 < 0.5 is false -> no hit.
-        // int overload:   abs((int)0.6) = 0, and 0 < 0.5 is TRUE -> a phantom hit on a
+        // float overload: |0.006| = 0.006, and 0.006 < 0.005 is false -> no hit.
+        // int overload:   abs((int)0.006) = 0, and 0 < 0.005 is TRUE -> a phantom hit on a
         //                 body the swing passes cleanly under.
-        const RadialTickResult r = radialTick(/*hitZ*/ 0.6f, /*halfThickness*/ 0.5f);
+        const RadialTickResult r = radialTick(/*hitHeight*/ 0.006f, /*halfThickness*/ 0.005f);
         INFO("bodyHits = " << r.bodyHits << " (float overload: 0, int overload: 1)");
         REQUIRE(r.bodyHits == 0u);
     }
 
     SECTION("0.6 cm BELOW the plane — the same, and it pins the sign handling too")
     {
-        // A truncating overload collapses -0.6 to 0 just as it collapses +0.6, so this
+        // A truncating overload collapses -0.006 to 0 just as it collapses +0.006, so this
         // arm fails under `::abs(int)` for the same reason. It is here because a
         // hand-rolled `v < 0 ? -v : v` on the WRONG type is the realistic way this
         // regresses, and only a negative operand distinguishes that from a no-op.
-        const RadialTickResult r = radialTick(/*hitZ*/ -0.6f, /*halfThickness*/ 0.5f);
+        const RadialTickResult r = radialTick(/*hitHeight*/ -0.006f, /*halfThickness*/ 0.005f);
         INFO("bodyHits = " << r.bodyHits << " (float overload: 0, int overload: 1)");
         REQUIRE(r.bodyHits == 0u);
     }
 
     SECTION("5.7 cm above the plane, half-thickness 5.5 cm — truncation at REAL scale")
     {
-        // ⭐ The arm that shows the exposure is not confined to sub-unit values, which
-        // is where the backlog's census stops. float: 5.7 < 5.5 is false -> no hit.
-        // int: abs((int)5.7) = 5, and 5 < 5.5 is TRUE -> a phantom hit. Every swing in
-        // the game works at this scale; the census's "(-1,1)" framing understates it.
-        const RadialTickResult r = radialTick(/*hitZ*/ 5.7f, /*halfThickness*/ 5.5f);
+        // ⭐ The arm at the game's own scale (a swing disc a few centimetres thick).
+        // float: 0.057 < 0.055 is false -> no hit.
+        // int: abs((int)0.057) = 0, and 0 < 0.055 is TRUE -> a phantom hit. (Measured in
+        // centimetres this arm was 5.7 vs 5.5, where the int overload truncated to 5.)
+        const RadialTickResult r = radialTick(/*hitHeight*/ 0.056999996f, /*halfThickness*/ 0.055f);
         INFO("bodyHits = " << r.bodyHits << " (float overload: 0, int overload: 1)");
         REQUIRE(r.bodyHits == 0u);
     }
@@ -337,20 +338,20 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
 // 5. DAttackMachineSimulation.h, setRadialSimulationInitialConditions — `abs(abs(aimDot) - 1.f) < 0.0001f`
 //
 // BYTE-IDENTICAL to the guard site task 29 fixed, and it feeds the same near-pole
-// epsilon band: inside the band the initial aim rotation axis is forced to +Z instead
+// epsilon band: inside the band the initial aim rotation axis is forced to turnAxis instead
 // of being derived from `cross(defaultForward, aim)`, which keeps `normalize` away from
 // the zero vector. An integer overload collapses the expression to `|aimDot| == 1`
 // EXACTLY and the band disappears.
 //
-// Fixture: aim 0.01 rad off +X with NEGATIVE y, so |aimDot| = cos(0.01) = 0.99995 and
+// Fixture: aim 0.01 rad off forward, to the LEFT, so |aimDot| = cos(0.01) = 0.99995 and
 // ||aimDot| - 1| = 5e-5 — inside the 1e-4 band with a factor of two to spare.
-//   float overload: band live  -> axis = defaultUp        -> axis.z = +1
-//   int overload:   band dead  -> axis = normalize(cross(+X, aim)) = -Z -> axis.z = -1
+//   float overload: band live  -> axis = turnAxis        -> turnComponent = +1
+//   int overload:   band dead  -> axis = normalize(cross(forward, aim)) = -turnAxis -> turnComponent = -1
 // Margin 2.0 against 1e-4.
 //
 // ⚠ NON-DISCRIMINATING BY CONSTRUCTION, so nobody adds one thinking it strengthens the
-// case: a POSITIVE-y near-pole aim gives +Z under BOTH overloads, because the cross
-// product there already points at defaultUp. Only a negative-y aim separates them.
+// case: a near-pole aim to the RIGHT gives turnAxis under BOTH overloads, because the cross
+// product there already points at turnAxis. Only an aim to the left separates them.
 // ===========================================================================
 
 TEST_CASE("DAttackAbs.MachineNearPoleAimTakesTheEpsilonBandBranch", "[DAttack][AbsQualification]")
@@ -361,12 +362,12 @@ TEST_CASE("DAttackAbs.MachineNearPoleAimTakesTheEpsilonBandBranch", "[DAttack][A
     const float c = std::cos(theta);
     const float s = std::sin(theta);
 
-    SECTION("0.01 rad off +X with NEGATIVE y — inside the band")
+    SECTION("0.01 rad off forward, to the LEFT — inside the band")
     {
-        const auto ic = machineTick(glm::vec3(c, -s, 0.f));
-        INFO("axis.z = " << ic.initialAimRotationAxis.z
+        const auto ic = machineTick(glm::vec3(-s, 0.f, -c));
+        INFO("turnComponent = " << simFrame::turnComponent(ic.initialAimRotationAxis)
              << " (float overload: +1, int overload: -1)");
-        REQUIRE(ic.initialAimRotationAxis.z == Catch::Approx(1.f).margin(kEps));
+        REQUIRE(simFrame::turnComponent(ic.initialAimRotationAxis) == Catch::Approx(1.f).margin(kEps));
         REQUIRE(ic.initialAimAngle == Catch::Approx(theta).margin(1e-3f));
     }
 
@@ -375,11 +376,11 @@ TEST_CASE("DAttackAbs.MachineNearPoleAimTakesTheEpsilonBandBranch", "[DAttack][A
         // 90 degrees off +X: ||aimDot| - 1| = 1, far outside the band either way, so the
         // axis comes from the cross product. -Y aims give -Z; the arm exists to show the
         // rig reads a genuine axis rather than always reporting +Z.
-        const auto right = machineTick(glm::vec3(0.f, -1.f, 0.f));
-        REQUIRE(right.initialAimRotationAxis.z == Catch::Approx(-1.f).margin(kEps));
+        const auto right = machineTick(glm::vec3(-1.f, 0.f, -0.f));
+        REQUIRE(simFrame::turnComponent(right.initialAimRotationAxis) == Catch::Approx(-1.f).margin(kEps));
 
-        const auto left = machineTick(glm::vec3(0.f, 1.f, 0.f));
-        REQUIRE(left.initialAimRotationAxis.z == Catch::Approx(1.f).margin(kEps));
+        const auto left = machineTick(glm::vec3(1.f, 0.f, -0.f));
+        REQUIRE(simFrame::turnComponent(left.initialAimRotationAxis) == Catch::Approx(1.f).margin(kEps));
     }
 }
 

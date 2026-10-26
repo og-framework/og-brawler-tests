@@ -55,6 +55,7 @@
 #include "OGSimulation/SpatialQueryAdapter.h"
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/SpatialQueryResult.h"
+#include "OGSimulation/SimulationFrame.h"
 
 #include <algorithm>
 #include <cmath>
@@ -76,13 +77,13 @@ constexpr std::uint32_t kRadialVolume     = 9u;
 // [og-netcode-v2-field-defects task 17] The attacker's projectile slot 0, for the projectile cases.
 constexpr std::uint32_t kProjectileVolume = 60u;
 constexpr std::uint32_t kProjectileBody   = 70u;
-constexpr float         kTargetDistance   = 150.f;
+constexpr float         kTargetDistance   = 1.5f;
 constexpr int           kContactSwingTick = 24;
 
 // Same geometry as the order-swap rig: 0.5 rad off the attacker line, seq 0/2 side = blocks.
-inline glm::vec3 blockingAim()   { return glm::vec3(-std::cos(0.5f), -std::sin(0.5f), 0.f); }
+inline glm::vec3 blockingAim()   { return glm::vec3(-std::sin(0.5f), 0.f, std::cos(0.5f)); }
 // A guard facing away from the attacker: never blocks (BrawlerHitDetectionSystemTest.cpp's name).
-inline glm::vec3 turnedAwayAim() { return glm::vec3(1.f, 0.f, 0.f); }
+inline glm::vec3 turnedAwayAim() { return glm::vec3(0.f, 0.f, -1.f); }
 // A shot the blocking guard faces head-on: the projectile's block test reads -spawnDir.
 inline glm::vec3 shotIntoTheGuard() { return -blockingAim(); }
 
@@ -120,7 +121,7 @@ struct Query
         if (projectile && projectileOverlapsTarget)
         {
             SpatialQueryHit body{};
-            body.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+            body.objectPosition   = glm::vec3(0.f, 0.f, -kTargetDistance);
             body.bodyId           = BodyId{ kTargetRoot };
             body.rootBodyId       = BodyId{ kTargetRoot };
             body.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -139,7 +140,7 @@ struct Query
         if (!radial || !weaponOverlapsTarget)
             return report;
         SpatialQueryHit body{};
-        body.objectPosition   = glm::vec3(kTargetDistance, 0.f, 0.f);
+        body.objectPosition   = glm::vec3(0.f, 0.f, -kTargetDistance);
         body.bodyId           = BodyId{ kTargetRoot };
         body.rootBodyId       = BodyId{ kTargetRoot };
         body.objectCategories = CollisionCategories::single(collisionCategory::body);
@@ -207,7 +208,7 @@ struct Rig
     static simulatableBrawler::PlayerInput makeInput(const glm::vec3& aim, bool attackLeft,
                                                      const glm::vec2& stick, std::uint8_t flags)
     {
-        const glm::vec3 moveWorld(stick.x, stick.y, 0.f);
+        const glm::vec3 moveWorld = simFrame::fromForwardRight(stick, 0.f);
         return brawlerTestInputs::make({ .aimDirection       = aim,
                                          .attackLeft         = attackLeft,
                                          .moveStick          = stick,
@@ -219,7 +220,7 @@ struct Rig
     static simulatableBrawler::PlayerInput attackerInput(int t, int pressTick)
     {
         const bool press = t == pressTick;
-        return makeInput(glm::vec3(1.f, 0.f, 0.f), press,
+        return makeInput(glm::vec3(0.f, 0.f, -1.f), press,
                          press ? glm::vec2(0.f, -1.f) : glm::vec2(0.f), 0u);
     }
     // The target idles holding a guard: blocking (default) or turned away from the attacker.
@@ -266,7 +267,7 @@ struct Rig
         auto& slot = brawler(0u).editAllState().editState()
             .edit<brawlerProjectileSimulation::State>().slots[0];
         slot.spawnTick = spawnTick;
-        slot.spawnPos  = glm::vec3(-400.f, 0.f, 50.f);
+        slot.spawnPos  = glm::vec3(0.f, 0.5f, 4.f);
         slot.spawnDir  = spawnDir;
         slot.endTick   = 0u;
         slot.endReason = 0u;
@@ -556,7 +557,7 @@ inline SkipStepOutcome runProjectileContactOnASkipStep(bool blocked)
 {
     constexpr std::uint32_t L = 40u;
     Rig rig;
-    const glm::vec3 shotDir = blocked ? shotIntoTheGuard() : glm::vec3(1.f, 0.f, 0.f);
+    const glm::vec3 shotDir = blocked ? shotIntoTheGuard() : glm::vec3(0.f, 0.f, -1.f);
     auto launch = [&rig, shotDir]() { rig.launchShot(L - 3u, shotDir); };
     for (std::uint32_t t = 0u; t < L; ++t)          // ends with the Normal pre(L)
         rig.step(t, false, rig.inputsFor(static_cast<int>(t), -1, blocked),

@@ -46,9 +46,9 @@ namespace movement = brawlerMovementSimulation;
 simulatableBrawler::ContinuousInputFields livePose()
 {
 	simulatableBrawler::ContinuousInputFields fields;
-	fields.aimDirection       = glm::vec3(0.f, -1.f, 0.f);
+	fields.aimDirection       = glm::vec3(-1.f, 0.f, -0.f);
 	fields.moveStick          = glm::vec2(-0.6f, 0.8f);
-	fields.moveDirectionWorld = glm::vec3(0.8f, 0.6f, 0.f);
+	fields.moveDirectionWorld = glm::vec3(0.6f, 0.f, -0.8f);
 	return fields;
 }
 
