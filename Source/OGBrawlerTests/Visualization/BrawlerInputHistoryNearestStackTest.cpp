@@ -70,13 +70,13 @@ using brawlerInputHistoryVisualization::frameMeterReadoutLineTopY;
 using brawlerInputHistoryVisualization::frameMeterStackBottomY;
 using brawlerInputHistoryVisualization::frameMeterStackHeight;
 using brawlerInputHistoryVisualization::frameMeterStackTopY;
-using brawlerInputHistoryVisualization::nearestCharacterDistanceCm;
+using brawlerInputHistoryVisualization::nearestCharacterDistance;
 using brawlerInputHistoryVisualization::nearestCharacterIdTo;
 using brawlerInputHistoryVisualization::nearestPlanarDistanceSquared;
 
 using brawlerInputHistoryVisualization::kFrameMeterStackGap;
 using brawlerInputHistoryVisualization::kNearestCandidateCapacity;
-using brawlerInputHistoryVisualization::kNearestHysteresisCm;
+using brawlerInputHistoryVisualization::kNearestHysteresis;
 using brawlerInputHistoryVisualization::kTickLaneCapacity;
 
 // ---------------------------------------------------------------------------
@@ -616,13 +616,13 @@ TEST_CASE("NearestStack.TheStackHeightIsTheBandsThePlacementHelpersActuallyUse",
 TEST_CASE("NearestStack.NearestPicksTheSmallestPlanarDistanceIgnoringTheLocalIdItself",
           "[CharacterViz][InputHistoryViz]")
 {
-	// The local at the origin; one rival at 300 cm, one at 900, one directly overhead in
-	// Z -- which this selection cannot see at all, and must not, because a brawler above
-	// another is not the one it is fighting.
+	// The local at the origin; one rival at 3 m, one at 9 m, and none directly overhead --
+	// a candidate carries no height, so this selection cannot see one at all, and must not,
+	// because a brawler above another is not the one it is fighting.
 	const NearestCharacterCandidateList candidates = listOf({
-		NearestCharacterCandidate{ 10u,   0.f,   0.f },
-		NearestCharacterCandidate{ 20u, 900.f,   0.f },
-		NearestCharacterCandidate{ 30u,   0.f, 300.f },
+		NearestCharacterCandidate{ 10u, 0.f, 0.f },
+		NearestCharacterCandidate{ 20u, 9.f, 0.f },
+		NearestCharacterCandidate{ 30u, 0.f, 3.f },
 	});
 
 	CHECK(nearestCharacterIdTo(candidates, 10u, std::nullopt) == std::optional<unsigned int>(30u));
@@ -631,23 +631,23 @@ TEST_CASE("NearestStack.NearestPicksTheSmallestPlanarDistanceIgnoringTheLocalIdI
 	CHECK(nearestCharacterIdTo(candidates, 10u, std::nullopt) != std::optional<unsigned int>(10u));
 
 	// Asked from a different local, the answer is that one's own neighbourhood: from 20's
-	// position at (900, 0) the origin is 900 cm away and 30 is sqrt(900^2 + 300^2) = 948.7.
+	// position at (9, 0) the origin is 9 m away and 30 is sqrt(9^2 + 3^2) = 9.487 m.
 	CHECK(nearestCharacterIdTo(candidates, 20u, std::nullopt) == std::optional<unsigned int>(10u));
 
-	CHECK(nearlyEqual(*nearestCharacterDistanceCm(candidates, 10u, 30u), 300.f));
+	CHECK(nearlyEqual(*nearestCharacterDistance(candidates, 10u, 30u), 3.f));
 	CHECK(nearlyEqual(nearestPlanarDistanceSquared(candidates.candidates[0],
-		candidates.candidates[1]), 810000.f));
+		candidates.candidates[1]), 81.f));
 }
 
-TEST_CASE("NearestStack.NearestHoldsThePreviousChoiceUntilARivalIsAClear50cmCloser",
+TEST_CASE("NearestStack.NearestHoldsThePreviousChoiceUntilARivalIsAClearHalfMetreCloser",
           "[CharacterViz][InputHistoryViz]")
 {
-	// The held choice sits at 400 cm. A rival that closes to 360 is 40 cm nearer -- inside
-	// the margin -- and must NOT take the stack; at 349 it is 51 cm nearer and must.
+	// The held choice sits at 4 m. A rival that closes to 3.6 m is 0.4 m nearer -- inside
+	// the 0.5 m margin -- and must NOT take the stack; at 3.49 m it is 0.51 m nearer and must.
 	const NearestCharacterCandidateList inside = listOf({
-		NearestCharacterCandidate{ 10u,   0.f, 0.f },
-		NearestCharacterCandidate{ 20u, 400.f, 0.f },
-		NearestCharacterCandidate{ 30u, 360.f, 0.f },
+		NearestCharacterCandidate{ 10u, 0.f,  0.f },
+		NearestCharacterCandidate{ 20u, 4.f,  0.f },
+		NearestCharacterCandidate{ 30u, 3.6f, 0.f },
 	});
 
 	CHECK(nearestCharacterIdTo(inside, 10u, std::optional<unsigned int>(20u))
@@ -658,21 +658,21 @@ TEST_CASE("NearestStack.NearestHoldsThePreviousChoiceUntilARivalIsAClear50cmClos
 	CHECK(nearestCharacterIdTo(inside, 10u, std::nullopt) == std::optional<unsigned int>(30u));
 
 	const NearestCharacterCandidateList outside = listOf({
-		NearestCharacterCandidate{ 10u,   0.f, 0.f },
-		NearestCharacterCandidate{ 20u, 400.f, 0.f },
-		NearestCharacterCandidate{ 30u, 349.f, 0.f },
+		NearestCharacterCandidate{ 10u, 0.f,   0.f },
+		NearestCharacterCandidate{ 20u, 4.f,   0.f },
+		NearestCharacterCandidate{ 30u, 3.49f, 0.f },
 	});
 
 	CHECK(nearestCharacterIdTo(outside, 10u, std::optional<unsigned int>(20u))
 		== std::optional<unsigned int>(30u));
 
-	CHECK(nearlyEqual(kNearestHysteresisCm, 50.f));
+	CHECK(kNearestHysteresis == 0.5f);
 
 	// A previous choice that has left the world is not held: it is no longer a candidate,
 	// so the margin has nothing to protect.
 	const NearestCharacterCandidateList departed = listOf({
-		NearestCharacterCandidate{ 10u,   0.f, 0.f },
-		NearestCharacterCandidate{ 30u, 900.f, 0.f },
+		NearestCharacterCandidate{ 10u, 0.f, 0.f },
+		NearestCharacterCandidate{ 30u, 9.f, 0.f },
 	});
 	CHECK(nearestCharacterIdTo(departed, 10u, std::optional<unsigned int>(20u))
 		== std::optional<unsigned int>(30u));
@@ -695,7 +695,7 @@ TEST_CASE("NearestStack.OneCharacterHasNoNearestAndNeitherDoesAnUnknownLocal",
 	CHECK_FALSE(nearestCharacterIdTo(NearestCharacterCandidateList{}, 10u, std::nullopt)
 		.has_value());
 	CHECK_FALSE(nearestCharacterIdTo(alone, 99u, std::nullopt).has_value());
-	CHECK_FALSE(nearestCharacterDistanceCm(alone, 10u, 99u).has_value());
+	CHECK_FALSE(nearestCharacterDistance(alone, 10u, 99u).has_value());
 }
 
 TEST_CASE("NearestStack.EqualDistancesResolveByIdSoTheGatherOrderCannotChangeTheAnswer",
@@ -704,15 +704,15 @@ TEST_CASE("NearestStack.EqualDistancesResolveByIdSoTheGatherOrderCannotChangeThe
 	// ⛔ THE ORDER IS TOTAL. Two rivals at the same range must give one answer whichever
 	//   order the storage happened to walk them in, or the stack flickers between them.
 	const NearestCharacterCandidateList ascending = listOf({
-		NearestCharacterCandidate{ 10u,    0.f, 0.f },
-		NearestCharacterCandidate{ 20u,  500.f, 0.f },
-		NearestCharacterCandidate{ 30u, -500.f, 0.f },
+		NearestCharacterCandidate{ 10u,  0.f, 0.f },
+		NearestCharacterCandidate{ 20u,  5.f, 0.f },
+		NearestCharacterCandidate{ 30u, -5.f, 0.f },
 	});
 
 	const NearestCharacterCandidateList descending = listOf({
-		NearestCharacterCandidate{ 10u,    0.f, 0.f },
-		NearestCharacterCandidate{ 30u, -500.f, 0.f },
-		NearestCharacterCandidate{ 20u,  500.f, 0.f },
+		NearestCharacterCandidate{ 10u,  0.f, 0.f },
+		NearestCharacterCandidate{ 30u, -5.f, 0.f },
+		NearestCharacterCandidate{ 20u,  5.f, 0.f },
 	});
 
 	CHECK(nearestCharacterIdTo(ascending, 10u, std::nullopt)

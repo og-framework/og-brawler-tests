@@ -7,14 +7,17 @@ document as their docs pointer, because this header is what writes and reads the
 
 ## 1. What the format is for
 
-The golden trace checks that a change of the simulation's units or axes (`kUnitsPerMetre`, `kAxisFrame`)
-leaves the brawler's behaviour unchanged.
+The golden trace checks that a change of the simulation's units or axes (og-sim-metres-yup's two flips, and
+any later change of the frame or of the planar chart) leaves the brawler's behaviour unchanged.
 One scenario (`GoldenTraceScenario.h`) runs the brawler on Jolt for 600 ticks. Its state is recorded
 in one **canonical frame**, the legacy frame: UE centimetres, Z up, the (forward, right) chart. So a
 trace recorded before a units or axis flip can be compared with one recorded after it.
 
-Every recorded value is converted to the legacy frame in `double` through the inverses of `simFrame`
-(`SimulationFrame-rationale.md` §8), chosen by the value's **type tag**:
+Every recorded value is converted to the legacy frame in `double` through this header's inverses, chosen by
+the value's **type tag**. They are built on `simFrame`'s picks (`toLegacyAxes` is (`forwardRight`, `height`),
+`toLegacyAxial` its negation, `toLegacyCm` a multiply by 100), so they follow the simulation's frame. Until
+og-sim-metres-yup task 24 they were members of `simFrame`; they moved here with the same bodies when the frame
+knobs were deleted, and a `static_assert` after them pins their table (the rows `SimulationFrameTest` checked):
 
 | tag | meaning | converter | example |
 |---|---|---|---|
@@ -47,10 +50,12 @@ an `OG_CHECK`, so a scenario that records a field conditionally cannot produce a
 `writeGoldenInl` and `writeEnvelopeInl` emit C++ source that the test includes, CRLF like the rest of
 the repository's sources:
 
-- the golden: `kGoldenHeader` (format version, the two knobs `kAxisFrame` and `kUnitsPerMetre` at record
-  time, the step dt, the scenario length, the source commit string from the recorder's environment and
-  the generator name), `kGoldenFields` (the schema, with each tag's letter), `kGoldenTicks` and
-  `kGoldenValues`;
+- the golden: `kGoldenHeader` (format version, the simulation's frame codes at record time, the step dt,
+  the scenario length, the source commit string from the recorder's environment and the generator name),
+  `kGoldenFields` (the schema, with each tag's letter), `kGoldenTicks` and `kGoldenValues`. The frame codes
+  (in the envelope's header too) are `kSimulationAxisFrame` (1: the right-handed Y-up frame; 0 was Unreal's)
+  and `kSimulationUnitsPerMetre` (1: metres; 100 was centimetres), the values the deleted frame knobs had, so
+  the goldens recorded before og-sim-metres-yup task 24 still read the same;
 - the envelope: `kEnvelopeHeader`, `kEnvelopeNudges` (character id, sim-frame component index, sign of
   each nudged run), `kEnvelopeTicks`, `kEnvelopeTagOrder` and `kEnvelopeValues` (one row per sample, one
   column per tag, in tag order).
@@ -80,8 +85,8 @@ record one.
 pair of zeros, one of each sign or not (`sameBitsOrBothZero`). Any other difference still
 fails: a 1-ULP change, a zero against a denormal, a NaN with a different payload. A `static_assert` beside
 `sameBitsOrBothZero` pins these cases. Discrete fields (`e`) are compared with `std::memcmp` alone. It is the
-mode for a change that must leave the trace bit-identical at the same knobs. The test refuses exact mode
-when the golden's knobs differ from the build's.
+mode for a change that must leave the trace bit-identical in the same frame and unit. The test refuses exact
+mode when the golden's frame codes differ from the build's.
 
 Why zeros are the exception: the UE build compiles with `/fp:fast`, which lets the optimiser rewrite arithmetic
 whose result is an exact zero, so the sign of that zero can depend on how the surrounding code was
@@ -96,9 +101,9 @@ name, both values), or `first=none`. They are reported, never failed: `mismatchi
 (|Δ| = 0). The recorder's check that its two base runs agree requires no ±0-only difference either, so a
 recorded golden comes from runs that agree on every bit.
 
-`compareBounds` is the mode for a flip of `kUnitsPerMetre` or `kAxisFrame` (the test's `bounds` mode). It
-holds every field, on every sample through tick 600, to an absolute bound for its **class**, in the legacy
-frame, so a bound means the same thing at every knob combination:
+`compareBounds` is the mode for a flip of the unit or the axes (the test's `bounds` mode). It holds every
+field, on every sample through tick 600, to an absolute bound for its **class**, in the legacy frame, so a
+bound means the same thing in every frame:
 
 | class | fields | bound (`kBounds`) |
 |---|---|---|
@@ -144,7 +149,7 @@ The envelope (section 6) is still read and printed, as a diagnostic only. For ea
 quaternion). It never fails on it. As a tolerance the envelope cannot pass a correct flip: its nudges
 never reach the hover servo's branch in the centimetre build, they leave `a`, `q` and `s` at 0, and the
 relative floor then gives a near-zero value a near-zero tolerance. Measured: a one-ULP decrease of
-gravity at the legacy knobs (centimetres, Z up), with no flip at all, exceeds it.
+gravity in the centimetre, Z-up build, with no flip at all, exceeded it.
 
 `compareBounds` needs no exception for zeros: a ±0-only difference has a metric of 0 (|Δ| = 0, and a
 quaternion's angle is 0), which no bound rejects.

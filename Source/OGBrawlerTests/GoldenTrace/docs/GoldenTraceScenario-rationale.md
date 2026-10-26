@@ -9,7 +9,7 @@ tag. The harness that runs the scenario is described in `BrawlerJoltGoldenTraceT
 Every length, point, direction and rotation in the scenario is a native literal: metres, og axes (+Y up,
 forward −Z, right +X). Through the two flips (og-sim-metres-yup tasks 17 and 19) the scenario was written
 in the legacy numbers (UE centimetres, Z up, x forward, y right) and passed through `simFrame`'s legacy
-wrappers, so it meant the same world at every knob combination. Task 22 replaced each wrapped value by the
+wrappers (deleted at task 24), so it meant the same world in every frame and unit the two knobs could select. Task 22 replaced each wrapped value by the
 float the wrapper returned at (metres, Y up), measured bit for bit in the real build (a probe of every
 static shape, spawn point, scripted input and static-data value before and after the rewrite: all equal).
 So the golden recorded by task 19 still passes in exact mode.

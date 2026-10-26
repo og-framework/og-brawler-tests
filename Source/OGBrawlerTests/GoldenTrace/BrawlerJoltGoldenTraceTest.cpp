@@ -88,7 +88,7 @@ namespace
 
 using namespace goldenTraceScenario;
 
-static_assert(goldenTrace::kLinearVelocityBoundCmPerS >= 2.0 * -Frame::toLegacyCm(kGravity) * double(kDtSeconds),
+static_assert(goldenTrace::kLinearVelocityBoundCmPerS >= 2.0 * -goldenTrace::toLegacyCm(kGravity) * double(kDtSeconds),
     "goldenTrace::kLinearVelocityBoundCmPerS admits a one-tick velocity spike of 2*g*dt");
 
 using Storage = SimulationObjectStorage<SimulatableBrawler>;
@@ -382,7 +382,8 @@ goldenTrace::GoldenView viewOf(const goldenTrace::Trace& trace, std::vector<gold
     fields.clear();
     for (const goldenTrace::FieldSpec& field : trace.fields)
         fields.push_back(goldenTrace::FieldRecord{ field.name.c_str(), goldenTrace::tagLetter(field.tag), field.components });
-    header = goldenTrace::GoldenHeader{ goldenTrace::kFormatVersion, static_cast<uint32_t>(kAxisFrame), kUnitsPerMetre, kDtSeconds,
+    header = goldenTrace::GoldenHeader{ goldenTrace::kFormatVersion, goldenTrace::kSimulationAxisFrame,
+        goldenTrace::kSimulationUnitsPerMetre, kDtSeconds,
         kScenarioTicks, "live", kGenerator };
     return goldenTrace::GoldenView{ &header, fields.data(), fields.size(), trace.ticks.data(), trace.ticks.size(), trace.values.data(),
         trace.values.size() };
@@ -451,11 +452,11 @@ Coverage coverageOf(const goldenTrace::Trace& trace)
             restHeightA = read.at(sample, capsuleA, 2u);
     }
     OG_CHECK(restHeightA.has_value(), "golden harness: the coverage count needs A's resting height before the walk");
-    const double plateauHeightA = *restHeightA + Frame::toLegacyCm(kStepHeight);
-    const double rampFoot = Frame::toLegacyCm(kRampFoot);
-    const double rampTop = Frame::toLegacyCm(kRampTop);
-    const double stepEdge = Frame::toLegacyCm(kStepEdge);
-    const double floorStart = Frame::toLegacyCm(kFloorStart);
+    const double plateauHeightA = *restHeightA + goldenTrace::toLegacyCm(kStepHeight);
+    const double rampFoot = goldenTrace::toLegacyCm(kRampFoot);
+    const double rampTop = goldenTrace::toLegacyCm(kRampTop);
+    const double stepEdge = goldenTrace::toLegacyCm(kStepEdge);
+    const double floorStart = goldenTrace::toLegacyCm(kFloorStart);
 
     for (std::size_t sample = 1; sample < trace.ticks.size(); ++sample)
     {
@@ -646,9 +647,10 @@ TEST_CASE("BrawlerJoltGoldenTrace.MatchesTheRecordedTrace", "[GoldenTrace]")
     REQUIRE(golden.header->scenarioTicks == kScenarioTicks);
     if (*mode == goldenTrace::Mode::Exact)
     {
-        INFO("exact mode compares a golden recorded at the same knobs; run OG_GOLDEN_MODE=bounds across a flip");
-        REQUIRE(golden.header->axisFrame == static_cast<uint32_t>(kAxisFrame));
-        REQUIRE(std::bit_cast<uint32_t>(golden.header->unitsPerMetre) == std::bit_cast<uint32_t>(kUnitsPerMetre));
+        INFO("exact mode compares a golden recorded in the same frame and unit; run OG_GOLDEN_MODE=bounds across a flip");
+        REQUIRE(golden.header->axisFrame == goldenTrace::kSimulationAxisFrame);
+        REQUIRE(std::bit_cast<uint32_t>(golden.header->unitsPerMetre)
+            == std::bit_cast<uint32_t>(goldenTrace::kSimulationUnitsPerMetre));
     }
 
     const goldenTrace::Trace live = runScenario();
@@ -657,7 +659,8 @@ TEST_CASE("BrawlerJoltGoldenTrace.MatchesTheRecordedTrace", "[GoldenTrace]")
     std::printf("[GoldenTrace.compare] mode=%s golden=(axisFrame %u, unitsPerMetre %g, %s) live=(axisFrame %u, unitsPerMetre %g) "
                 "samples=%zu fields=%zu values=%zu mismatchingFields=%zu samplesPassedBeforeFirstMismatch=%u\n",
         *mode == goldenTrace::Mode::Exact ? "exact" : "bounds", golden.header->axisFrame, double(golden.header->unitsPerMetre),
-        golden.header->sourceCommit, static_cast<uint32_t>(kAxisFrame), double(kUnitsPerMetre), result.comparedSamples,
+        golden.header->sourceCommit, goldenTrace::kSimulationAxisFrame, double(goldenTrace::kSimulationUnitsPerMetre),
+        result.comparedSamples,
         live.fields.size(), live.values.size(), result.mismatchingValues, result.ticksPassedBeforeFirstMismatch);
     printMetrics("maxMetric", result.maxMetric);
     if (*mode == goldenTrace::Mode::Exact)

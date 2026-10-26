@@ -49,6 +49,56 @@ inline constexpr uint32_t kFormatVersion = 1u;
 inline constexpr uint32_t kEnvelopeToleranceFactor = 4u;
 inline constexpr uint32_t kUlpFloorFactor = 4u;
 
+inline constexpr uint32_t kSimulationAxisFrame = 1u;
+inline constexpr float kSimulationUnitsPerMetre = 1.f;
+
+constexpr double toLegacyCm(double units)
+{
+    return units * 100.0;
+}
+
+constexpr double toLegacyCm(float units)
+{
+    return toLegacyCm(double(units));
+}
+
+constexpr glm::dvec3 toLegacyAxes(const glm::vec3& v)
+{
+    const glm::vec2 forwardRight = simFrame::forwardRight(v);
+    return glm::dvec3(forwardRight.x, forwardRight.y, simFrame::height(v));
+}
+
+constexpr glm::dvec3 toLegacyAxial(const glm::vec3& v)
+{
+    const glm::dvec3 axes = toLegacyAxes(v);
+    return glm::dvec3(-axes.x, -axes.y, -axes.z);
+}
+
+constexpr glm::dvec3 toLegacyPosition(const glm::vec3& p)
+{
+    const glm::dvec3 axes = toLegacyAxes(p);
+    return glm::dvec3(toLegacyCm(axes.x), toLegacyCm(axes.y), toLegacyCm(axes.z));
+}
+
+constexpr glm::dquat toLegacyRotation(const glm::quat& q)
+{
+    const glm::dvec3 axial = toLegacyAxial(glm::vec3(q.x, q.y, q.z));
+    return glm::dquat(double(q.w), axial.x, axial.y, axial.z);
+}
+
+constexpr glm::dvec2 toLegacyPlanar(const glm::vec2& p)
+{
+    return glm::dvec2(double(p.x), double(p.y));
+}
+
+static_assert(toLegacyAxes(glm::vec3(3.f, 5.f, -2.f)) == glm::dvec3(2.0, 3.0, 5.0)
+        && toLegacyAxial(glm::vec3(-3.f, -5.f, 2.f)) == glm::dvec3(2.0, 3.0, 5.0)
+        && toLegacyPosition(glm::vec3(0.5f, 0.25f, -2.f)) == glm::dvec3(200.0, 50.0, 25.0)
+        && toLegacyPlanar(glm::vec2(-5.f, 2.f)) == glm::dvec2(-5.0, 2.0) && toLegacyCm(0.5f) == 50.0,
+    "goldenTrace: the inverses map the simulation frame (metres, +Y up, -Z forward, +X right) back to the recorded "
+    "frame (Unreal centimetres, Z up, chart P). Was the inverse rows of SimulationFrameTest, which tested them "
+    "in SimulationFrame.h.");
+
 constexpr char tagLetter(Tag tag) { return kTagLetters[static_cast<std::size_t>(tag)]; }
 
 constexpr std::optional<Tag> tagOfLetter(char letter)
@@ -132,8 +182,6 @@ struct Nudge
 class Recorder
 {
 public:
-    using Frame = simFrame;
-
     explicit Recorder(Trace& trace) : m_trace(trace) {}
 
     void beginSample(uint32_t tick)
@@ -152,13 +200,13 @@ public:
             "goldenTrace::Recorder::endSample: every sample must record the same fields, in the same order, as the first one");
     }
 
-    void position(const std::string& name, const glm::vec3& value) { push(name, Tag::Position, Frame::toLegacyPosition(value)); }
-    void direction(const std::string& name, const glm::vec3& value) { push(name, Tag::Direction, Frame::toLegacyAxes(value)); }
-    void axial(const std::string& name, const glm::vec3& value) { push(name, Tag::Axial, Frame::toLegacyAxial(value)); }
+    void position(const std::string& name, const glm::vec3& value) { push(name, Tag::Position, toLegacyPosition(value)); }
+    void direction(const std::string& name, const glm::vec3& value) { push(name, Tag::Direction, toLegacyAxes(value)); }
+    void axial(const std::string& name, const glm::vec3& value) { push(name, Tag::Axial, toLegacyAxial(value)); }
 
     void rotation(const std::string& name, const glm::quat& value)
     {
-        const glm::dquat legacy = Frame::toLegacyRotation(value);
+        const glm::dquat legacy = toLegacyRotation(value);
         const double components[4] = { legacy.w, legacy.x, legacy.y, legacy.z };
         push(name, Tag::Rotation, components, 4u);
     }
@@ -171,7 +219,7 @@ public:
 
     void planar(const std::string& name, const glm::vec2& value)
     {
-        const glm::dvec2 legacy = Frame::toLegacyPlanar(value);
+        const glm::dvec2 legacy = toLegacyPlanar(value);
         const double components[2] = { legacy.x, legacy.y };
         push(name, Tag::Planar, components, 2u);
     }
@@ -701,8 +749,8 @@ inline std::string writeGoldenInl(const Trace& trace, float dtSeconds, uint32_t 
     appendLine(out, "");
     appendLine(out, "inline constexpr goldenTrace::GoldenHeader kGoldenHeader{");
     appendLine(out, "    /*formatVersion*/ " + std::to_string(kFormatVersion) + "u,");
-    appendLine(out, "    /*axisFrame*/ " + std::to_string(static_cast<uint32_t>(kAxisFrame)) + "u,");
-    appendLine(out, "    /*unitsPerMetre*/ " + hexLiteral(double(kUnitsPerMetre)) + "f,");
+    appendLine(out, "    /*axisFrame*/ " + std::to_string(kSimulationAxisFrame) + "u,");
+    appendLine(out, "    /*unitsPerMetre*/ " + hexLiteral(double(kSimulationUnitsPerMetre)) + "f,");
     appendLine(out, "    /*dtSeconds*/ " + hexLiteral(double(dtSeconds)) + "f,");
     appendLine(out, "    /*scenarioTicks*/ " + std::to_string(scenarioTicks) + "u,");
     appendLine(out, "    /*sourceCommit*/ " + quotedLiteral(sourceCommit) + ",");
@@ -771,8 +819,8 @@ inline std::string writeEnvelopeInl(const std::vector<uint32_t>& ticks, const st
     appendLine(out, "inline constexpr goldenTrace::EnvelopeHeader kEnvelopeHeader{");
     appendLine(out, "    /*formatVersion*/ " + std::to_string(kFormatVersion) + "u,");
     appendLine(out, "    /*runs*/ " + std::to_string(nudges.size()) + "u,");
-    appendLine(out, "    /*axisFrame*/ " + std::to_string(static_cast<uint32_t>(kAxisFrame)) + "u,");
-    appendLine(out, "    /*unitsPerMetre*/ " + hexLiteral(double(kUnitsPerMetre)) + "f,");
+    appendLine(out, "    /*axisFrame*/ " + std::to_string(kSimulationAxisFrame) + "u,");
+    appendLine(out, "    /*unitsPerMetre*/ " + hexLiteral(double(kSimulationUnitsPerMetre)) + "f,");
     appendLine(out, "    /*sourceCommit*/ " + quotedLiteral(sourceCommit) + " };");
     appendLine(out, "");
     appendLine(out, "inline constexpr goldenTrace::NudgeRecord kEnvelopeNudges[] = {");

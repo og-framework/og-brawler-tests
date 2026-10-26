@@ -12,7 +12,7 @@ The `Scene` runs the brawler the way an inline Jolt authority does, with no UE i
 - **World.** The slot template is `joltTickWorldHost::slotTemplateOf` of `SimulatableBrawler`, the world
   config is `joltTickWorldHost::stepWorldConfigOf` (ring depth 0, as on the authority) and the statics are
   built with `joltTickWorldHost::buildStatics`: the three calls `JoltTickWorldHost::build` makes. Gravity is
-  the movement StaticData's `gravity` along the frame's up (`BasicSimFrame::withHeight` through the `simFrame` alias), which in the shipped
+  the movement StaticData's `gravity` along the frame's up (`simFrame::withHeight`), which in the simulation's
   frame (+Y up) is `(0, g, 0)`, the vector the UE backend gives the Jolt world. No brawler body takes that gravity: each one's
   `BodyDescriptor` has `enableGravity` false, so Jolt gives it a gravity factor of 0, and a wrong world
   gravity does not change the trace (measured: with the literal `(0, 0, g)` in its place at Y-up, the
@@ -60,22 +60,23 @@ The coverage count reads the trace in the legacy (canonical) frame, whose values
 converted, so its thresholds are canonical centimetres too. `kWalkSpeedFloorCmPerS`,
 `kKnockbackSpeedFloorCmPerS` and `kHeightSlackCm` are written in centimetres. The scenario's forward
 positions and step height (`kFloorStart`, `kRampFoot`, `kRampTop`, `kStepEdge`, `kStepHeight`, native metres)
-are converted with `Frame::toLegacyCm`, the converter the recorder uses, so the count and the scene read one
+are converted with `goldenTrace::toLegacyCm`, the converter the recorder uses, so the count and the scene read one
 set of constants. Converted, three of them differ from the centimetre floats task 2 compared against by at
 most 8e-5 cm (for example `kStepEdge` is 2179.99992 cm, not 2180); the coverage counts are unchanged.
 
 `[GoldenTrace]` is in og-brawler-tests' `[@og]` whitelist (`OgTagAliases.cpp`); `[.GoldenRecord]` is hidden
 and runs only when named.
 
-`MatchesTheRecordedTrace` prints one `[GoldenTrace.compare]` line (mode, both knob pairs, samples, fields,
+`MatchesTheRecordedTrace` prints one `[GoldenTrace.compare]` line (mode, the golden's and the build's frame codes, samples, fields,
 mismatching fields, samples passed before the first mismatch) and the largest metric per tag. In exact
 mode it then prints the `[GoldenTrace.signedZero]` line (`GoldenTraceFormat-rationale.md` §5). In bounds
 mode it prints one `[GoldenTrace.bound]` line per bound class (`class=`, the largest metric `max=`, the
 `bound=`, their ratio `maxOverBound=`, and the tick and field of the largest metric, `worst=`), then the
 `[GoldenTrace.envelopeRatio]` diagnostic per tag. On a failure it prints the first mismatch.
 
-Exact mode refuses a golden recorded at other knobs. Bounds mode runs at any knobs, so it is the mode for
-a build whose `kUnitsPerMetre` or `kAxisFrame` differs from the golden's.
+Exact mode refuses a golden recorded in another frame or unit (its `axisFrame` and `unitsPerMetre` codes against
+`goldenTrace::kSimulationAxisFrame` and `kSimulationUnitsPerMetre`). Bounds mode runs whatever the codes, so it is
+the mode for a golden recorded before a flip.
 
 When the two files are absent (`__has_include`), the case fails at its first `REQUIRE`, so a missing golden
 can never pass.
