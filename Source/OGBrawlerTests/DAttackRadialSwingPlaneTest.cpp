@@ -103,9 +103,9 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 // choices hold everything except the projection constant (they are the same choices
 // task 32's radial rig makes, for the same reasons):
 //
-//   * the sequence rotation axis is turnAxis() (`simFrame::kTurnAxis`, -Y) and initialAimAngle is 0
-//     about it, so the initial rotation is the identity and
-//         glm::dot(hitDirection, worldSequenceRotationAxis) == -hitDirection.y
+//   * the sequence rotation axis is turnAxis() (`simFrame::kTurnAxis`, +Y since og-sim-metres-yup
+//     task 26) and initialAimAngle is 0 about it, so the initial rotation is the identity and
+//         glm::dot(hitDirection, worldSequenceRotationAxis) == hitDirection.y
 //     exactly. The site under test reduces to arithmetic on `hitHeight`.
 //   * the ONE segment spans [0, 7) rad — wider than a full turn — so every direction
 //     resolves to segment 0 / Damaging. The segment lookup cannot become a second,

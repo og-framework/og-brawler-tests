@@ -643,19 +643,21 @@ TEST_CASE("DAttackRadial.SwingTangentFollowsTheSwingDirection", "[DAttack][HitDe
     const float leftSweep  = leftSeq.getAngle(left.attackTimerAtHit + kDt)
                            - leftSeq.getAngle(left.attackTimerAtHit);
     INFO("sweep over one tick: right " << rightSweep << ", left " << leftSweep);
-    REQUIRE(rightSweep > 0.f);
-    REQUIRE(leftSweep  < 0.f);
+    REQUIRE(rightSweep < 0.f);
+    REQUIRE(leftSweep  > 0.f);
 
     // ...and the authored velocity the tangent actually READ is non-zero, so its sign is a
     //     measurement. Every sequence starts from rest, and a zero sign is not a direction.
-    REQUIRE(right.authoredOmegaAtHit > 0.f);
-    REQUIRE(left.authoredOmegaAtHit  < 0.f);
+    REQUIRE(right.authoredOmegaAtHit < 0.f);
+    REQUIRE(left.authoredOmegaAtHit  > 0.f);
 
     // 2. AND THE TANGENTS FOLLOW THEM. cross(axis, rHat) is the direction of increasing
-    //    angle, so a positive sweep keeps it and a negative one flips it.
+    //    angle, so a positive sweep keeps it and a negative one flips it. The turn axis is +Y
+    //    since og-sim-metres-yup task 26, so increasing angle runs to the left and the right
+    //    swing (a negative sweep) throws to the right, as it did under chart P.
     const glm::vec3 increasing =
-        glm::cross(glm::vec3(-0.f, -1.f, 0.f), glm::vec3(0.f, 0.f, -1.f));
-    REQUIRE(simFrame::forwardRight(increasing).y == Catch::Approx(1.f).margin(1e-6f));   // the fixture's own claim
+        glm::cross(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, -1.f));
+    REQUIRE(simFrame::forwardRight(increasing).y == Catch::Approx(-1.f).margin(1e-6f));   // the fixture's own claim
 
     REQUIRE(simFrame::forwardRight(right.swingTangent).y == Catch::Approx( 1.f).margin(1e-5f));
     REQUIRE(simFrame::forwardRight(left.swingTangent).y  == Catch::Approx(-1.f).margin(1e-5f));

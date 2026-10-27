@@ -138,9 +138,9 @@ static_assert(SpatialQueryAdapter<MockSpatialQueryAdapter>);
 //
 // The fixture is chosen so that everything except `lengthAlongRotationAxis` is held
 // constant between the two overloads:
-//   * rotationAxis == turnAxis() (`simFrame::kTurnAxis`, -Y) and initialAimAngle == 0 about it,
-//     so the initial rotation is the identity and
-//         glm::dot(hitDirection, worldSequenceRotationAxis) == -hitDirection.y
+//   * rotationAxis == turnAxis() (`simFrame::kTurnAxis`, +Y since og-sim-metres-yup task 26) and
+//     initialAimAngle == 0 about it, so the initial rotation is the identity and
+//         glm::dot(hitDirection, worldSequenceRotationAxis) == hitDirection.y
 //     exactly — the site under test reduces to `abs(hitDirection.y)`.
 //   * the sequence's ONE segment spans [0, 7) rad, i.e. wider than a full turn, so
 //     every direction resolves to segment 0 / Damaging. The segment lookup therefore
@@ -338,20 +338,21 @@ TEST_CASE("DAttackAbs.RadialAxisDistanceKeepsItsFraction", "[DAttack][HitDetecti
 // 5. DAttackMachineSimulation.h, setRadialSimulationInitialConditions — `abs(abs(aimDot) - 1.f) < 0.0001f`
 //
 // BYTE-IDENTICAL to the guard site task 29 fixed, and it feeds the same near-pole
-// epsilon band: inside the band the initial aim rotation axis is forced to turnAxis instead
+// epsilon band: inside the band the initial aim rotation axis is forced to the fallback axis
+// (0, -1, 0) (`aimFallbackAxis`, the chart-P turn axis, kept by og-sim-metres-yup task 26) instead
 // of being derived from `cross(defaultForward, aim)`, which keeps `normalize` away from
 // the zero vector. An integer overload collapses the expression to `|aimDot| == 1`
 // EXACTLY and the band disappears.
 //
 // Fixture: aim 0.01 rad off forward, to the LEFT, so |aimDot| = cos(0.01) = 0.99995 and
 // ||aimDot| - 1| = 5e-5 — inside the 1e-4 band with a factor of two to spare.
-//   float overload: band live  -> axis = turnAxis        -> turnComponent = +1
-//   int overload:   band dead  -> axis = normalize(cross(forward, aim)) = -turnAxis -> turnComponent = -1
+//   float overload: band live  -> axis = (0, -1, 0)      -> turnComponent = -1
+//   int overload:   band dead  -> axis = normalize(cross(forward, aim)) = (0, +1, 0) -> turnComponent = +1
 // Margin 2.0 against 1e-4.
 //
 // ⚠ NON-DISCRIMINATING BY CONSTRUCTION, so nobody adds one thinking it strengthens the
-// case: a near-pole aim to the RIGHT gives turnAxis under BOTH overloads, because the cross
-// product there already points at turnAxis. Only an aim to the left separates them.
+// case: a near-pole aim to the RIGHT gives (0, -1, 0) under BOTH overloads, because the cross
+// product there already points along the fallback axis. Only an aim to the left separates them.
 // ===========================================================================
 
 TEST_CASE("DAttackAbs.MachineNearPoleAimTakesTheEpsilonBandBranch", "[DAttack][AbsQualification]")
@@ -366,21 +367,22 @@ TEST_CASE("DAttackAbs.MachineNearPoleAimTakesTheEpsilonBandBranch", "[DAttack][A
     {
         const auto ic = machineTick(glm::vec3(-s, 0.f, -c));
         INFO("turnComponent = " << simFrame::turnComponent(ic.initialAimRotationAxis)
-             << " (float overload: +1, int overload: -1)");
-        REQUIRE(simFrame::turnComponent(ic.initialAimRotationAxis) == Catch::Approx(1.f).margin(kEps));
+             << " (float overload: -1, int overload: +1)");
+        REQUIRE(simFrame::turnComponent(ic.initialAimRotationAxis) == Catch::Approx(-1.f).margin(kEps));
         REQUIRE(ic.initialAimAngle == Catch::Approx(theta).margin(1e-3f));
     }
 
     SECTION("POSITIVE CONTROL — a far-field aim derives a real axis under both overloads")
     {
         // 90 degrees off +X: ||aimDot| - 1| = 1, far outside the band either way, so the
-        // axis comes from the cross product. -Y aims give -Z; the arm exists to show the
-        // rig reads a genuine axis rather than always reporting +Z.
+        // axis comes from the cross product. A -X aim gives +Y (turnComponent +1 since
+        // og-sim-metres-yup task 26); the arm exists to show the rig reads a genuine axis
+        // rather than always reporting the fallback.
         const auto right = machineTick(glm::vec3(-1.f, 0.f, -0.f));
-        REQUIRE(simFrame::turnComponent(right.initialAimRotationAxis) == Catch::Approx(-1.f).margin(kEps));
+        REQUIRE(simFrame::turnComponent(right.initialAimRotationAxis) == Catch::Approx(1.f).margin(kEps));
 
         const auto left = machineTick(glm::vec3(1.f, 0.f, -0.f));
-        REQUIRE(simFrame::turnComponent(left.initialAimRotationAxis) == Catch::Approx(1.f).margin(kEps));
+        REQUIRE(simFrame::turnComponent(left.initialAimRotationAxis) == Catch::Approx(-1.f).margin(kEps));
     }
 }
 

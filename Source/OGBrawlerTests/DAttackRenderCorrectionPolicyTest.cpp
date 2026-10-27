@@ -201,7 +201,8 @@ namespace dAttackRenderCorrectionPolicyTest
             const glm::quat start = radialRotationFromIntegrate(staticData.m_attackSimulationStaticData, 0u,
                 InvalidAttackSequenceId);
             const float angle = swingSequence().getAngle(static_cast<float>(swingStep) * kDt) - swingSequence().getInitialAngle();
-            return glm::angleAxis(angle, glm::vec3(-0.f, -1.f, 0.f)) * start;
+            // The table's angle turns about the turn axis, +Y since og-sim-metres-yup task 26.
+            return glm::angleAxis(angle, glm::vec3(0.f, 1.f, 0.f)) * start;
         }
 
         glm::quat guardRotation(const glm::vec3& aim) const

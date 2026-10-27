@@ -88,16 +88,17 @@ constexpr glm::dquat toLegacyRotation(const glm::quat& q)
 
 constexpr glm::dvec2 toLegacyPlanar(const glm::vec2& p)
 {
-    return glm::dvec2(double(p.x), double(p.y));
+    return glm::dvec2(double(p.x), -double(p.y));
 }
 
 static_assert(toLegacyAxes(glm::vec3(3.f, 5.f, -2.f)) == glm::dvec3(2.0, 3.0, 5.0)
         && toLegacyAxial(glm::vec3(-3.f, -5.f, 2.f)) == glm::dvec3(2.0, 3.0, 5.0)
         && toLegacyPosition(glm::vec3(0.5f, 0.25f, -2.f)) == glm::dvec3(200.0, 50.0, 25.0)
-        && toLegacyPlanar(glm::vec2(-5.f, 2.f)) == glm::dvec2(-5.0, 2.0) && toLegacyCm(0.5f) == 50.0,
-    "goldenTrace: the inverses map the simulation frame (metres, +Y up, -Z forward, +X right) back to the recorded "
-    "frame (Unreal centimetres, Z up, chart P). Was the inverse rows of SimulationFrameTest, which tested them "
-    "in SimulationFrame.h.");
+        && toLegacyPlanar(glm::vec2(-5.f, 2.f)) == glm::dvec2(-5.0, -2.0) && toLegacyCm(0.5f) == 50.0,
+    "goldenTrace: the inverses map the simulation frame (metres, +Y up, -Z forward, +X right, the native chart "
+    "(forward, left)) back to the recorded frame (Unreal centimetres, Z up, chart P (forward, right)). Was the "
+    "inverse rows of SimulationFrameTest, which tested them in SimulationFrame.h; the planar row was the identity "
+    "until og-sim-metres-yup task 26.");
 
 constexpr char tagLetter(Tag tag) { return kTagLetters[static_cast<std::size_t>(tag)]; }
 

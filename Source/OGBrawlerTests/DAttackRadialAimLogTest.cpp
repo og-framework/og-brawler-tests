@@ -53,7 +53,9 @@
 namespace dattackradialaimlogtests
 {
 
-constexpr glm::vec3 kTurnAxis = glm::vec3(-0.f, -1.f, 0.f);
+// The machine's near-pole aim fallback axis (DAttackMachineSimulation.h, aimFallbackAxis): the
+// turn axis of chart P, kept at (0, -1, 0) when og-sim-metres-yup task 26 made the turn axis +Y.
+constexpr glm::vec3 kAimFallbackAxis = glm::vec3(-0.f, -1.f, 0.f);
 
 std::string axisText(const glm::vec3& axis)
 {
@@ -212,7 +214,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheAimAngleAndAxis",
     using namespace dattackradialaimlogtests;
 
     const std::string line =
-        captureSetInitialConditionsLine(glm::pi<float>() * 0.25f, kTurnAxis);
+        captureSetInitialConditionsLine(glm::pi<float>() * 0.25f, kAimFallbackAxis);
 
     INFO("line: " << line);
     REQUIRE_FALSE(line.empty());                                   // the edge really fired
@@ -220,7 +222,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheAimAngleAndAxis",
     CHECK(line.rfind("[Radial.setInitialConditions] id=7 tick=42 seq=0 aimAngle=", 0) == 0);
     CHECK(line.find("seq=0") != std::string::npos);
     CHECK(line.find("aimAngle=0.7854") != std::string::npos);
-    CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kTurnAxis))) != std::string::npos);
+    CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kAimFallbackAxis))) != std::string::npos);
 }
 
 // ===========================================================================
@@ -242,7 +244,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheAimAngleAndAxis",
 // axis through `glm::abs(glm::abs(aimDot) - 1.f) < 0.0001f`, a comparison against NaN --
 // precisely the shape /fp:fast is allowed to rewrite. Measured here, 2026-09-19: that
 // predicate is TRUE for a NaN aimDot on this toolchain, so a degenerate aim takes the
-// `turnAxis` branch and its AXIS renders as a clean cardinal (0.000,-1.000,0.000) -- it is
+// `aimFallbackAxis` branch and its AXIS renders as a clean cardinal (0.000,-1.000,0.000) -- it is
 // indistinguishable from the innocent cause (A). The `aimAngle` field is the ONLY place
 // the nan surfaces, which is why the runbook must read that field first.
 // ===========================================================================
@@ -253,7 +255,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
     using namespace dattackradialaimlogtests;
 
     constexpr glm::vec3 defaultForward = glm::vec3(0.f, 0.f, -1.f);
-    constexpr glm::vec3 turnAxis = kTurnAxis;
+    constexpr glm::vec3 aimFallbackAxis = kAimFallbackAxis;
 
     volatile float neutralAimX = 0.f;
     volatile float neutralAimY = 0.f;
@@ -272,7 +274,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
     INFO("aimEqualsForward: " << aimEqualsForward);
     CHECK(aimEqualsForward);
     const glm::vec3 degenerateAxis = aimEqualsForward
-        ? turnAxis
+        ? aimFallbackAxis
         : glm::normalize(glm::cross(defaultForward, degenerateAim));
 
     const std::string line = captureSetInitialConditionsLine(degenerateAngle, degenerateAxis);
@@ -284,7 +286,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
     // ⭐ WHAT THE RUNBOOK'S READER MUST NOT BE FOOLED BY. Because the branch above is
     // taken, the AXIS of a degenerate aim renders as a clean cardinal (0,0,1) -- it looks
     // exactly like the innocent cause (A). Only the ANGLE carries the nan.
-    CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kTurnAxis))) != std::string::npos);
+    CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kAimFallbackAxis))) != std::string::npos);
 
     // The angle field itself must carry the nan. MSVC renders the indefinite NaN that
     // `0 * inf` produces as "-nan(ind)"; a quiet NaN as "nan". Both begin "nan" after the
@@ -335,7 +337,7 @@ TEST_CASE("DAttackRadial.EveryBranchLineIsVerboseOnly", "[DAttack][RadialAimLog]
     for (const Row& row : rows)
     {
         const std::vector<std::string> lines = captureRadialLines(
-            0.f, kTurnAxis, row.icSeq, row.stSeq, row.timer);
+            0.f, kAimFallbackAxis, row.icSeq, row.stSeq, row.timer);
 
         std::size_t branchLines = 0, expectedHits = 0, otherRadialLines = 0;
         for (const std::string& line : lines)

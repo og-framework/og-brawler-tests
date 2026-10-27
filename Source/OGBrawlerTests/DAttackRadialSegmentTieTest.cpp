@@ -41,7 +41,7 @@ void requireParallelDirectionIsSegmentZero(unsigned int sequenceId, bool expectD
 
 TEST_CASE("DAttack.RadialSegmentTie.ParallelDirectionIsSegmentZeroOnDescendingSequences", "[DAttack][RadialSegmentTie]")
 {
-    for (const unsigned int sequenceId : { 1u, 3u })
+    for (const unsigned int sequenceId : { 0u, 2u, 4u })
     {
         dAttackRadialSegmentTieTest::requireParallelDirectionIsSegmentZero(sequenceId, true);
     }
@@ -49,7 +49,7 @@ TEST_CASE("DAttack.RadialSegmentTie.ParallelDirectionIsSegmentZeroOnDescendingSe
 
 TEST_CASE("DAttack.RadialSegmentTie.ParallelDirectionIsSegmentZeroOnAscendingSequences", "[DAttack][RadialSegmentTie]")
 {
-    for (const unsigned int sequenceId : { 0u, 2u })
+    for (const unsigned int sequenceId : { 1u, 3u })
     {
         dAttackRadialSegmentTieTest::requireParallelDirectionIsSegmentZero(sequenceId, false);
     }

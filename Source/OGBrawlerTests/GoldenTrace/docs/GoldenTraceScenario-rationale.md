@@ -74,7 +74,7 @@ hold-guard flag. The schedule, with the ticks the recorded trace shows:
 | 1–25 | both fall from 1.5 m and land | hover at 1.06 m by tick 24 |
 | 40 | A swings right at B; B holds guard aimed 0.6 rad right of A | B's guard blocks at tick 64; A enters GuardFlinch |
 | 90 | A swings left; B's guard is aimed 0.6 rad to the other side | blocked at tick 114 |
-| 140 | A swings right; B aims away | hit at tick 164: knockback backward (`hitDirectionXY` = (−1, 0) in the (forward, right) chart) |
+| 140 | A swings right; B aims away | hit at tick 164: knockback backward (`hitDirectionXY` = (−1, 0) as the trace records it, in the (forward, right) chart; the live value in the native (forward, left) chart is its mirror, the same (−1, 0) up to the sign of the zero) |
 | 164–238 | — | B slides off the ledge, falls, and dies at tick 238 (respawn tick 358) |
 | 185–334 | A walks forward | up the ramp, along the plateau, down the step; stops at forward ≈ 22.415 m |
 | 358 | — | B respawns at its spawn point and lands |

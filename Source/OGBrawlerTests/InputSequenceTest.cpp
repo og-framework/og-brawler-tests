@@ -10,9 +10,11 @@
 // ---------------------------------------------------------------------------
 // Convention (see InputSequence.h):
 //   angle 0      = aim direction (Forward).
-//   angle +pi/2  = right-of-aim  (numpad Down, clockwise from forward).
+//   angle +pi/2  = left-of-aim   (numpad Down, counter-clockwise from forward seen from above;
+//                                  this said right-of-aim and clockwise until og-sim-metres-yup
+//                                  task 26 corrected InputSequence.h).
 //   angle +pi    = opposite of aim (numpad Back).
-//   angle -pi/2  = left-of-aim   (numpad Up).
+//   angle -pi/2  = right-of-aim  (numpad Up).
 //   angles wrap at +-pi.
 //
 // The matcher reads moveDirectionWorld (world-frame XY) from history entries

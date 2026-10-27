@@ -337,6 +337,35 @@ TEST_CASE("StickRouting: cameraRelativeDirection moves D along the camera's righ
 	}
 }
 
+void checkCameraRelativeAtExactForward(const glm::vec3& camForward, const glm::vec2& stick, const glm::vec3& expected)
+{
+	const glm::vec3 moved =
+		dInput::stickRouting::cameraRelativeDirection(camForward, simFrame::fromForwardRight(stick, 0.f));
+	CAPTURE(camForward.x, camForward.y, camForward.z, stick.x, stick.y, moved.x, moved.y, moved.z, expected.x, expected.y,
+		expected.z);
+	REQUIRE(std::isfinite(moved.x));
+	REQUIRE(std::isfinite(moved.y));
+	REQUIRE(std::isfinite(moved.z));
+	CHECK(moved.x == Catch::Approx(expected.x).margin(1e-5));
+	CHECK(moved.y == Catch::Approx(expected.y).margin(1e-5));
+	CHECK(moved.z == Catch::Approx(expected.z).margin(1e-5));
+}
+
+TEST_CASE("StickRouting: cameraRelativeDirection is finite and correct with the camera forward exactly along kLeft or kRight",
+	"[SimulatableBrawler][StickRouting][CameraRelativeDirection]")
+{
+	for (const float cameraHeight : { 0.f, -1.2f })
+	{
+		const glm::vec3 alongRight = simFrame::withHeight(simFrame::kRight, cameraHeight);
+		checkCameraRelativeAtExactForward(alongRight, kWStick, simFrame::kRight);
+		checkCameraRelativeAtExactForward(alongRight, kDStick, -simFrame::kForward);
+
+		const glm::vec3 alongLeft = simFrame::withHeight(simFrame::kLeft, cameraHeight);
+		checkCameraRelativeAtExactForward(alongLeft, kWStick, simFrame::kLeft);
+		checkCameraRelativeAtExactForward(alongLeft, kDStick, simFrame::kForward);
+	}
+}
+
 constexpr float kAimDeadzone = 0.2f;
 
 TEST_CASE("StickRouting: the latch tests use the shipped stick deadzones",

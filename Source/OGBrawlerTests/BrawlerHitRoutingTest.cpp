@@ -872,7 +872,7 @@ TEST_CASE("HitRouting.KnockbackDirectionFromPositionsWithAimFallback",
         rig.raiseRadialHit(0u, 1u);
         rig.route(3u);
 
-        const glm::vec2 expected = glm::normalize(glm::vec2(30.f, 40.f));
+        const glm::vec2 expected = glm::normalize(glm::vec2(30.f, -40.f));
         const glm::vec2 actual = rig.inbound(1u).hitDirectionXY;
         INFO("expected (" << expected.x << ", " << expected.y << ")  actual ("
              << actual.x << ", " << actual.y << ")");
@@ -896,7 +896,7 @@ TEST_CASE("HitRouting.KnockbackDirectionFromPositionsWithAimFallback",
 
         const glm::vec2 actual = rig.inbound(1u).hitDirectionXY;
         const glm::vec2 expected(glm::cos(glm::radians(30.f)),
-                                 axisZ * glm::sin(glm::radians(30.f)));
+                                 -axisZ * glm::sin(glm::radians(30.f)));
         INFO("aim 30 deg about z=" << axisZ << ": expected (" << expected.x << ", "
              << expected.y << ")  actual (" << actual.x << ", " << actual.y << ")");
         REQUIRE(glm::length(actual) == Catch::Approx(1.f).margin(1e-5f));
@@ -1003,7 +1003,7 @@ TEST_CASE("HitRouting.ProjectileHitStunsInPlace", "[SimulatableBrawler][HitRouti
         REQUIRE(slice.reactionKind == HitReactionKind::Knockback);
         REQUIRE(slice.knockbackSpeed == Catch::Approx(12.f).margin(1e-6f));
         REQUIRE(slice.hitDirectionXY.x == Catch::Approx(0.f).margin(1e-5f));
-        REQUIRE(slice.hitDirectionXY.y == Catch::Approx(1.f).margin(1e-5f));
+        REQUIRE(slice.hitDirectionXY.y == Catch::Approx(-1.f).margin(1e-5f));
         // ...and the dwell is derived from the flipped speed, not from the shipped 2000.
         REQUIRE(slice.flinchDuration
                 == Catch::Approx(12.f / rig.launchDecel()).margin(1e-6f));
@@ -1548,7 +1548,7 @@ TEST_CASE("HitRouting.KnockbackDirectionIsTheSwingTangentWithFallback",
              << hit.hitDirectionXY.y << ")  [away-from-attacker would be (1, 0)]");
         REQUIRE(hit.wasHitThisTick);
         REQUIRE(hit.hitDirectionXY.x == Catch::Approx(0.f).margin(1e-4f));
-        REQUIRE(hit.hitDirectionXY.y == Catch::Approx(1.f).margin(1e-4f));
+        REQUIRE(hit.hitDirectionXY.y == Catch::Approx(-1.f).margin(1e-4f));
         REQUIRE(glm::length(hit.hitDirectionXY) == Catch::Approx(1.f).margin(1e-4f));
     }
 
@@ -1564,7 +1564,7 @@ TEST_CASE("HitRouting.KnockbackDirectionIsTheSwingTangentWithFallback",
              << hit.hitDirectionXY.y << ")");
         REQUIRE(hit.wasHitThisTick);
         REQUIRE(hit.hitDirectionXY.x == Catch::Approx(0.f).margin(1e-4f));
-        REQUIRE(hit.hitDirectionXY.y == Catch::Approx(-1.f).margin(1e-4f));
+        REQUIRE(hit.hitDirectionXY.y == Catch::Approx(1.f).margin(1e-4f));
     }
 
     // 3. THE DEGENERATE FALLBACK, on the posed rig because the geometry that produces it is
@@ -1581,7 +1581,7 @@ TEST_CASE("HitRouting.KnockbackDirectionIsTheSwingTangentWithFallback",
         rig.route(9u);
 
         const glm::vec2 actual = rig.inbound(1u).hitDirectionXY;
-        const glm::vec2 expected = glm::normalize(glm::vec2(300.f, 400.f));
+        const glm::vec2 expected = glm::normalize(glm::vec2(300.f, -400.f));
         INFO("vertical tangent -> (" << actual.x << ", " << actual.y << "); expected the "
              << "away-from-attacker (" << expected.x << ", " << expected.y << ")");
         REQUIRE(actual.x == Catch::Approx(expected.x).margin(1e-5f));
@@ -1662,7 +1662,7 @@ TEST_CASE("HitRouting.ProjectileOnFlinchLaunchesElseStuns", "[SimulatableBrawler
             const HitReactionSpec& onFlinch = rig.staticData.m_projectileHitOnFlinchReaction;
             REQUIRE(slice.knockbackSpeed == Catch::Approx(onFlinch.knockbackSpeed).margin(1e-6f));
             REQUIRE(slice.hitDirectionXY.x == Catch::Approx(0.f).margin(1e-5f));
-            REQUIRE(slice.hitDirectionXY.y == Catch::Approx(1.f).margin(1e-5f));
+            REQUIRE(slice.hitDirectionXY.y == Catch::Approx(-1.f).margin(1e-5f));
             // The dwell resolves as the melee knockback's does: max(lockout 0, speed / launchDecel).
             REQUIRE(slice.flinchDuration
                     == Catch::Approx(onFlinch.knockbackSpeed / rig.launchDecel()).margin(1e-6f));

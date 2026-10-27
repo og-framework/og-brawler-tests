@@ -4125,14 +4125,16 @@ TEST_CASE("BrawlerMovement.KnockbackHitLaunches", "[BrawlerMovement]")
     ScriptedRig rig;
     seatOnFlatGroundAtRideHeight(rig);
 
-    const glm::vec2 first = glm::normalize(glm::vec2(1.f, -1.f));
+    // `hitDirectionXY` is a chart value, (forward, left) since og-sim-metres-yup task 26, so this
+    // forward-left shove is written with a positive y; `forwardRight` reads (forward, right).
+    const glm::vec2 first = glm::normalize(glm::vec2(1.f, 1.f));
     rig.hit(HitReactionKind::Knockback, first, 0.f);
     rig.tick(1u, stick(-1.f, 0.f));   // the stick is IGNORED: the arm is committed, not modelled
 
     INFO("velocity=(" << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << ", "
          << simFrame::height(rig.state.velocity) << ") for direction (" << first.x << ", " << first.y << ")");
     REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(first.x * rig.knockbackSpeed()).margin(1e-4f));
-    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(first.y * rig.knockbackSpeed()).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(-first.y * rig.knockbackSpeed()).margin(1e-4f));
     // ⭐ THE SPEED IS THE SPEED, not its projection: `u` and `v` are orthonormal, so mapping the
     // horizontal world direction onto them component-wise preserves the magnitude exactly.
     REQUIRE(glm::length(simFrame::forwardRight(rig.state.velocity))
@@ -4147,7 +4149,7 @@ TEST_CASE("BrawlerMovement.KnockbackHitLaunches", "[BrawlerMovement]")
     // assignment (architect review 2026-09-12 section 2.4): the second hit's direction and speed
     // are the whole of the answer, and the decayed remainder of the first is discarded. A sum
     // would read ~39.33 m/s here, and in a direction neither hit asked for.
-    const glm::vec2 second(0.f, 1.f);
+    const glm::vec2 second(0.f, -1.f);   // the chart's -left: a shove to the right
     rig.hit(HitReactionKind::Knockback, second, 0.f);
     rig.tick(3u, stick(0.f, 0.f));
     INFO("re-launched to (" << simFrame::forwardRight(rig.state.velocity).x << ", " << simFrame::forwardRight(rig.state.velocity).y << ")");
@@ -4351,13 +4353,15 @@ TEST_CASE("BrawlerMovement.KnockbackIntoWallStopsAtWall", "[BrawlerMovement]")
     rig.sd.drivesBody = true;
     rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
 
-    const glm::vec2 direction = glm::normalize(glm::vec2(1.f, 1.f));
+    // `hitDirectionXY` is a chart value, (forward, left) since og-sim-metres-yup task 26, so this
+    // forward-right shove is written with a negative y; `forwardRight` reads (forward, right).
+    const glm::vec2 direction = glm::normalize(glm::vec2(1.f, -1.f));
     rig.hit(HitReactionKind::Knockback, direction, 0.f);
     rig.tick(1u, stick(0.f, 0.f));
 
     const glm::vec3 arriving = rig.state.velocity;
     REQUIRE(simFrame::forwardRight(arriving).x == Catch::Approx(direction.x * rig.knockbackSpeed()).margin(1e-4f));
-    REQUIRE(simFrame::forwardRight(arriving).y == Catch::Approx(direction.y * rig.knockbackSpeed()).margin(1e-4f));
+    REQUIRE(simFrame::forwardRight(arriving).y == Catch::Approx(-direction.y * rig.knockbackSpeed()).margin(1e-4f));
 
     // The solver stops the body at the wall and pushes it out along the normal.
     rig.engineStepAndCapture(rig.state.bodyState.position + arriving * kDt + wallNormal * 0.02f,
@@ -4378,7 +4382,7 @@ TEST_CASE("BrawlerMovement.KnockbackIntoWallStopsAtWall", "[BrawlerMovement]")
     // 2. ...AND THE TANGENTIAL REMAINDER IS STILL DECAYING AT `launchDecel`, not zeroed with it.
     //    `moveTowards` works on the 2D pair, so the step it takes is along the REMAINING
     //    direction: with x killed, the whole of one tick's decay lands on y.
-    const float remaining = direction.y * rig.knockbackSpeed();
+    const float remaining = -direction.y * rig.knockbackSpeed();
     REQUIRE(simFrame::forwardRight(rig.state.velocity).y
             == Catch::Approx(remaining - rig.sd.launchDecel * kDt).margin(1e-4f));
     REQUIRE(simFrame::forwardRight(rig.state.velocity).y > 0.f);

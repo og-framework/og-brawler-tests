@@ -170,7 +170,7 @@ TEST_CASE("AimVizMarker: aim +X puts the marker on +Y, Unreal's screen-right", "
 	CHECK(kAimRightMarkerOverhang == kMarkerOverhang);
 }
 
-TEST_CASE("AimVizMarker: a rotated aim gives a perpendicular marker of length innerRadius + 10 on the +pi/2 side",
+TEST_CASE("AimVizMarker: a rotated aim gives a perpendicular marker of length innerRadius + 10 on the -pi/2 side",
 	"[DAttack][AimVizMarker]")
 {
 	using namespace aimVizMarkerTest;
@@ -184,8 +184,8 @@ TEST_CASE("AimVizMarker: a rotated aim gives a perpendicular marker of length in
 		const glm::vec3 marker = *markerEnd - kRoot;
 		CHECK(glm::dot(aim, marker) == Catch::Approx(0.f).margin(kLengthTolerance));
 		CHECK(glm::length(marker) == Catch::Approx(kInnerRadius + kMarkerOverhang).margin(kLengthTolerance));
-		CHECK(crossZ(aim, marker) > 0.f);
-		CHECK(signedAngleAboutUp(aim, marker) == Catch::Approx(glm::pi<float>() / 2.f).margin(kTolerance));
+		CHECK(crossZ(aim, marker) < 0.f);
+		CHECK(signedAngleAboutUp(aim, marker) == Catch::Approx(-glm::pi<float>() / 2.f).margin(kTolerance));
 		++aimsChecked;
 	}
 	CHECK(aimsChecked == 7);
@@ -202,7 +202,7 @@ TEST_CASE("AimVizMarker: an aim with a downward z still gives a horizontal marke
 	CHECK(simFrame::height(*markerEnd) == simFrame::height(kRoot));
 	CHECK(glm::length(marker) == Catch::Approx(kInnerRadius + kMarkerOverhang).margin(kLengthTolerance));
 	CHECK(glm::dot(aimXY, marker) == Catch::Approx(0.f).margin(kLengthTolerance));
-	CHECK(crossZ(aimXY, marker) > 0.f);
+	CHECK(crossZ(aimXY, marker) < 0.f);
 }
 
 TEST_CASE("AimVizMarker: an aim straight down or up gives no marker", "[DAttack][AimVizMarker]")
@@ -237,7 +237,7 @@ TEST_CASE("AimVizMarker: visualize draws no marker for a vertical aim", "[DAttac
 	CHECK(referenceLines(verticalRecording).size() + 1 == referenceLines(horizontalRecording).size());
 }
 
-TEST_CASE("AimVizMarker: the inner arc spans -0.1 rad to pi/2 + 0.1 rad on the marker's side",
+TEST_CASE("AimVizMarker: the inner arc spans 0.1 rad to -(pi/2 + 0.1) rad on the marker's side",
 	"[DAttack][AimVizMarker]")
 {
 	using namespace aimVizMarkerTest;
@@ -253,16 +253,16 @@ TEST_CASE("AimVizMarker: the inner arc spans -0.1 rad to pi/2 + 0.1 rad on the m
 		const float halfAngle = inner[0].halfAngle;
 		const float centerOffset = signedAngleAboutUp(aim, inner[0].direction);
 		CHECK(halfAngle == Catch::Approx(glm::pi<float>() / 4.f + kAimArcOverhang).margin(kTolerance));
-		CHECK(centerOffset == Catch::Approx(glm::pi<float>() / 4.f).margin(kTolerance));
-		CHECK(centerOffset - halfAngle == Catch::Approx(-kAimArcOverhang).margin(kTolerance));
-		CHECK(centerOffset + halfAngle == Catch::Approx(glm::pi<float>() / 2.f + kAimArcOverhang).margin(kTolerance));
+		CHECK(centerOffset == Catch::Approx(-glm::pi<float>() / 4.f).margin(kTolerance));
+		CHECK(centerOffset + halfAngle == Catch::Approx(kAimArcOverhang).margin(kTolerance));
+		CHECK(centerOffset - halfAngle == Catch::Approx(-(glm::pi<float>() / 2.f + kAimArcOverhang)).margin(kTolerance));
 		CHECK(inner[0].colorId == 1u);
 		CHECK(inner[0].thickness == Catch::Approx(kReferenceThickness));
 
 		const std::optional<glm::vec3> markerEnd = aimRightMarkerEnd(kRoot, aim, kInnerRadius);
 		REQUIRE(markerEnd.has_value());
-		CHECK(crossZ(inner[0].direction, *markerEnd - kRoot) > 0.f);
-		CHECK(signedAngleAboutUp(aim, *markerEnd - kRoot) < centerOffset + halfAngle);
+		CHECK(crossZ(inner[0].direction, *markerEnd - kRoot) < 0.f);
+		CHECK(signedAngleAboutUp(aim, *markerEnd - kRoot) > centerOffset - halfAngle);
 		++aimsChecked;
 	}
 	CHECK(aimsChecked == 3);

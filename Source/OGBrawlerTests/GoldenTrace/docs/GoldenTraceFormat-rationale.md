@@ -29,10 +29,13 @@ knobs were deleted, and a `static_assert` after them pins their table (the rows 
 | `2` | a planar chart value | `toLegacyPlanar` | movement `committedStepDir`, the inbound hit's `hitDirectionXY` |
 | `e` | an exact, discrete field | none, compared for equality | flags, machine state, hit counts and ticks, ring-out |
 
-`toLegacyPlanar` is the identity under today's planar chart, P (forward, right). It is the one inverse
-that changes if the chart becomes N (forward, left; `SimulationFrame-rationale.md` §3), so a planar
-field recorded after that change is mirrored back into chart P and still compares with one recorded
-before it.
+`toLegacyPlanar` is `(x, -y)`: since og-sim-metres-yup task 26 the planar chart is N (forward, left;
+`SimulationFrame-rationale.md` §3), and the converter mirrors a planar value back into chart P
+(forward, right), so a trace recorded under N still compares with the one recorded under P. It was the
+identity until task 26, and it is the one inverse the chart change touched: `toLegacyAxial` negates all
+three components because the simulation's frame reflects Unreal's, which the planar chart does not
+change, so it does not read the chart. The mirror of a `+0` is a `-0`, so every planar zero is counted
+by the exact comparison's signed-zero line rather than failed.
 No extents are recorded, so there is no extents tag.
 
 ## 2. The record
