@@ -24,6 +24,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -62,6 +64,26 @@ std::string axisText(const glm::vec3& axis)
     char text[64];
     std::snprintf(text, sizeof(text), "axis=(%.3f,%.3f,%.3f)", axis.x, axis.y, axis.z);
     return text;
+}
+
+// [og-ground-aligned-attacks task 5c] Parses the line's ` up=(x,y,z)` tail, the swing-plane
+// normal R_ic * kUp the line logs; false when the token is missing or malformed.
+bool parseUp(const std::string& line, glm::vec3& up)
+{
+    const std::size_t at = line.find(" up=(");
+    if (at == std::string::npos)
+        return false;
+    const char* cursor = line.c_str() + at + 5;
+    const char separators[] = { ',', ',', ')' };
+    for (int component = 0; component < 3; ++component)
+    {
+        char* end = nullptr;
+        up[component] = std::strtof(cursor, &end);
+        if (end == cursor || *end != separators[component])
+            return false;
+        cursor = end + 1;
+    }
+    return true;
 }
 
 std::string withUnsignedZeros(std::string text)
@@ -223,6 +245,66 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheAimAngleAndAxis",
     CHECK(line.find("seq=0") != std::string::npos);
     CHECK(line.find("aimAngle=0.7854") != std::string::npos);
     CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kAimFallbackAxis))) != std::string::npos);
+
+    // [og-ground-aligned-attacks task 5c] A flat (heading-only) aim keeps the swing plane level:
+    // `up=` parses and is exactly kUp (`%.9g` round-trips a float, so this is a bit compare).
+    glm::vec3 up(0.f);
+    REQUIRE(parseUp(line, up));
+    INFO("up: " << up.x << ", " << up.y << ", " << up.z);
+    CHECK(up == simFrame::kUp);
+}
+
+// ===========================================================================
+// 1b. [og-ground-aligned-attacks task 5c] `up=` IS R_ic * kUp: kUp for every heading-only
+//     aim (about the turn axis or the fallback axis), the rotated kUp for a tilted one.
+//
+// The tilted row is the shape task 5's slope path writes (an axis off the turn axis); it is
+// what makes the flat rows a control rather than a constant: a hard-coded `kUp` fails it.
+// ===========================================================================
+
+TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheSwingPlaneUp",
+          "[DAttack][RadialAimLog]")
+{
+    using namespace dattackradialaimlogtests;
+
+    const float headings[] = { 0.f, 0.5f, glm::pi<float>() * 0.5f, -2.3f, glm::pi<float>() };
+    const glm::vec3 headingAxes[] = { simFrame::kTurnAxis, kAimFallbackAxis };
+    for (const glm::vec3& axis : headingAxes)
+    {
+        for (const float heading : headings)
+        {
+            const std::string line = captureSetInitialConditionsLine(heading, axis);
+            INFO("heading: " << heading << "  line: " << line);
+            glm::vec3 up(0.f);
+            REQUIRE(parseUp(line, up));
+            CHECK(up == simFrame::kUp);
+        }
+    }
+
+    const float tiltAngle = 0.5f;
+    const glm::vec3 tiltAxis = glm::vec3(1.f, 0.f, 0.f);
+    const glm::vec3 expected = glm::mat3(glm::rotate(glm::mat4(1.f), tiltAngle, tiltAxis)) * simFrame::kUp;
+    const std::string line = captureSetInitialConditionsLine(tiltAngle, tiltAxis);
+    INFO("line: " << line);
+    glm::vec3 up(0.f);
+    REQUIRE(parseUp(line, up));
+    INFO("up: " << up.x << ", " << up.y << ", " << up.z << "  expected: " << expected.x << ", " << expected.y << ", " << expected.z);
+    // The header and this TU compile the rotation separately (/fp:fast), so they may round it a
+    // few ULPs apart: 6e-7 is about five float ULPs at 1.
+    CHECK(glm::abs(up.x - expected.x) <= 6e-7f);
+    CHECK(glm::abs(up.y - expected.y) <= 6e-7f);
+    CHECK(glm::abs(up.z - expected.z) <= 6e-7f);
+    CHECK(glm::abs(up.y - 1.f) > 0.1f);            // really tilted: cos(0.5) = 0.8776
+
+    // [lead follow-up, task 5c] `up=` must resolve one float ULP: nine significant digits
+    // round-trip any float, so the parsed floats ARE the logged ones, and reprinting them with
+    // `%.9g` gives the token back. A `%.6f` token ("0.877582") fails this.
+    char reprint[96];
+    std::snprintf(reprint, sizeof(reprint), " up=(%.9g,%.9g,%.9g)",
+                  static_cast<double>(up.x), static_cast<double>(up.y), static_cast<double>(up.z));
+    INFO("reprint: " << reprint);
+    REQUIRE(line.size() >= std::strlen(reprint));
+    CHECK(line.compare(line.size() - std::strlen(reprint), std::string::npos, reprint) == 0);
 }
 
 // ===========================================================================

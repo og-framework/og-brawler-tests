@@ -2247,7 +2247,7 @@ TEST_CASE("BrawlerMovement.XYKnockbackDoesNotDetach", "[BrawlerMovement]")
         {
             state.flags = flags;
             INFO("uncommitted vz=" << vz << " flags=0x" << std::hex << int(flags));
-            REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, false));
+            REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, false));
         }
     }
 
@@ -2257,27 +2257,27 @@ TEST_CASE("BrawlerMovement.XYKnockbackDoesNotDetach", "[BrawlerMovement]")
     // zero, and `> 0.f` is STRICT, so a 5 m shove stays SUPPORTED and keeps its hover.
     state.flags = 0u;
     state.velocity = glm::vec3(-20.f, 0.f, -20.f);
-    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, true));
+    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, true));
 
     // ...and a committed body still SETTLING downward does not detach either. Detaching on a
     // negative vertical channel would drop a knockback out of support on any tick the servo is
     // pulling it back to ride height.
     state.velocity = glm::vec3(0.f, -0.01f, -20.f);
-    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, true));
+    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, true));
 
     // ARM 3 -- COMMITTED AND RISING: the arm the fence was written for, and the one an authored
     // lift (a launcher, a ski jump) reaches without adding a single enumerator.
     state.velocity = glm::vec3(0.f, 0.01f, -0.f);
-    REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, true));
+    REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, true));
     state.velocity = glm::vec3(0.f, 20.f, -20.f);
-    REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, true));
+    REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, true));
 
     // ⭐ THE DISCRIMINATOR. The same rising velocity, uncommitted, does NOT detach — which is what
     // makes arm 3 a statement about `committed` and not merely about the sign of `vz`. Without
     // this line a predicate that read `dot(velocity, up) > 0` alone would pass every arm above,
     // and `UpwardLaunchIsDampedNotOverwritten` — which seeds exactly this velocity while
     // uncommitted — would have started detaching silently.
-    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, false));
+    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, false));
 }
 
 // ===========================================================================

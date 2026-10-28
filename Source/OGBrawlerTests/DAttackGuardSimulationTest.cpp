@@ -195,7 +195,7 @@ static TickResult tick(const glm::vec3& aim,
     AllInput<MockPhysicsAdapter, MockSpatialQueryAdapter> allInput{ pi, utils };
 
     const auto bindings = makeBindings();
-    integrate(kDt, allInput, staticData, deps, bindings, derived);
+    integrate(kDt, allInput, staticData, deps, bindings, derived, brawlerGround::GroundSample{});
 
     TickResult r;
     r.bodyTransform = physics.transforms[kOwnBodyValue];

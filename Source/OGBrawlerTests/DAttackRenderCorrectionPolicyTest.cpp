@@ -144,7 +144,7 @@ namespace dAttackRenderCorrectionPolicyTest
         bindings.ownBodyId = BodyId{ 0u };
         bindings.parentBodyId = BodyId{ 1u };
         DerivedState derived{};
-        integrate(kDt, input, staticData, deps, bindings, derived);
+        integrate(kDt, input, staticData, deps, bindings, derived, brawlerGround::GroundSample{});
         return composite.get<State>().bodyState.rotation;
     }
 

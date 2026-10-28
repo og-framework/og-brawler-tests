@@ -3,49 +3,23 @@
 
 Source: `BrawlerJoltGoldenTraceTest.cpp`. This file has no guards document: nothing in it needs a `⛔`
 tag. The format, the metrics and the envelope are in `GoldenTraceFormat-rationale.md`; the scenario is in
-`GoldenTraceScenario-rationale.md`.
+`GoldenTraceScenario-rationale.md`; the harness is in `GoldenTraceScene-rationale.md`.
 
-## 1. The harness
+## 1. The harness and the refactor
 
-The `Scene` runs the brawler the way an inline Jolt authority does, with no UE in the loop:
+The harness this test runs, `goldenTraceScene::Scene`, lives in `GoldenTraceScene.h` and is described in
+`GoldenTraceScene-rationale.md`. Until og-ground-aligned-attacks task 3 it was this file's own `Scene`; task 3 moved it,
+with the run, envelope, comparison and recording helpers, into that header as a template on a scenario type, so that the
+slope golden (`BrawlerJoltSlopeGoldenTraceTest-rationale.md`) runs through the same code. This file now keeps:
 
-- **World.** The slot template is `joltTickWorldHost::slotTemplateOf` of `SimulatableBrawler`, the world
-  config is `joltTickWorldHost::stepWorldConfigOf` (ring depth 0, as on the authority) and the statics are
-  built with `joltTickWorldHost::buildStatics`: the three calls `JoltTickWorldHost::build` makes. Gravity is
-  the movement StaticData's `gravity` along the frame's up (`simFrame::withHeight`), which in the simulation's
-  frame (+Y up) is `(0, g, 0)`, the vector the UE backend gives the Jolt world. No brawler body takes that gravity: each one's
-  `BodyDescriptor` has `enableGravity` false, so Jolt gives it a gravity factor of 0, and a wrong world
-  gravity does not change the trace (measured: with the literal `(0, 0, g)` in its place at Y-up, the
-  bounds comparison prints the same maxima, to every printed digit, as with the correct value). The gravity the trace sees is the movement simulation's own, applied
-  along its up axis.
-- **Adapters.** `JoltPhysicsBodyAdapter` and `JoltSpatialQueryAdapter` over that world, with the six
-  collision categories the brawler maps. A `JoltWorldAccessScope` stands in for the world lock, as in the
-  og-simulation-tests Jolt rigs.
-- **Registration.** `Scene::registerCharacter` is `JoltTickWorldHost::bind` (one `JoltPhysicsFactory` per
-  character, each declaration's body, shapes and query volumes) followed by the brawler roster's
-  `BrawlerRosterUImpl::onBodiesCreated` (the capsule binding, the spawn teleport, the ring-out spawn slot),
-  then the store, the systems' registration hook and the body-slot occupancy, in the order
-  `UESimulationSession::tryRegister` runs them.
-- **Static data.** `simulatableBrawler::StaticData` from the scenario's `scenarioStaticData`, with the
-  values the shipped game gives: the defaults of the four movement console variables (continuous
-  accel/brake, walk 1 m/s, step period 20 ticks, step speed 1 m/s) and the engine's default gravity
-  (−9.8 m/s², UE's −980 cm/s²), as native metre literals. The ring-out spawn points of slots 0 and 1 are
-  then set from the scenario's native points, as the roster seeds the spawn table from the level. Nothing else in the
-  static data is overridden.
-- **The step.** One authority tick is `SimulationManager`'s authority step followed by the step driver's
-  physics step: `firePreIntegrate`, `integrateAll`, `firePostIntegrate`, `JoltWorld::step`,
-  `captureBodyStatesAll`. The systems are the game's three (hit detection, hit routing, ring-out score) in
-  the game's order; a `static_assert` checks detection fires before routing. The tick dt is the project's
-  `AsyncFixedTimeStepSize` (0.016667 s).
+- `FlatScenario`, which hands the scene the flat scenario of `GoldenTraceScenario.h` (characters A and B, spawn slots 0
+  and 1 at `kSpawnA` and `kRespawnB`, no scripted teleports, generator `BrawlerJoltGoldenTrace.Record`);
+- the recorded golden's views (`recordedGolden`, `recordedEnvelope`) over `BrawlerJoltGolden.inl` and
+  `BrawlerJoltGoldenEnvelope.inl`;
+- the coverage count (`coverageOf`) and the four cases below.
 
-The harness reads state only after `captureBodyStatesAll`, from the storage, so a sample is what the
-authority would publish for that tick. One exception: the hit detector's outputs (the radial's
-`hitsThisTick` and `guardBlockedThisTick`, the projectile's `detectedThisTick`) are consumed and cleared
-inside the same tick, so they read empty after the step. `Scene::noteDetections` reads them between
-`firePreIntegrate` and `integrateAll`, after routing has used them, and keeps cumulative counts with the
-last tick and target (`DetectionLog`). It only reads, so the run is unchanged. Cumulative counts also
-survive the every-fifth-tick sampling after tick 300, where a one-tick event would otherwise fall
-between samples.
+The move changed no recorded value: the two `.inl` files are byte-unchanged and the case passes in exact mode
+(`GoldenTraceScene-rationale.md` §3).
 
 ## 2. The cases
 
@@ -88,7 +62,11 @@ From the project root, after building OGBrawlerTests:
     mkdir -p "$TMP/golden" && OG_GOLDEN_OUT="$TMP/golden" OG_GOLDEN_SOURCE="<repo and submodule HEADs>" \
       Binaries/Win64/OGBrawlerTests/OGBrawlerTests.exe "BrawlerJoltGoldenTrace.Record"
 
-Then copy the two files it wrote, unedited, into `GoldenTrace/`, rebuild, and run `"[GoldenTrace]"` twice.
+Then copy the two files it wrote, unedited, into `GoldenTrace/`, rebuild, and run `"[GoldenTrace]"` twice. The
+golden is included through `__has_include`: on a first recording the files did not exist at the last build, so the
+build's dependency list does not name them. Touch the including test `.cpp` before that rebuild, or the binary still has
+no golden (seen at task 3 with the slope golden: the first rebuild after the copy compiled nothing, and its
+`MatchesTheRecordedTrace` failed at the recorded-golden check).
 The recorder runs the base scenario twice and requires the two runs to agree bit for bit before it writes
 anything; it prints the sample, field and value counts, both file sizes, the envelope maximum per tag, the
 first tick at which a nudge changed a discrete value, and the recorded coverage counts.
