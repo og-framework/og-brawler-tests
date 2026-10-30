@@ -33,10 +33,12 @@ Tags: `[DAttack]` puts every case in the `[@og]` whitelist; `[CameraIsoSeed]` se
 * `DAttackCamera.IsoSeedHoldsPitchAndFullLengthUnderHorizontalLook`: seeded from the iso rotation at five
   iso yaws (including 180° and 400°, which wraps to 40°): the seed's pitch is the target, its hold-off is 0
   and its yaw is the iso yaw. Under horizontal look the pitch error is exactly 0 on every frame and the boom
-  stays exactly 900. The pull is a fraction of the error, so at the target it is 0.
+  stays exactly 2500 (the default full length since og-ground-aligned-attacks task 18; it was 1200 from task
+  15 and 900 before). The
+  pull is a fraction of the error, so at the target it is 0.
 * `DAttackCamera.OffTargetSeedConvergesToTheIsoPitch`: seeded at 17.19° and 74.48° (the 0.3 and 1.3 rad of
   the task-7 version), 4 s of horizontal look end within 0.05° of 60°, never pass it, end more than 10° from
-  the retired 0.8 rad (45.8°) target, and leave the boom within 5 of 900. With the 0.3 rad start the PID camera
+  the retired 0.8 rad (45.8°) target, and leave the boom within 5 of 2500. With the 0.3 rad start the PID camera
   was still 0.2° off after 10 s at 60 fps, after overshooting by about 4°.
 * `DAttackCamera.UnrealIsoRotatorSeedReadsAsTheTargetPitch`: with Unreal's own rotator, for four iso yaws:
   `FRotator(-60, isoYaw, 0)` seeds a state with pitch 60, and the boom rotator the host writes,

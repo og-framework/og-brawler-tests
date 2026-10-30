@@ -85,8 +85,21 @@ Tags: `[DAttack]` puts every case in the `[@og]` whitelist; `[OrbitCamera]` sele
   Where Unreal's math is on the include path (§4), `FRotator(-pitch, yaw, 0)` for yaw 90° and pitch 60°
   points along `FVector::RightVector` horizontally and 60° down: a larger yaw looks right, which is what
   "yaw right" means for the host's boom write.
-* `DAttackOrbitCamera.BoomLengthKeepsTheOldCurve`: 900 at or above the target, 400 at the horizon, 650
-  half-way, with the target clamped into the limits.
+* `DAttackOrbitCamera.BoomLengthKeepsTheOldCurve`: 2500 at or above the target, 550 at the horizon, 1525
+  half-way, with the target clamped into the limits. The curve's shape is the old camera's; the two lengths
+  are the defaults since og-ground-aligned-attacks task 18 (2500 is the user's tuned value; they were 1200
+  and 550 from task 15, 900 and 400 before, and 650 half-way then).
+  `DAttackCameraFramingTest.cpp` pins that the old lengths, passed as settings, still give the old bits.
+* `DAttackOrbitCamera.FovFollowsThePitchLikeTheBoom` (og-ground-aligned-attacks task 18): `fovAtPitch` gives
+  the defaults' 40° at the target pitch and past it (85°, 89°), 58° at the horizon and below it (−3°) and
+  49° half-way, at four targets; a tuned 30° / 70° gives 30, 70, 50 half-way and 60 a quarter of the way;
+  a target outside the limits is clamped as for the boom.
+* `DAttackOrbitCamera.FovAtPitchUsesTheBoomLengthsFactor`: with the same two endpoints as boom lengths and
+  as fields of view (five pairs, both orders), `fovAtPitch` and `boomLength` give equal values at 14
+  pitches and 8 targets (560 comparisons): the field of view uses the boom's blend factor, not a copy of it.
+* `DAttackOrbitCamera.FovIsConstantWhenTheHorizonFovEqualsTheFov`: with the horizon field of view equal to
+  the target one (four angles), `fovAtPitch` returns that angle at every pitch and target (448
+  comparisons): the camera before task 18.
 * `DAttackOrbitCamera.YawStaysWrapped`: ten seconds of full-right stick keep the yaw inside [−180°, 180°]
   and end at the start yaw plus 1800°, modulo 360.
 
@@ -146,3 +159,13 @@ Poison arms on the task-10 `DAttackCamera.cpp`, each a one-statement change, reb
 | sequential pull | the pull applied to the clamped result of the player's step (the plain reading of the brief) | the frame-rate sweep (30° and 45° stick diagonals, mouse diagonal) and the closed form |
 | hold-off ungated | the vertical-intent test without the `verticalHoldoffSeconds > 0` gate | the diagonal case, the closed form, the sanitization case |
 | e-fold unsanitized | the host e-fold used as given | the sanitization case |
+
+## 7. Seen failing (og-ground-aligned-attacks task 18, 2026-10-30)
+
+`fovAtPitch` in `DAttackCamera.h` blended with the inverse factor (`× towardTarget` instead of
+`× (1 − towardTarget)`), built and run (`[@og]`) under the UBT lock, then restored from a copy (md5
+checked): 2 of 855 cases and 38 of 81244 assertions failed. `DAttackOrbitCamera.FovFollowsThePitchLikeTheBoom`
+failed every endpoint and blend check (for example `58.0f == 40.0f` at the target pitch and
+`40.0f == 58.0f` at the horizon); `DAttackOrbitCamera.FovAtPitchUsesTheBoomLengthsFactor` reported
+`compared 560 mismatched 555`. The constant case passed, as it should: with equal endpoints the factor
+multiplies zero.

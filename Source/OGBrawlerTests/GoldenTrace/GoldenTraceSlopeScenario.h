@@ -61,6 +61,7 @@ inline constexpr glm::vec3 kFaceB{ 0.f, 9.f, -1.7320508f };
 inline constexpr glm::vec3 kFaceC{ 0.f, 7.f, 1.7320508f };
 inline constexpr glm::vec3 kFaceD{ -2.f, 8.f, 0.f };
 inline constexpr glm::vec3 kFaceE{ 2.f, 8.f, 0.f };
+inline constexpr glm::vec3 kFaceBelowC{ 0.f, 6.f, 3.4641016f };
 inline constexpr glm::vec3 kLowerF{ -1.f, 2.15f, 10.132497f };
 inline constexpr glm::vec3 kLowerG{ 1.f, 2.f, 10.692305f };
 inline constexpr glm::vec3 kUpperF{ -1.f, 13.95f, -10.305702f };
@@ -211,7 +212,9 @@ inline constexpr InputRow kInputScript[] = {
     guard(kCharacterC, slotStart(7u), slotStart(8u) - 1u, kCGuardBlocksLeftSwing),
     still(kCharacterC, slotStart(8u), slotStart(9u) - 1u, kTowardUpSlope),
     guard(kCharacterC, slotStart(9u), slotStart(10u) - 1u, kTowardUpSlope),
-    still(kCharacterC, slotStart(10u), kScenarioTicks, kTowardUpSlope),
+    still(kCharacterC, slotStart(10u), actionTick(10u) - 1u, kTowardDownSlope),
+    swing(kCharacterC, actionTick(10u), kTowardDownSlope, Swing::Overhead),
+    still(kCharacterC, actionTick(10u) + 1u, kScenarioTicks, kTowardDownSlope),
 
     still(kCharacterD, 1u, kScenarioTicks, kTowardPlusX),
     still(kCharacterE, 1u, kScenarioTicks, kTowardMinusX),
@@ -260,6 +263,9 @@ inline constexpr goldenTraceScene::SpawnPoint kSpawnTable[] = {
 };
 
 inline constexpr goldenTraceScene::Teleport kTeleports[] = {
+    { kCharacterB, slotStart(2u), raised(kFaceB, kTeleportHeight) },
+    { kCharacterC, slotStart(3u), raised(kFaceC, kTeleportHeight) },
+    { kCharacterD, slotStart(10u), raised(kFaceBelowC, kTeleportHeight) },
     { kCharacterF, slotStart(2u), raised(kLowerF, kTeleportHeight) },
     { kCharacterG, slotStart(2u), raised(kLowerG, kTeleportHeight) },
     { kCharacterF, slotStart(3u), raised(kLowerF, kTeleportHeight) },

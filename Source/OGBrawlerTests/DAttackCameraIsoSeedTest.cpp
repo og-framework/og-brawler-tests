@@ -27,7 +27,7 @@ using dAttackCameraBehaviour::OrbitCameraState;
 constexpr float kDts[] = { 1.f / 30.f, 1.f / 60.f, 1.f / 100.f, 1.f / 144.f, 1.f / 240.f };
 constexpr float kIsoPitchDegrees = -60.f;
 constexpr float kLegacyTargetPitchDegrees = 45.8366f;
-constexpr float kFullBoomLength = 900.f;
+constexpr float kFullBoomLength = 2500.f;
 constexpr float kLookSeconds = 5.25f;
 
 struct LookRun

@@ -631,12 +631,111 @@ TEST_CASE("DAttackOrbitCamera.BoomLengthKeepsTheOldCurve", "[DAttack][OrbitCamer
         CHECK(dAttackCameraBehaviour::boomLength(target, target, settings) == dAttackCameraBehaviour::kBoomLengthAtTargetPitch);
         CHECK(dAttackCameraBehaviour::boomLength(85.f, target, settings) == dAttackCameraBehaviour::kBoomLengthAtTargetPitch);
         CHECK(dAttackCameraBehaviour::boomLength(0.f, target, settings) == dAttackCameraBehaviour::kBoomLengthAtHorizon);
-        CHECK(dAttackCameraBehaviour::boomLength(target * 0.5f, target, settings) == Catch::Approx(650.f).margin(1e-3f));
+        CHECK(dAttackCameraBehaviour::boomLength(target * 0.5f, target, settings) == Catch::Approx(1525.f).margin(1e-3f));
     }
-    CHECK(dAttackCameraBehaviour::kBoomLengthAtTargetPitch == 900.f);
-    CHECK(dAttackCameraBehaviour::kBoomLengthAtHorizon == 400.f);
+    CHECK(dAttackCameraBehaviour::kBoomLengthAtTargetPitch == 2500.f);
+    CHECK(dAttackCameraBehaviour::kBoomLengthAtHorizon == 550.f);
     CHECK(dAttackCameraBehaviour::boomLength(10.f, 0.f, settings) == dAttackCameraBehaviour::kBoomLengthAtTargetPitch);
-    CHECK(dAttackCameraBehaviour::boomLength(5.f, -30.f, settings) == Catch::Approx(650.f).margin(1e-3f));
+    CHECK(dAttackCameraBehaviour::boomLength(5.f, -30.f, settings) == Catch::Approx(1525.f).margin(1e-3f));
+}
+
+TEST_CASE("DAttackOrbitCamera.FovFollowsThePitchLikeTheBoom", "[DAttack][OrbitCamera]")
+{
+    const OrbitCameraSettings defaults;
+    CHECK(dAttackCameraBehaviour::kFovDeg == 40.f);
+    CHECK(dAttackCameraBehaviour::kFovDegAtHorizon == 58.f);
+    CHECK(defaults.fovDeg == dAttackCameraBehaviour::kFovDeg);
+    CHECK(defaults.fovDegAtHorizon == dAttackCameraBehaviour::kFovDegAtHorizon);
+
+    OrbitCameraSettings tuned;
+    tuned.fovDeg = 30.f;
+    tuned.fovDegAtHorizon = 70.f;
+    const float targets[] = { 10.f, 35.f, 60.f, 80.f };
+    for (const float target : targets)
+    {
+        INFO("target " << target);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(target, target, defaults) == 40.f);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(85.f, target, defaults) == 40.f);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(89.f, target, defaults) == 40.f);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(0.f, target, defaults) == 58.f);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(-3.f, target, defaults) == 58.f);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(target * 0.5f, target, defaults) == Catch::Approx(49.f).margin(1e-4f));
+
+        CHECK(dAttackCameraBehaviour::fovAtPitch(target, target, tuned) == 30.f);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(85.f, target, tuned) == 30.f);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(0.f, target, tuned) == 70.f);
+        CHECK(dAttackCameraBehaviour::fovAtPitch(target * 0.5f, target, tuned) == Catch::Approx(50.f).margin(1e-4f));
+        CHECK(dAttackCameraBehaviour::fovAtPitch(target * 0.25f, target, tuned) == Catch::Approx(60.f).margin(1e-4f));
+    }
+    CHECK(dAttackCameraBehaviour::fovAtPitch(10.f, 0.f, defaults) == 40.f);
+    CHECK(dAttackCameraBehaviour::fovAtPitch(5.f, -30.f, defaults) == Catch::Approx(49.f).margin(1e-4f));
+}
+
+TEST_CASE("DAttackOrbitCamera.FovAtPitchUsesTheBoomLengthsFactor", "[DAttack][OrbitCamera]")
+{
+    struct Endpoints
+    {
+        float atTarget;
+        float atHorizon;
+    };
+    const Endpoints endpoints[] = { { 40.f, 58.f }, { 58.f, 40.f }, { 2500.f, 550.f }, { 90.f, 10.f }, { 11.33f, 58.72f } };
+    const float pitches[] = { 0.f, 1.f, 9.99f, 10.f, 17.1887f, 30.f, 45.f, 47.78f, 59.999f, 60.f, 74.4845f, 80.f, 85.f, -3.f };
+    const float targets[] = { 10.f, 35.f, 45.f, 60.f, 80.f, 0.f, -30.f, 95.f };
+    int compared = 0;
+    int mismatched = 0;
+    for (const Endpoints& ends : endpoints)
+    {
+        OrbitCameraSettings settings;
+        settings.boomLengthAtTargetPitch = ends.atTarget;
+        settings.boomLengthAtHorizon = ends.atHorizon;
+        settings.fovDeg = ends.atTarget;
+        settings.fovDegAtHorizon = ends.atHorizon;
+        for (const float pitch : pitches)
+            for (const float target : targets)
+            {
+                const float fov = dAttackCameraBehaviour::fovAtPitch(pitch, target, settings);
+                const float boom = dAttackCameraBehaviour::boomLength(pitch, target, settings);
+                ++compared;
+                if (!(fov == boom))
+                {
+                    ++mismatched;
+                    UNSCOPED_INFO("ends " << ends.atTarget << "/" << ends.atHorizon << " pitch " << pitch << " target "
+                        << target << " fov " << fov << " boom " << boom);
+                }
+            }
+    }
+    INFO("compared " << compared << " mismatched " << mismatched);
+    CHECK(compared == 5 * 14 * 8);
+    CHECK(mismatched == 0);
+}
+
+TEST_CASE("DAttackOrbitCamera.FovIsConstantWhenTheHorizonFovEqualsTheFov", "[DAttack][OrbitCamera]")
+{
+    const float fovs[] = { 40.f, 58.72f, 90.f, 11.33f };
+    const float pitches[] = { 0.f, 1.f, 9.99f, 10.f, 17.1887f, 30.f, 45.f, 47.78f, 59.999f, 60.f, 74.4845f, 80.f, 85.f, -3.f };
+    const float targets[] = { 10.f, 35.f, 45.f, 60.f, 80.f, 0.f, -30.f, 95.f };
+    int compared = 0;
+    int changed = 0;
+    for (const float fov : fovs)
+    {
+        OrbitCameraSettings settings;
+        settings.fovDeg = fov;
+        settings.fovDegAtHorizon = fov;
+        for (const float pitch : pitches)
+            for (const float target : targets)
+            {
+                const float atPitch = dAttackCameraBehaviour::fovAtPitch(pitch, target, settings);
+                ++compared;
+                if (!(atPitch == fov))
+                {
+                    ++changed;
+                    UNSCOPED_INFO("fov " << fov << " pitch " << pitch << " target " << target << " gives " << atPitch);
+                }
+            }
+    }
+    INFO("compared " << compared << " changed " << changed);
+    CHECK(compared == 4 * 14 * 8);
+    CHECK(changed == 0);
 }
 
 TEST_CASE("DAttackOrbitCamera.YawStaysWrapped", "[DAttack][OrbitCamera]")

@@ -119,7 +119,7 @@ std::optional<glm::vec3> renderFrameAimRay(
 		selectedInput.moveDirectionWorld);
 
 	dAttackAimVisualization::visualize(
-		input, fx.state, fx.ic, fx.derived, fx.staticData, vizState);
+		input, fx.state, fx.ic, fx.derived, fx.staticData, dAttackGuardSimulation::State{}, vizState);
 
 	REQUIRE_FALSE(thisFrame.empty()); // the aim ray is unconditional
 	return thisFrame.front();
@@ -398,6 +398,7 @@ using AimVisualizeFn = void (*)(
 	const dAttackRadialSimulation::InitialConditions&,
 	const dAttackRadialSimulation::DerivedState&,
 	const dAttackRadialSimulation::StaticData&,
+	const dAttackGuardSimulation::State&,
 	dAttackAimVisualization::State&);
 
 static_assert(

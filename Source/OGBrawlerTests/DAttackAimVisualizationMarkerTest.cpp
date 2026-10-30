@@ -112,7 +112,7 @@ Recording visualizeAim(const glm::vec3& aimDirection)
 	dAttackAimVisualization::State vizState;
 	dAttackAimVisualization::Input<RecordingRenderer, NullLogger> input(
 		1.f / 60.f, aimDirection, renderer, NullLogger{}, glm::vec2(0.f), glm::vec3(0.f));
-	dAttackAimVisualization::visualize(input, simState, ic, derived, staticData, vizState);
+	dAttackAimVisualization::visualize(input, simState, ic, derived, staticData, dAttackGuardSimulation::State{}, vizState);
 	return recording;
 }
 

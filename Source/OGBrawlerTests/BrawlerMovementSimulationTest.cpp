@@ -4316,23 +4316,22 @@ TEST_CASE("BrawlerMovement.SlopeKnockbackStaysOnSlope", "[BrawlerMovement]")
     REQUIRE(channels.y == Catch::Approx(0.f).margin(1e-4f));
     REQUIRE(channels.z == Catch::Approx(0.f).margin(1e-4f));
 
-    // ⚠ ⚠ MEASURED AND ROUTED, NOT ASSERTED AS DESIRABLE [movement-sim task 27]. The detach
-    // arm the architect ruled is `committed && dot(velocity, up) > 0` -- WORLD height. On flat ground a
-    // knockback's world height is exactly 0 and the arm is false, which is what section 2.5(b) of
-    // `impl/review_task27_knockback_design.md` means by "false for every XY hit". ON A SLOPE IT IS
-    // NOT: `height(u) == sin(theta)`, so an up-slope shove carries `knockbackSpeed * sin(theta)` of
-    // world height -- 10 m/s here -- and the NEXT tick's step 2 therefore detaches. The frame does
-    // not move with it (`n` is keyed on `walkable`, not on `support`), so the slide stays on the
-    // face; what is lost is the hover hold for the rest of the slide. The number is printed and
-    // the state is recorded here rather than hidden, and the finding is routed to the lead in
-    // `impl/impl_notes_seam_27.md`.
+    // THE UP-SLOPE SHOVE KEEPS ITS HOVER HOLD [og-ground-aligned-attacks task 10]. Task 27's detach
+    // arm was `committed && dot(velocity, up) > 0` -- WORLD height -- and on a slope an up-slope
+    // shove carries `knockbackSpeed * sin(theta)` of it (10 m/s here), so until the flip the NEXT
+    // tick's step 2 detached it (the finding task 27 measured and routed in
+    // `impl/impl_notes_seam_27.md`). Since the flip the lift test on a non-flat face is the
+    // surface-relative one (`detachesFromSupport(state, up, face, committed)`, og-ground-aligned-attacks
+    // task 13): `dot(velocity, face) > kMinLaunchSine * |velocity|`, and a velocity in the face has
+    // `dot(v, n) == 0`, so the slide stays Supported. The world-height premise is still asserted, so
+    // the row is about the arm and not about a shove with no world height.
     rig.tick(2u, stick(0.f, 0.f));
     INFO("tick 2 on the face: support=" << int(rig.support())
          << " (0 Unsupported, 1 Supported)  v.z=" << simFrame::height(rig.state.velocity)
          << "  -- world z carries the TANGENTIAL channel on a slope; the vertical CHANNEL is "
          << channelsOf(rig.state.velocity, n).z);
     REQUIRE(glm::dot(velocity, movement::kWorldUp) > 0.f);
-    REQUIRE(rig.support() == movement::SupportState::Unsupported);
+    REQUIRE(rig.support() == movement::SupportState::Supported);
 }
 
 // ---------------------------------------------------------------------------
@@ -4495,10 +4494,15 @@ TEST_CASE("BrawlerMovement.AttackSlideDirectionIsLockedAgainstTheStick", "[Brawl
 // ---------------------------------------------------------------------------
 // ⭐⭐ A SLIDE UP A SLOPE KEEPS ITS HOVER HOLD, and this is the case the whole branch placement
 // exists for. `locked` is NOT a tenant of the `committed` arm: `committed` also feeds
-// `detachesFromSupport(state, up, committed)` -- `committed && dot(velocity, up) > 0` -- and a
-// tangential slide up a face carries world z, so folding this law into `committed` would detach
-// the character and fly it off the slope. That is exactly the behaviour ⛔G-07 records and
-// `SlopeKnockbackStaysOnSlope` measures; the control arm below reproduces it on the SAME fixture.
+// `detachesFromSupport(state, up, face, committed)` (⛔G-07). Until og-ground-aligned-attacks task 10
+// that was `committed && dot(velocity, up) > 0` on every face, and a tangential slide up a face
+// carries world z, so folding this law into `committed` would have detached the character and flown
+// it off the slope. Since the flip a non-flat face takes the surface-relative arm
+// (`committed && dot(velocity, face) > kMinLaunchSine * |velocity|`, task 13), under which a
+// same-face slide stays Supported whether or not it is committed (`SlopeKnockbackStaysOnSlope`);
+// the rows below still pin the attack slide's ramp and hold. The control arm below shows the SAME
+// fixture detaching a committed velocity that LEAVES the face, so the hold is not a fixture that
+// could never detach.
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerMovement.AttackSlideDoesNotDetachOnASlope", "[BrawlerMovement]")
 {
@@ -4545,18 +4549,20 @@ TEST_CASE("BrawlerMovement.AttackSlideDoesNotDetachOnASlope", "[BrawlerMovement]
     REQUIRE(simFrame::forwardRight(rig.state.velocity) == glm::vec2(0.f));
     REQUIRE(simFrame::height(rig.state.velocity) == Catch::Approx(0.f).margin(1e-6f));
 
-    // ⛔ CONTROL -- the SAME fixture, the SAME up-slope velocity, under a KNOCKBACK, detaches on
-    // the second tick. This is G-07's recorded finding reproduced here so the row above is a
-    // statement about the BRANCH and not about a fixture that could never detach.
+    // ⛔ CONTROL -- the SAME fixture under a KNOCKBACK whose world direction LEAVES the face (half
+    // up the face, half along its normal) detaches on the hit tick: the hit-tick write puts
+    // `d * knockbackSpeed` into the velocity before the lift test (og-ground-aligned-attacks task 9b),
+    // and `dot(d, n) = 0.707` is far above `kMinLaunchSine`. So the hold above is a statement about
+    // the velocity staying in the face, on a fixture that can detach.
     ScriptedRig launched;
     launched.query.scriptedSweeps = { floorHitAt(launched.sd.rideHeight, launched.probeLength(), n) };
     launched.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + launched.sd.rideHeight);
     launched.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
+    launched.inbound.hitDirectionWorld = glm::normalize(u + n);
     launched.tick(1u, stick(0.f, 0.f));
-    REQUIRE(launched.support() == movement::SupportState::Supported);
-    launched.tick(2u, stick(0.f, 0.f));
-    INFO("control (knockback on the same face): support=" << int(launched.support())
-         << "  v.z=" << simFrame::height(launched.state.velocity));
+    INFO("control (knockback leaving the face): support=" << int(launched.support())
+         << "  v.z=" << simFrame::height(launched.state.velocity) << "  dot(v, n)=" << glm::dot(launched.state.velocity, n));
+    REQUIRE(glm::dot(launched.state.velocity, n) > 0.7f * launched.knockbackSpeed());
     REQUIRE(launched.support() == movement::SupportState::Unsupported);
 }
 

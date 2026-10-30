@@ -153,7 +153,7 @@ TEST_CASE("DAttack.VizSentinelGuard.AimVisualizeNoCrash", "[DAttack]")
         glm::vec3(0.f, 0.f, -1.f));  // moveDirectionWorld
 
     dAttackAimVisualization::visualize(
-        input, fx.state, fx.ic, fx.derived, fx.staticData, vizState);
+        input, fx.state, fx.ic, fx.derived, fx.staticData, dAttackGuardSimulation::State{}, vizState);
 
     // The aim viz never emits a sequence mesh; the assertion that matters is that
     // we reached this line at all (no OOB segfault) with the sentinel active.

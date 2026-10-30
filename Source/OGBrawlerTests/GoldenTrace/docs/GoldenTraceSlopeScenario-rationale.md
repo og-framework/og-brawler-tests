@@ -3,9 +3,10 @@
 
 Source: `GoldenTraceSlopeScenario.h`. This file has no guards document: nothing in the header needs a `⛔` tag. The
 harness that runs the scenario is described in `GoldenTraceScene-rationale.md`, the test in
-`BrawlerJoltSlopeGoldenTraceTest-rationale.md`. Written by og-ground-aligned-attacks task 3 as **today's baseline** on a
-30° slope: the brawler builds its swings, guard and projectiles horizontally, and this golden records what that does on
-the slope before the ground-aligned work changes it.
+`BrawlerJoltSlopeGoldenTraceTest-rationale.md`. Written by og-ground-aligned-attacks task 3 as the baseline on a 30°
+slope, while the brawler built its swings, guard and projectiles horizontally; since task 10 (the flip,
+`brawlerGround::kGroundAlignedAttacks`) they follow each brawler's ground, and the golden records that. Task 10 also added
+three teleports and C's overhead (§3, §4).
 
 Every length, point and direction is a native literal: metres, og axes (+Y up, forward −Z, right +X), each the float
 nearest the double-precision derivation given below. The static data and the box material are the flat scenario's
@@ -39,7 +40,7 @@ straight above its face point; the ring-out spawn table holds the same seven poi
 | A (`kFaceA`) | (0, 8, 0) | the slope point |
 | B (`kFaceB`) | (0, 9, −1.7320508) | 2 m up the fall line from A |
 | C (`kFaceC`) | (0, 7, 1.7320508) | 2 m down the fall line |
-| D (`kFaceD`) | (−2, 8, 0) | 2 m along the contour, −X |
+| D (`kFaceD`, then `kFaceBelowC`) | (−2, 8, 0), then (0, 6, 3.4641016) | 2 m along the contour, −X; for slot 10, 2 m down the fall line from C |
 | E (`kFaceE`) | (2, 8, 0) | 2 m along the contour, +X |
 | F (`kLowerF`, then `kUpperF`) | (−1, 2.15, 10.132497), then (−1, 13.95, −10.305702) | along the face, 0.3 m from the concave crease, then 0.1 m from the convex one (§5) |
 | G (`kLowerG`, then `kUpperG`) | (1, 2, 10.692305), then (1, 14, −10.692305) | 0.3 m from the crease on the flat side |
@@ -59,27 +60,32 @@ tick, 10 m or more apart. The ticks are those of the recorded trace (`slotStart`
 | slot | ticks | action | A group | crease pair | what the trace shows |
 |---|---|---|---|---|---|
 | — | 1–60 | — | all land and idle | F, G land at the concave crease | A's horizontal drift 0 |
-| 1 | 61–240 | 96 | A right swing aimed up the fall line at B | F left swing at G | no hit |
-| 2 | 241–350 | 276 | A right swing down the fall line at C | F right swing at G | no hit |
-| 3 | 351–460 | 386 | A left swing at D (aim −X) | G right swing at F | D hit at 410, slides 5.17 m down the fall line; F hit at 410, hops up the slope (apex 2.63 m) |
-| 4 | 461–640 | 496 | A left swing at E (aim +X) | G left swing at F | E hit at 520, hops up the fall line (apex 2.53 m); F hit at 520, thrown down onto the landing |
-| 5 | 641–820 | 676 | B guards facing A; A overhead | F, G at the convex crease; F left swing at G | B's guard blocks the overhead at 694; G hit at 700, thrown along the plateau |
-| 6 | 821–930 | 856 | C guards turned for a right swing; A right swing at C | F right swing at G | nothing on C; G hit at 880, thrown off the plateau edge onto the slope |
-| 7 | 931–1040 | 966 | C guards turned for a left swing; A left swing at C | G right swing at F | nothing on C; F hit at 990, thrown up over the edge onto the plateau (a hop: apex 0.84 m, 0.72 s airborne) |
-| 8 | 1041–1220 | 1076 | B fires a projectile at A | G left swing at F | the projectile neither hits nor is blocked; F hit at 1100, slides down the slope |
-| 9 | 1221–1315 | 1256 | C guards facing A; A fires at C | — | the projectile neither hits nor is blocked |
-| 10 | 1316–1480 | 1426 | A is teleported 1 m up the face from the concave crease (`kCreaseWalkStart`), walks down the fall line on ticks 1341–1400 and swings right across the crease | — | A stops with its capsule at z 10.3925, over the crease (10.3923) |
+| 1 | 61–240 | 96 | A right swing aimed up the fall line at B | F left swing at G | B hit at 120, slides 5.17 m along the contour; G hit at 120, thrown from the landing up onto the slope (one tick Unsupported, then a slide) |
+| 2 | 241–350 | 276 | A right swing down the fall line at C | F right swing at G | C hit at 300, slides 5.17 m along the contour; G hit at 300, thrown into the landing (a 0.28 m hop) |
+| 3 | 351–460 | 386 | A left swing at D (aim −X) | G right swing at F | D hit at 410, slides 5.17 m down the fall line; F hit at 410, thrown into the slope (31 ticks Unsupported, a 1.96 m rise above the ground) |
+| 4 | 461–640 | 496 | A left swing at E (aim +X) | G left swing at F | E hit at 520, slides 5.17 m up the fall line; F hit at 520, thrown off the slope onto the landing |
+| 5 | 641–820 | 676 | B guards facing A; A overhead | F, G at the convex crease; F left swing at G | B's guard blocks the overhead; G hit at 700, thrown along the plateau |
+| 6 | 821–930 | 856 | C guards turned for a right swing; A right swing at C | F right swing at G | C's guard blocks the swing; G hit at 880, thrown off the plateau edge onto the slope |
+| 7 | 931–1040 | 966 | C guards turned for a left swing; A left swing at C | G right swing at F | C's guard blocks the swing; F hit at 990, thrown onto the plateau |
+| 8 | 1041–1220 | 1076 | B fires a projectile at A | G left swing at F | the projectile hits A; F hit at 1100, thrown down the slope off the edge |
+| 9 | 1221–1315 | 1256 | C guards facing A; A fires at C | — | C's guard blocks the projectile |
+| 10 | 1316–1480 | 1351, 1426 | D is teleported 2 m down the fall line from C (`kFaceBelowC`); C turns down the slope and swings overhead at D (1351). A is teleported 1 m up the face from the concave crease (`kCreaseWalkStart`), walks down the fall line on ticks 1341–1400 and swings right across the crease (1426) | — | C's overhead stuns D at 1369 (D does not move); A stops with its capsule at z 10.3925, over the crease (10.3923) |
 
 Directions in the trace's inbound hit direction are in the (forward, left) chart: (−1, 0) is +Z, down the fall line.
-The knockback numbers are the test's `[GoldenTrace.slope]` line (`BrawlerJoltSlopeGoldenTraceTest-rationale.md` §3).
+The knockback numbers are the test's `[GoldenTrace.slope]` line (`BrawlerJoltSlopeGoldenTraceTest-rationale.md` §3, §4
+and §7). With the attacks built horizontally (the baseline, §4 there) slots 1, 2, 6, 7, 8 and 9 hit or blocked nothing
+in the A group, D left the face for a tick and E hopped.
 
 ## 4. Teleports
 
 Two characters serve both creases, and each crease hit throws its target about 5 m, so F and G are put back by a
 scripted teleport (`goldenTraceScene::Teleport`, `GoldenTraceScene-rationale.md` §4) at the start of slots 2 to 8, to
 `kTeleportHeight` (1.2 m) above their face points; slot 5 moves them to the convex crease. A is teleported once, at the
-start of slot 10, next to the concave crease: walking there from (0, 8, 0) would take 12 m, about 720 ticks. Each
-teleport is a short drop (0.08 to 0.14 m) to the hover height, settled well inside the 35 settle ticks.
+start of slot 10, next to the concave crease: walking there from (0, 8, 0) would take 12 m, about 720 ticks. Since task
+10 A's side swings hit B and C, which slide 5 m along the contour, so B is put back at the start of slot 2 and C at the
+start of slot 3, before their guards are needed (slots 5 to 7 and 9); with the swings built horizontally neither moved
+and the teleport only re-drops it. D, done after slot 3, is moved below C at the start of slot 10 for C's overhead.
+Each teleport is a short drop (0.08 to 0.14 m) to the hover height, settled well inside the 35 settle ticks.
 
 ## 5. Why these numbers
 
@@ -87,9 +93,11 @@ teleport is a short drop (0.08 to 0.14 m) to the hover height, settled well insi
   `kLaunchSlotTicks` (180) long, the others `kSlideSlotTicks` (110), `kShotSlotTicks` (95) and `kCreaseWalkSlotTicks`
   (165). The four long slots were sized at task 3 for the crease hits whose swing tangent leaves the target's ground once
   the swing follows the attacker's slope (the initiative's design §3.6: such a hit launches, about 2 s airborne): the
-  next teleport comes about 2 s (121 ticks) after the hit. Since task 3b the hits predicted to launch after the flip are
-  those of slots 1, 4 and 8 (the crease windows below); slot 5 keeps its length. Today no long-slot hit launches; the
-  convex hit of slot 7 hops 0.84 m and lands 0.72 s later, before slot 8's teleport.
+  next teleport comes about 2 s (121 ticks) after the hit. Task 3b predicted launches in slots 1, 4 and 8 (the crease
+  windows below); slot 5 keeps its length. Measured after the flip, slot 1's launch lands on the slope the next tick,
+  slot 4's is 11 Unsupported ticks and slot 8's hit falls off the convex edge for 24. Since task 13b slot 8's falls
+  for 23 and the longest flight is slot 7's, 43 ticks from 990 to 1032 (slot 7 ends at 1040; it was slot 3's 31 ticks,
+  `BrawlerJoltSlopeGoldenTraceTest-rationale.md` §7), each inside its slot.
 - **Swing sides.** A knockback goes along the swing's tangent at the target, and the tangent depends on where the target
   is and on the swing's turning sense, not on the aim. Two targets on opposite sides of the attacker, struck by opposite
   swing sides, are thrown the same way: measured with a left swing at D and a right swing at E, both slid down the fall
@@ -134,10 +142,14 @@ teleport is a short drop (0.08 to 0.14 m) to the hover height, settled well insi
   slope-side swing at the convex crease (that one connects only with G within about 0.05 m of the edge).
 
   With 0.3 m at both creases (task 3) four of the eight crease swings landed and none of the convex ones was predicted
-  to connect after the flip. Now six land today (`creaseHits=6/8`, as the sweep predicts) and all eight are predicted to
-  connect after the flip.
+  to connect after the flip. From task 3b six landed with the swings built horizontally (`creaseHits=6/8`, as the sweep predicts), and since
+  the flip (task 10) all eight land (`creaseHits=8/8`), as it predicted.
 - **Stillness is judged horizontally.** A resting capsule's movement velocity flickers between 0 and 0.1633 m/s
   (g·dt) on some ticks, with a vertical position dither of about 3 mm (seen on F and G at the concave crease and on E
   after its hop); the horizontal position does not move. The settle check therefore requires Supported and at most 1 mm
   of horizontal travel per tick.
+- **C's overhead in slot 10 (task 10).** The scenario's only overhead before it went into B's guard, so nothing showed
+  that an overhead still only stuns once the swing follows the ground. D stands 2 m down the fall line from C, the same
+  distance as B from A in slot 5, and the overhead lands on it. It runs while A walks to the concave crease, more than
+  6 m away, and is not one of the actions the settle check reads.
 - **Sampling** is the flat scenario's: every tick through tick 300, every fifth tick after (`isSampleTick`).

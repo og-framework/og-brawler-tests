@@ -60,6 +60,7 @@ struct PlaneGround
     float     planeOffset = 0.f;
     float     capsuleRadius     = 0.42f;
     float     capsuleHalfHeight = 0.96f;
+    glm::vec3 exactFace         = glm::vec3(0.f);
 
     bool  lastBlocked   = false;
     float lastClearance = 0.f;
@@ -96,7 +97,7 @@ struct PlaneGround
         hit.blocked       = true;
         hit.fraction      = travel > 0.f ? travel / length : 0.f;
         hit.normal        = planeNormal;
-        hit.surfaceNormal = planeNormal;
+        hit.surfaceNormal = glm::dot(exactFace, exactFace) > 0.f ? exactFace : planeNormal;
         hit.impactPoint   = centre + dir * travel;
         lastBlocked       = true;
         lastClearance     = hit.fraction * length;
@@ -772,6 +773,166 @@ TEST_CASE("GroundAlignedKnockback.KnobOffIgnoresTheWorldDirection", "[BrawlerMov
             }
         }
     REQUIRE(ticks == 400);
+}
+
+TEST_CASE("GroundAlignedKnockback.UnwalkableExactFaceOverAWalkableSweepIsWorldUp", "[BrawlerMovement]")
+{
+    using namespace groundAlignedKnockbackTests;
+
+    const glm::vec3 up = movement::kWorldUp;
+    const glm::vec3 sweeps[] = { glm::vec3(0.f, 1.f, -0.f), slopeNormal(20.f) };
+    const glm::vec3 faces[]  = { slopeNormal(-60.f), simFrame::kForward };
+    const float tilt = glm::radians(10.f);
+
+    int horizontalTicks = 0;
+    int tiltedTicks     = 0;
+    int leavingHolds    = 0;
+    for (const glm::vec3& sweep : sweeps)
+        for (const glm::vec3& face : faces)
+        {
+            Rig probe(sweep);
+            probe.ground.exactFace = face;
+            probe.placeOnTheHover();
+            glm::mat4 pose(1.f);
+            pose[3] = glm::vec4(probe.state.bodyState.position, 1.f);
+            const SweepHit hit = probe.ground.sweep(kVolumeId, pose, -up * (probe.sd.rideHeight + probe.sd.snapDistance));
+            INFO("sweep n=(" << sweep.x << ", " << sweep.y << ", " << sweep.z << ") face=(" << face.x << ", " << face.y
+                 << ", " << face.z << ")");
+            REQUIRE(hit.blocked);
+            REQUIRE(glm::dot(hit.normal, up) >= probe.sd.cosMaxSlope);
+            REQUIRE(sameBits(hit.surfaceNormal, face));
+            REQUIRE(glm::dot(face, up) < probe.sd.cosMaxSlope);
+            REQUIRE(sameBits(movement::attackGroundNormal(hit, probe.sd), up));
+
+            const glm::vec3 across = glm::normalize(simFrame::flatten(face));
+            const glm::vec3 horizontals[] = {
+                across,
+                -across,
+                glm::normalize(glm::cross(up, across)),
+            };
+            for (const glm::vec3& d : horizontals)
+            {
+                REQUIRE(simFrame::height(d) == 0.f);
+                Rig today(sweep);
+                Rig aligned(sweep);
+                for (Rig* rig : { &today, &aligned })
+                {
+                    rig->ground.exactFace = face;
+                    rig->placeOnTheHover();
+                    rig->hitWorld(d);
+                }
+                for (std::uint32_t t = 1u; t <= 40u; ++t)
+                {
+                    today.tick<false>(t);
+                    aligned.tick<true>(t);
+                    INFO("horizontal d=(" << d.x << ", " << d.y << ", " << d.z << ") dot(d, face)=" << glm::dot(d, face)
+                         << " tick " << t << " first differing field " << firstDifferingField(today.state, aligned.state));
+                    REQUIRE(sameState(today.state, aligned.state));
+                    REQUIRE(sameBits(today.derived.surfaceNormal, aligned.derived.surfaceNormal));
+                    REQUIRE(today.derived.lastSupportState == aligned.derived.lastSupportState);
+                    if (t == 1u && glm::dot(d, face) > movement::kMinLaunchSine)
+                    {
+                        REQUIRE(aligned.support() == movement::SupportState::Supported);
+                        ++leavingHolds;
+                    }
+                    today.engineStep();
+                    aligned.engineStep();
+                    ++horizontalTicks;
+                }
+            }
+
+            const glm::vec3 tilted[] = {
+                glm::normalize(-across * glm::cos(tilt) + up * glm::sin(tilt)),
+                glm::normalize(across * glm::cos(tilt) - up * glm::sin(tilt)),
+            };
+            REQUIRE(glm::dot(tilted[0], face) <= movement::kMinLaunchSine);
+            REQUIRE(glm::dot(tilted[1], face) > movement::kMinLaunchSine);
+            for (const glm::vec3& d : tilted)
+            {
+                Rig reference(sweep);
+                Rig aligned(sweep);
+                reference.ground.exactFace = up;
+                aligned.ground.exactFace   = face;
+                for (Rig* rig : { &reference, &aligned })
+                {
+                    rig->placeOnTheHover();
+                    rig->hitWorld(d);
+                }
+                for (std::uint32_t t = 1u; t <= 40u; ++t)
+                {
+                    reference.tick<true>(t);
+                    aligned.tick<true>(t);
+                    INFO("tilted d=(" << d.x << ", " << d.y << ", " << d.z << ") dot(d, face)=" << glm::dot(d, face)
+                         << " tick " << t << " first differing field " << firstDifferingField(reference.state, aligned.state));
+                    if (t == 1u)
+                    {
+                        REQUIRE(aligned.support() == (simFrame::height(d) > 0.f ? movement::SupportState::Unsupported
+                                                                                  : movement::SupportState::Supported));
+                    }
+                    REQUIRE(sameState(reference.state, aligned.state));
+                    REQUIRE(sameBits(reference.derived.surfaceNormal, aligned.derived.surfaceNormal));
+                    REQUIRE(reference.derived.lastSupportState == aligned.derived.lastSupportState);
+                    reference.engineStep();
+                    aligned.engineStep();
+                    ++tiltedTicks;
+                }
+            }
+        }
+    std::printf("[GroundAlignedKnockback.unwalkableFace] horizontalTicks=%d tiltedTicks=%d leavingHolds=%d\n",
+        horizontalTicks, tiltedTicks, leavingHolds);
+    REQUIRE(horizontalTicks == 480);
+    REQUIRE(tiltedTicks == 320);
+    REQUIRE(leavingHolds == 4);
+}
+
+TEST_CASE("GroundAlignedKnockback.WalkableExactFaceStillDecides", "[BrawlerMovement]")
+{
+    using namespace groundAlignedKnockbackTests;
+
+    const glm::vec3 up = movement::kWorldUp;
+    struct Pair { glm::vec3 sweep; glm::vec3 face; };
+    const Pair pairs[] = {
+        { slopeNormal(15.f), slopeNormal(30.f) },
+        { slopeNormal(15.f), simFrame::kUp },
+        { slopeNormal(29.f), slopeNormal(30.f) },
+        { glm::vec3(0.f, 1.f, -0.f), slopeNormal(30.f) },
+    };
+    const float headings[] = { 180.f, 150.f, 210.f };
+    int launches = 0;
+    for (const Pair& pair : pairs)
+    {
+        Rig probe(pair.sweep);
+        probe.ground.exactFace = pair.face;
+        probe.placeOnTheHover();
+        glm::mat4 pose(1.f);
+        pose[3] = glm::vec4(probe.state.bodyState.position, 1.f);
+        const SweepHit hit = probe.ground.sweep(kVolumeId, pose, -up * (probe.sd.rideHeight + probe.sd.snapDistance));
+        INFO("sweep n.y " << pair.sweep.y << " face=(" << pair.face.x << ", " << pair.face.y << ", " << pair.face.z << ")");
+        REQUIRE(hit.blocked);
+        REQUIRE(glm::dot(pair.face, up) >= probe.sd.cosMaxSlope);
+        REQUIRE(sameBits(movement::attackGroundNormal(hit, probe.sd), pair.face));
+
+        if (surfaceFrame::isFlat(pair.face))
+            continue;
+        for (const float heading : headings)
+        {
+            const float a = glm::radians(heading);
+            const glm::vec3 d = simFrame::fromForwardRight(glm::vec2(glm::cos(a), glm::sin(a)), 0.f);
+            REQUIRE(glm::dot(d, pair.face) > movement::kMinLaunchSine);
+
+            Rig rig(pair.sweep);
+            rig.ground.exactFace = pair.face;
+            rig.placeOnTheHover();
+            rig.hitWorld(d);
+            rig.tick<true>(1u);
+            INFO("heading " << heading);
+            REQUIRE(rig.support() == movement::SupportState::Unsupported);
+            REQUIRE(simFrame::height(rig.state.velocity)
+                    == Catch::Approx(simFrame::height(d) * rig.knockbackSpeed() + rig.sd.gravity * kDt).margin(1e-5f));
+            ++launches;
+        }
+    }
+    REQUIRE(launches == 9);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

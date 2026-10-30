@@ -2,6 +2,7 @@
 #if WITH_LOW_LEVEL_TESTS
 
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 #include "catch_amalgamated.hpp"
@@ -94,6 +95,16 @@ struct Rig
         return movement::sampleAttackGround<Aligned>(state, sd, bindings, query);
     }
 };
+
+inline brawlerGround::GroundSample sampleBeforeTheSharedHelper(const SweepHit& hit, const movement::StaticData& sd)
+{
+    const glm::vec3 face = glm::dot(hit.surfaceNormal, hit.surfaceNormal) > 0.f ? hit.surfaceNormal : hit.normal;
+    if (hit.blocked && glm::dot(face, movement::kWorldUp) >= sd.cosMaxSlope)
+    {
+        return brawlerGround::GroundSample{face};
+    }
+    return brawlerGround::GroundSample{};
+}
 
 inline bool sameCall(const brawlerTestMocks::MockSpatialQueryAdapter::SweepCall& a,
                      const brawlerTestMocks::MockSpatialQueryAdapter::SweepCall& b)
@@ -274,6 +285,71 @@ TEST_CASE("BrawlerGroundSample.AlignedReturnsUpOffWalkableGround", "[BrawlerMove
         rig.query.scriptedSweeps = { floorHit(0.5f, tiltedNormal(20.f), simFrame::kForward) };
         REQUIRE(simFrameDetail::sameBits(rig.sample<true>().normal, simFrame::kUp));
     }
+}
+
+TEST_CASE("BrawlerGroundSample.AlignedSampleIsTheSharedGroundNormal", "[BrawlerMovement]")
+{
+    using namespace groundSampleTests;
+
+    const Rig base;
+    const movement::StaticData& sd = base.sd;
+    std::vector<SweepHit> hits = {
+        floorHit(0.5f, tiltedNormal(10.f), glm::vec3(0.f)),
+        floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(30.f)),
+        floorHit(0.5f, tiltedNormal(29.f), tiltedNormal(30.f)),
+        floorHit(0.5f, tiltedNormal(20.f), glm::vec3(0.f)),
+        floorHit(0.5f, tiltedNormal(50.f), tiltedNormal(50.f)),
+        floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(50.f)),
+        floorHit(0.5f, tiltedNormal(20.f), simFrame::kForward),
+        floorHit(0.5f, tiltedNormal(sd.maxSlopeAngleDeg + 5.f), glm::vec3(0.f)),
+        floorHit(0.5f, glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f)),
+        floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(sd.maxSlopeAngleDeg)),
+        floorHit(0.5f, tiltedNormal(sd.maxSlopeAngleDeg), glm::vec3(0.f)),
+        SweepHit{},
+    };
+    {
+        SweepHit unblocked = floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(30.f));
+        unblocked.blocked = false;
+        hits.push_back(unblocked);
+    }
+    for (int gjk = -90; gjk <= 90; gjk += 5)
+        for (int face = -105; face <= 90; face += 15)
+            for (const bool blocked : { true, false })
+            {
+                SweepHit hit = floorHit(0.5f, tiltedNormal(static_cast<float>(gjk)),
+                    face < -90 ? glm::vec3(0.f) : tiltedNormal(static_cast<float>(face)));
+                hit.blocked = blocked;
+                hits.push_back(hit);
+            }
+
+    int walkableFaces = 0;
+    int worldUp       = 0;
+    for (const SweepHit& hit : hits)
+    {
+        Rig rig;
+        rig.query.scriptedSweeps = { hit };
+        const brawlerGround::GroundSample sample = rig.sample<true>();
+        const brawlerGround::GroundSample before = sampleBeforeTheSharedHelper(hit, rig.sd);
+        const glm::vec3 shared = movement::attackGroundNormal(hit, rig.sd);
+        INFO("hit blocked " << hit.blocked << " normal=(" << hit.normal.x << ", " << hit.normal.y << ", " << hit.normal.z
+             << ") surfaceNormal=(" << hit.surfaceNormal.x << ", " << hit.surfaceNormal.y << ", " << hit.surfaceNormal.z << ")");
+        REQUIRE(rig.query.sweepCalls.size() == 1u);
+        REQUIRE(simFrameDetail::sameBits(sample.normal, before.normal));
+        REQUIRE(simFrameDetail::sameBits(shared, before.normal));
+        if (simFrameDetail::sameBits(sample.normal, simFrame::kUp))
+            ++worldUp;
+        else
+            ++walkableFaces;
+    }
+
+    Rig unbound;
+    unbound.bindings.queryVolumeIds.clear();
+    REQUIRE(simFrameDetail::sameBits(unbound.sample<true>().normal, sampleBeforeTheSharedHelper(SweepHit{}, unbound.sd).normal));
+
+    std::printf("[BrawlerGroundSample.shared] hits=%zu walkableFaces=%d worldUp=%d\n", hits.size(), walkableFaces, worldUp);
+    REQUIRE(hits.size() == 13u + 37u * 14u * 2u);
+    REQUIRE(walkableFaces > 0);
+    REQUIRE(worldUp > 0);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS
