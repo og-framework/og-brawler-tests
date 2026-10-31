@@ -129,6 +129,26 @@ TEST_CASE("GameInputMapping: the four scheme switches are the digit keys 7, 8, 9
 	CHECK(keysOf(ctx, dInput::gameMapping::SetSchemeAimRelativeSwapped) == std::vector<KeyId>{ KeyId::Key_0 });
 }
 
+TEST_CASE("GameInputMapping: ToggleControlsLegend is bound to Key_H and gamepad View only, and no other action uses them",
+	"[SimulatableBrawler][GameInputMapping]")
+{
+	const MappingContext ctx = dInput::gameMapping::buildDefaultContext();
+
+	CHECK(dInput::gameMapping::ToggleControlsLegend.valueType == dInput::ActionValueType::Boolean);
+	CHECK(std::string(dInput::gameMapping::ToggleControlsLegend.name) == "ToggleControlsLegend");
+	CHECK(keysOf(ctx, dInput::gameMapping::ToggleControlsLegend)
+		== std::vector<KeyId>{ KeyId::Key_H, KeyId::Gamepad_Special_Left });
+
+	for (const KeyId key : { KeyId::Key_H, KeyId::Gamepad_Special_Left })
+	{
+		CAPTURE(static_cast<int>(key));
+		const std::vector<KeyUse> uses = usesOf(ctx, key);
+		REQUIRE(uses.size() == 1);
+		CHECK(uses[0].action == &dInput::gameMapping::ToggleControlsLegend);
+		CHECK(uses[0].modifier == KeyModifier::None);
+	}
+}
+
 } // namespace gameInputMappingTest
 
 #endif // WITH_LOW_LEVEL_TESTS
