@@ -211,7 +211,7 @@ void settleBatch(std::vector<Rest>& rests)
         const brawlerMovementSimulation::GroundProbe probe =
             brawlerMovementSimulation::probeGround(movement, scene.staticData.m_movementStaticData, bindings, scene.query);
         rests.push_back(Rest{ placement, position - placement.facePoint,
-            brawlerMovementSimulation::sampleAttackGround<true>(movement, scene.staticData.m_movementStaticData, bindings, scene.query),
+            brawlerMovementSimulation::sampleAttackGround(movement, scene.staticData.m_movementStaticData, bindings, scene.query),
             probe.walkable ? probe.hit.normal : brawlerMovementSimulation::kWorldUp,
             support == brawlerMovementSimulation::SupportState::Supported, glm::length(glm::vec3(step.x, 0.f, step.z)) });
     }

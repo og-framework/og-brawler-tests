@@ -4,8 +4,8 @@
 Source: `GoldenTraceSlopeScenario.h`. This file has no guards document: nothing in the header needs a `⛔` tag. The
 harness that runs the scenario is described in `GoldenTraceScene-rationale.md`, the test in
 `BrawlerJoltSlopeGoldenTraceTest-rationale.md`. Written by og-ground-aligned-attacks task 3 as the baseline on a 30°
-slope, while the brawler built its swings, guard and projectiles horizontally; since task 10 (the flip,
-`brawlerGround::kGroundAlignedAttacks`) they follow each brawler's ground, and the golden records that. Task 10 also added
+slope, while the brawler built its swings, guard and projectiles horizontally; since task 10 (the flip of the
+initiative's compile-time knob, which task 14 deleted) they follow each brawler's ground, and the golden records that. Task 10 also added
 three teleports and C's overhead (§3, §4).
 
 Every length, point and direction is a native literal: metres, og axes (+Y up, forward −Z, right +X), each the float

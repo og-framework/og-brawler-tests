@@ -76,7 +76,7 @@ in bounds mode), or when the recorded fields change. Never edit either file by h
 there to catch.
 
 og-ground-aligned-attacks task 10 re-recorded it when the ground-aligned attacks were switched on
-(`brawlerGround::kGroundAlignedAttacks`). A value-by-value diff of the two recordings changed one field only:
+(the initiative's compile-time knob, which task 14 deleted without a re-recording). A value-by-value diff of the two recordings changed one field only:
 `A.body1.GuardAxis.rotation` on ticks 212 to 266, the ticks on which A's ground probe stands on the 20° ramp (its capsule
 centre 20.45 to 21.30 m along the walk, the ramp spanning 20.5 to 21.32 m; Supported throughout), where the guard now tilts with the ramp (a 20° turn, previously
 the identity). Every other field and tick is bit-identical.

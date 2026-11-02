@@ -89,10 +89,9 @@ struct Rig
         state = composite.get<movement::State>();
     }
 
-    template <bool Aligned>
     brawlerGround::GroundSample sample()
     {
-        return movement::sampleAttackGround<Aligned>(state, sd, bindings, query);
+        return movement::sampleAttackGround(state, sd, bindings, query);
     }
 };
 
@@ -188,29 +187,6 @@ TEST_CASE("BrawlerGroundSample.MovementIntegrateSweepsOncePerTick", "[BrawlerMov
     }
 }
 
-TEST_CASE("BrawlerGroundSample.KnobOffMakesNoQueryAndReturnsUp", "[BrawlerMovement]")
-{
-    using namespace groundSampleTests;
-
-    Rig rig;
-    rig.query.scriptedSweeps = { floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(30.f)) };
-
-    const brawlerGround::GroundSample sample = rig.sample<false>();
-
-    REQUIRE(rig.query.sweepCalls.empty());
-    REQUIRE(simFrameDetail::sameBits(sample.normal, simFrame::kUp));
-
-    Rig shipped;
-    shipped.query.scriptedSweeps = rig.query.scriptedSweeps;
-    const brawlerGround::GroundSample shippedSample =
-        movement::sampleAttackGround(shipped.state, shipped.sd, shipped.bindings, shipped.query);
-    REQUIRE(shipped.query.sweepCalls.size() == (brawlerGround::kGroundAlignedAttacks ? 1u : 0u));
-    if constexpr (!brawlerGround::kGroundAlignedAttacks)
-    {
-        REQUIRE(simFrameDetail::sameBits(shippedSample.normal, simFrame::kUp));
-    }
-}
-
 TEST_CASE("BrawlerGroundSample.AlignedPrefersTheExactFaceNormal", "[BrawlerMovement]")
 {
     using namespace groundSampleTests;
@@ -220,7 +196,7 @@ TEST_CASE("BrawlerGroundSample.AlignedPrefersTheExactFaceNormal", "[BrawlerMovem
     const glm::vec3 gjk  = tiltedNormal(29.f);
     rig.query.scriptedSweeps = { floorHit(0.5f, gjk, face) };
 
-    const brawlerGround::GroundSample sample = rig.sample<true>();
+    const brawlerGround::GroundSample sample = rig.sample();
 
     INFO("sample=(" << sample.normal.x << ", " << sample.normal.y << ", " << sample.normal.z << ")");
     REQUIRE(rig.query.sweepCalls.size() == 1u);
@@ -240,7 +216,7 @@ TEST_CASE("BrawlerGroundSample.AlignedFallsBackToTheSweepNormal", "[BrawlerMovem
     const glm::vec3 gjk = tiltedNormal(20.f);
     rig.query.scriptedSweeps = { floorHit(0.5f, gjk, glm::vec3(0.f)) };
 
-    const brawlerGround::GroundSample sample = rig.sample<true>();
+    const brawlerGround::GroundSample sample = rig.sample();
 
     REQUIRE(rig.query.sweepCalls.size() == 1u);
     REQUIRE(simFrameDetail::sameBits(sample.normal, gjk));
@@ -256,19 +232,19 @@ TEST_CASE("BrawlerGroundSample.AlignedReturnsUpOffWalkableGround", "[BrawlerMove
         const glm::vec3 steep = tiltedNormal(50.f);
         REQUIRE(glm::dot(steep, movement::kWorldUp) < rig.sd.cosMaxSlope);
         rig.query.scriptedSweeps = { floorHit(0.5f, steep, steep) };
-        REQUIRE(simFrameDetail::sameBits(rig.sample<true>().normal, simFrame::kUp));
+        REQUIRE(simFrameDetail::sameBits(rig.sample().normal, simFrame::kUp));
         REQUIRE(rig.query.sweepCalls.size() == 1u);
     }
     SECTION("a steep exact face under a walkable sweep normal")
     {
         Rig rig;
         rig.query.scriptedSweeps = { floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(50.f)) };
-        REQUIRE(simFrameDetail::sameBits(rig.sample<true>().normal, simFrame::kUp));
+        REQUIRE(simFrameDetail::sameBits(rig.sample().normal, simFrame::kUp));
     }
     SECTION("a miss")
     {
         Rig rig;
-        REQUIRE(simFrameDetail::sameBits(rig.sample<true>().normal, simFrame::kUp));
+        REQUIRE(simFrameDetail::sameBits(rig.sample().normal, simFrame::kUp));
         REQUIRE(rig.query.sweepCalls.size() == 1u);
     }
     SECTION("an unblocked hit that carries normals")
@@ -277,13 +253,13 @@ TEST_CASE("BrawlerGroundSample.AlignedReturnsUpOffWalkableGround", "[BrawlerMove
         SweepHit unblocked = floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(30.f));
         unblocked.blocked = false;
         rig.query.scriptedSweeps = { unblocked };
-        REQUIRE(simFrameDetail::sameBits(rig.sample<true>().normal, simFrame::kUp));
+        REQUIRE(simFrameDetail::sameBits(rig.sample().normal, simFrame::kUp));
     }
     SECTION("a vertical exact face under a walkable sweep normal")
     {
         Rig rig;
         rig.query.scriptedSweeps = { floorHit(0.5f, tiltedNormal(20.f), simFrame::kForward) };
-        REQUIRE(simFrameDetail::sameBits(rig.sample<true>().normal, simFrame::kUp));
+        REQUIRE(simFrameDetail::sameBits(rig.sample().normal, simFrame::kUp));
     }
 }
 
@@ -328,7 +304,7 @@ TEST_CASE("BrawlerGroundSample.AlignedSampleIsTheSharedGroundNormal", "[BrawlerM
     {
         Rig rig;
         rig.query.scriptedSweeps = { hit };
-        const brawlerGround::GroundSample sample = rig.sample<true>();
+        const brawlerGround::GroundSample sample = rig.sample();
         const brawlerGround::GroundSample before = sampleBeforeTheSharedHelper(hit, rig.sd);
         const glm::vec3 shared = movement::attackGroundNormal(hit, rig.sd);
         INFO("hit blocked " << hit.blocked << " normal=(" << hit.normal.x << ", " << hit.normal.y << ", " << hit.normal.z
@@ -344,7 +320,7 @@ TEST_CASE("BrawlerGroundSample.AlignedSampleIsTheSharedGroundNormal", "[BrawlerM
 
     Rig unbound;
     unbound.bindings.queryVolumeIds.clear();
-    REQUIRE(simFrameDetail::sameBits(unbound.sample<true>().normal, sampleBeforeTheSharedHelper(SweepHit{}, unbound.sd).normal));
+    REQUIRE(simFrameDetail::sameBits(unbound.sample().normal, sampleBeforeTheSharedHelper(SweepHit{}, unbound.sd).normal));
 
     std::printf("[BrawlerGroundSample.shared] hits=%zu walkableFaces=%d worldUp=%d\n", hits.size(), walkableFaces, worldUp);
     REQUIRE(hits.size() == 13u + 37u * 14u * 2u);

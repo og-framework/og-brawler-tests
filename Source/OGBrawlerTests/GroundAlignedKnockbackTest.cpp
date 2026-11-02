@@ -209,7 +209,6 @@ struct Rig
             state.bodyState.position -= ground.planeNormal * gap;
     }
 
-    template <bool Aligned>
     void tick(std::uint32_t t)
     {
         SimulationComposite<movement::InitialConditions, movement::State, machine::State>
@@ -220,7 +219,7 @@ struct Rig
             utils{ kDt, t, phys, ground };
         movement::AllInput<brawlerTestMocks::MockPhysicsAdapter, PlaneGround>
             allInput{ pi, utils };
-        movement::integrate<Aligned>(kDt, allInput, sd, deps, bindings, derived, inbound);
+        movement::integrate(kDt, allInput, sd, deps, bindings, derived, inbound);
         inbound = brawlerInboundHit::DerivedState{};
         ic    = composite.get<movement::InitialConditions>();
         state = composite.get<movement::State>();
@@ -299,17 +298,16 @@ TEST_CASE("GroundAlignedKnockback.LiftTestIsSurfaceRelativeOnASlope", "[BrawlerM
     state.velocity = t * 20.f;
     INFO("in-plane up-slope v=(" << state.velocity.x << ", " << state.velocity.y << ", " << state.velocity.z
          << ") dot(v, n)=" << glm::dot(state.velocity, n) << " dot(v, up)=" << glm::dot(state.velocity, up));
-    REQUIRE_FALSE(movement::detachesFromSupport<true>(state, up, n, true));
-    REQUIRE(movement::detachesFromSupport<false>(state, up, n, true));
+    REQUIRE_FALSE(movement::detachesFromSupport(state, up, n, true));
 
     state.velocity = outOfPlane(t, n, 5.f) * 20.f;
-    REQUIRE(movement::detachesFromSupport<true>(state, up, n, true));
-    REQUIRE_FALSE(movement::detachesFromSupport<true>(state, up, n, false));
+    REQUIRE(movement::detachesFromSupport(state, up, n, true));
+    REQUIRE_FALSE(movement::detachesFromSupport(state, up, n, false));
 
     state.velocity = outOfPlane(t, n, 1.f) * 20.f;
-    REQUIRE_FALSE(movement::detachesFromSupport<true>(state, up, n, true));
+    REQUIRE_FALSE(movement::detachesFromSupport(state, up, n, true));
     state.velocity = outOfPlane(t, n, 3.f) * 20.f;
-    REQUIRE(movement::detachesFromSupport<true>(state, up, n, true));
+    REQUIRE(movement::detachesFromSupport(state, up, n, true));
 
     int inPlaneDetaches = 0;
     int outOfPlaneHolds = 0;
@@ -318,10 +316,10 @@ TEST_CASE("GroundAlignedKnockback.LiftTestIsSurfaceRelativeOnASlope", "[BrawlerM
         const glm::vec3 inPlane = surfaceFrame::tiltToSurface(n,
             simFrame::fromForwardRight(glm::vec2(glm::cos(glm::radians(float(i))), glm::sin(glm::radians(float(i)))), 0.f));
         state.velocity = inPlane * 20.f;
-        if (movement::detachesFromSupport<true>(state, up, n, true))
+        if (movement::detachesFromSupport(state, up, n, true))
             ++inPlaneDetaches;
         state.velocity = outOfPlane(inPlane, n, 5.f) * 20.f;
-        if (!movement::detachesFromSupport<true>(state, up, n, true))
+        if (!movement::detachesFromSupport(state, up, n, true))
             ++outOfPlaneHolds;
     }
     INFO("in-plane detaches " << inPlaneDetaches << "/360, 5 deg out holds " << outOfPlaneHolds << "/360");
@@ -361,55 +359,12 @@ TEST_CASE("GroundAlignedKnockback.FlatGroundPredicateKeepsTodaysAnswer", "[Brawl
             const bool today = committed && glm::dot(state.velocity, up) > 0.f;
             for (const glm::vec3& face : faces)
             {
-                REQUIRE(movement::detachesFromSupport<false>(state, up, face, committed) == today);
-                REQUIRE(movement::detachesFromSupport<true>(state, up, face, committed) == today);
+                REQUIRE(movement::detachesFromSupport(state, up, face, committed) == today);
                 ++checked;
             }
         }
     }
     REQUIRE(checked == 10000);
-}
-
-TEST_CASE("GroundAlignedKnockback.FlatGroundIntegrateKeepsTodaysBits", "[BrawlerMovement]")
-{
-    using namespace groundAlignedKnockbackTests;
-
-    struct Seed { float clearance; glm::vec3 velocity; bool hitTick; };
-    const Seed seeds[] = {
-        { 0.1f,  glm::vec3(0.f), true },
-        { 0.1f,  glm::vec3(3.f, 4.f, -2.f), false },
-        { 0.2f,  glm::vec3(-6.f, -1.f, 5.f), false },
-        { 0.35f, glm::vec3(0.f, 2.5f, -0.f), false },
-    };
-
-    int ticks = 0;
-    for (const Seed& s : seeds)
-    {
-        Rig today(glm::vec3(0.f, 1.f, -0.f));
-        Rig aligned(glm::vec3(0.f, 1.f, -0.f));
-        for (Rig* rig : { &today, &aligned })
-        {
-            rig->placeAtClearance(s.clearance);
-            rig->state.velocity = s.velocity;
-            if (s.hitTick)
-                rig->hitAlong(glm::normalize(glm::vec2(0.6f, -0.8f)));
-            else
-                rig->enterKnockbackFlinch();
-        }
-        for (std::uint32_t t = 1u; t <= 40u; ++t)
-        {
-            today.tick<false>(t);
-            aligned.tick<true>(t);
-            INFO("seed clearance " << s.clearance << " tick " << t);
-            REQUIRE(sameState(today.state, aligned.state));
-            REQUIRE(sameBits(today.derived.surfaceNormal, aligned.derived.surfaceNormal));
-            REQUIRE(today.derived.lastSupportState == aligned.derived.lastSupportState);
-            today.engineStep();
-            aligned.engineStep();
-            ++ticks;
-        }
-    }
-    REQUIRE(ticks == 160);
 }
 
 TEST_CASE("GroundAlignedKnockback.DetachedTargetDeceleratesWorldHorizontally", "[BrawlerMovement]")
@@ -424,21 +379,15 @@ TEST_CASE("GroundAlignedKnockback.DetachedTargetDeceleratesWorldHorizontally", "
     aligned.state.velocity = start;
     aligned.enterKnockbackFlinch();
 
-    Rig today(n);
-    today.placeAtClearance(0.2f);
-    today.state.velocity = start;
-    today.enterKnockbackFlinch();
-
     const float gravityStep = aligned.sd.gravity * kDt;
     const float decelStep   = aligned.sd.launchDecel * kDt;
 
     int checkedTicks = 0;
     float worstVertical = 0.f;
-    float worstTodayVertical = 0.f;
     for (std::uint32_t t = 1u; t <= 30u; ++t)
     {
         const glm::vec3 before = aligned.state.velocity;
-        aligned.tick<true>(t);
+        aligned.tick(t);
         if (!aligned.ground.lastBlocked)
             break;
         const glm::vec3 after = aligned.state.velocity;
@@ -459,20 +408,12 @@ TEST_CASE("GroundAlignedKnockback.DetachedTargetDeceleratesWorldHorizontally", "
         REQUIRE(glm::dot(glm::normalize(horizontalAfter), glm::normalize(horizontalBefore))
                 == Catch::Approx(1.f).margin(1e-6f));
 
-        const glm::vec3 todayBefore = today.state.velocity;
-        today.tick<false>(t);
-        const float todayChange = simFrame::height(today.state.velocity) - simFrame::height(todayBefore);
-        worstTodayVertical = glm::max(worstTodayVertical, glm::abs(todayChange - gravityStep));
-
         aligned.engineStep();
-        today.engineStep();
         ++checkedTicks;
     }
-    std::printf("[GroundAlignedKnockback.detachedBasis] ticks=%d worstAlignedVerticalErr=%.9g "
-                "worstTodayVerticalErr=%.9g gravityStep=%.9g\n",
-        checkedTicks, worstVertical, worstTodayVertical, gravityStep);
+    std::printf("[GroundAlignedKnockback.detachedBasis] ticks=%d worstAlignedVerticalErr=%.9g gravityStep=%.9g\n",
+        checkedTicks, worstVertical, gravityStep);
     REQUIRE(checkedTicks >= 3);
-    REQUIRE(worstTodayVertical > 0.1f);
 }
 
 TEST_CASE("GroundAlignedKnockback.InPlaneTangentSlidesAlongTheFace", "[BrawlerMovement]")
@@ -493,7 +434,7 @@ TEST_CASE("GroundAlignedKnockback.InPlaneTangentSlidesAlongTheFace", "[BrawlerMo
         rig.hitWorld(d);
         const float speed = rig.knockbackSpeed();
 
-        rig.tick<true>(1u);
+        rig.tick(1u);
         const glm::vec3 v = rig.state.velocity;
         const float angle = angleBetween(v, d);
         const float speedErr = glm::abs(glm::length(v) - speed);
@@ -506,7 +447,7 @@ TEST_CASE("GroundAlignedKnockback.InPlaneTangentSlidesAlongTheFace", "[BrawlerMo
         worstSpeedErr = glm::max(worstSpeedErr, speedErr);
 
         rig.engineStep();
-        rig.tick<true>(2u);
+        rig.tick(2u);
         REQUIRE(rig.support() == movement::SupportState::Supported);
         ++directions;
     }
@@ -534,7 +475,7 @@ TEST_CASE("GroundAlignedKnockback.DirectionLeavingTheFaceLaunchesOnTheHitTick", 
         const float speed       = rig.knockbackSpeed();
         const float gravityStep = rig.sd.gravity * kDt;
 
-        rig.tick<true>(1u);
+        rig.tick(1u);
         const glm::vec3 v = rig.state.velocity;
         const float expectedVertical = simFrame::height(d) * speed + gravityStep;
         const float verticalErr = simFrame::height(v) - expectedVertical;
@@ -566,7 +507,7 @@ TEST_CASE("GroundAlignedKnockback.FlatTargetHitByASlopeTangentLaunches", "[Brawl
         const float speed       = rig.knockbackSpeed();
         const float gravityStep = rig.sd.gravity * kDt;
 
-        rig.tick<true>(1u);
+        rig.tick(1u);
         const glm::vec3 v = rig.state.velocity;
         INFO("heading " << heading << " d=(" << d.x << ", " << d.y << ", " << d.z << ") v=(" << v.x << ", " << v.y
              << ", " << v.z << ")");
@@ -595,7 +536,7 @@ TEST_CASE("GroundAlignedKnockback.DirectionIntoTheFaceStaysSupported", "[Brawler
                      speed / rig.sd.launchDecel) / kDt - 1e-3f));
 
         const glm::vec3 start = rig.state.bodyState.position;
-        rig.tick<true>(1u);
+        rig.tick(1u);
         INFO("contact " << contact);
         REQUIRE(rig.support() == movement::SupportState::Supported);
         const glm::vec3 hitTickVelocity = rig.state.velocity;
@@ -611,7 +552,7 @@ TEST_CASE("GroundAlignedKnockback.DirectionIntoTheFaceStaysSupported", "[Brawler
             else
                 rig.engineStep();
             minClearance = glm::min(minClearance, rig.signedClearance());
-            rig.tick<true>(static_cast<std::uint32_t>(t));
+            rig.tick(static_cast<std::uint32_t>(t));
             if (rig.support() == movement::SupportState::Unsupported)
             {
                 ++unsupportedTicks;
@@ -664,7 +605,7 @@ TEST_CASE("GroundAlignedKnockback.OverheadDownswingNeverDetaches", "[BrawlerMove
                     Rig rig(targetGround);
                     rig.placeOnTheHover();
                     rig.hitWorld(d);
-                    rig.tick<true>(1u);
+                    rig.tick(1u);
                     INFO("theta " << theta << " heading " << heading << " target n.y " << targetGround.y
                          << " attacker n.y " << attackerGround.y);
                     CHECK(rig.support() == movement::SupportState::Supported);
@@ -702,77 +643,34 @@ TEST_CASE("GroundAlignedKnockback.FlatTargetWithAHorizontalDirectionKeepsTodaysB
         for (const Seed& s : seeds)
             for (const glm::vec3& d : directions)
             {
-                Rig today(plane);
+                Rig noDirection(plane);
                 Rig aligned(plane);
-                for (Rig* rig : { &today, &aligned })
+                for (Rig* rig : { &noDirection, &aligned })
                 {
                     rig->placeAtClearance(s.clearance);
                     rig->state.velocity = s.velocity;
                     rig->hitWorld(d);
                 }
+                noDirection.inbound.hitDirectionWorld = glm::vec3(0.f);
                 for (std::uint32_t t = 1u; t <= 40u; ++t)
                 {
-                    today.tick<false>(t);
-                    aligned.tick<true>(t);
+                    noDirection.tick(t);
+                    aligned.tick(t);
                     INFO("seed clearance " << s.clearance << " vertical " << simFrame::height(s.velocity)
                          << " d=(" << d.x << ", " << d.y << ", " << d.z << ") tick " << t
-                         << " first differing field " << firstDifferingField(today.state, aligned.state)
-                         << " today v=(" << today.state.velocity.x << ", " << today.state.velocity.y << ", "
-                         << today.state.velocity.z << ") aligned v=(" << aligned.state.velocity.x << ", "
+                         << " first differing field " << firstDifferingField(noDirection.state, aligned.state)
+                         << " noDirection v=(" << noDirection.state.velocity.x << ", " << noDirection.state.velocity.y << ", "
+                         << noDirection.state.velocity.z << ") aligned v=(" << aligned.state.velocity.x << ", "
                          << aligned.state.velocity.y << ", " << aligned.state.velocity.z << ")");
-                    REQUIRE(sameState(today.state, aligned.state));
-                    REQUIRE(sameBits(today.derived.surfaceNormal, aligned.derived.surfaceNormal));
-                    REQUIRE(today.derived.lastSupportState == aligned.derived.lastSupportState);
-                    today.engineStep();
+                    REQUIRE(sameState(noDirection.state, aligned.state));
+                    REQUIRE(sameBits(noDirection.derived.surfaceNormal, aligned.derived.surfaceNormal));
+                    REQUIRE(noDirection.derived.lastSupportState == aligned.derived.lastSupportState);
+                    noDirection.engineStep();
                     aligned.engineStep();
                     ++ticks;
                 }
             }
     REQUIRE(ticks == 1200);
-}
-
-TEST_CASE("GroundAlignedKnockback.KnobOffIgnoresTheWorldDirection", "[BrawlerMovement]")
-{
-    using namespace groundAlignedKnockbackTests;
-
-    const glm::vec3 n = slopeNormal(30.f);
-    const glm::vec3 planes[] = { n, glm::vec3(0.f, 1.f, -0.f) };
-    const glm::vec3 directions[] = {
-        inPlaneDirection(n, 0.f),
-        inPlaneDirection(n, 100.f),
-        simFrame::fromForwardRight(glm::vec2(-1.f, 0.f), 0.f),
-        simFrame::fromForwardRight(glm::vec2(1.f, 0.f), 0.f),
-        glm::normalize(simFrame::fromForwardRight(glm::vec2(0.3f, 0.9f), -0.4f)),
-    };
-
-    int ticks = 0;
-    for (const glm::vec3& plane : planes)
-        for (const glm::vec3& d : directions)
-        {
-            Rig withWorld(plane);
-            Rig withoutWorld(plane);
-            for (Rig* rig : { &withWorld, &withoutWorld })
-            {
-                rig->placeAtClearance(0.11f);
-                rig->state.velocity = glm::vec3(1.f, -0.25f, 0.5f);
-                rig->hitWorld(d);
-            }
-            withoutWorld.inbound.hitDirectionWorld = glm::vec3(0.f);
-            for (std::uint32_t t = 1u; t <= 40u; ++t)
-            {
-                withWorld.tick<false>(t);
-                withoutWorld.tick<false>(t);
-                INFO("plane n.y " << plane.y << " d=(" << d.x << ", " << d.y << ", " << d.z << ") tick " << t
-                     << " first differing field " << firstDifferingField(withWorld.state, withoutWorld.state));
-                REQUIRE(sameState(withWorld.state, withoutWorld.state));
-                REQUIRE(sameBits(withWorld.derived.surfaceNormal, withoutWorld.derived.surfaceNormal));
-                REQUIRE(withWorld.derived.lastSupportState == withoutWorld.derived.lastSupportState);
-                withWorld.engineStep();
-                withoutWorld.engineStep();
-                ++ticks;
-            }
-        }
-    REQUIRE(ticks == 400);
 }
 
 TEST_CASE("GroundAlignedKnockback.UnwalkableExactFaceOverAWalkableSweepIsWorldUp", "[BrawlerMovement]")
@@ -813,29 +711,30 @@ TEST_CASE("GroundAlignedKnockback.UnwalkableExactFaceOverAWalkableSweepIsWorldUp
             for (const glm::vec3& d : horizontals)
             {
                 REQUIRE(simFrame::height(d) == 0.f);
-                Rig today(sweep);
+                Rig noDirection(sweep);
                 Rig aligned(sweep);
-                for (Rig* rig : { &today, &aligned })
+                for (Rig* rig : { &noDirection, &aligned })
                 {
                     rig->ground.exactFace = face;
                     rig->placeOnTheHover();
                     rig->hitWorld(d);
                 }
+                noDirection.inbound.hitDirectionWorld = glm::vec3(0.f);
                 for (std::uint32_t t = 1u; t <= 40u; ++t)
                 {
-                    today.tick<false>(t);
-                    aligned.tick<true>(t);
+                    noDirection.tick(t);
+                    aligned.tick(t);
                     INFO("horizontal d=(" << d.x << ", " << d.y << ", " << d.z << ") dot(d, face)=" << glm::dot(d, face)
-                         << " tick " << t << " first differing field " << firstDifferingField(today.state, aligned.state));
-                    REQUIRE(sameState(today.state, aligned.state));
-                    REQUIRE(sameBits(today.derived.surfaceNormal, aligned.derived.surfaceNormal));
-                    REQUIRE(today.derived.lastSupportState == aligned.derived.lastSupportState);
+                         << " tick " << t << " first differing field " << firstDifferingField(noDirection.state, aligned.state));
+                    REQUIRE(sameState(noDirection.state, aligned.state));
+                    REQUIRE(sameBits(noDirection.derived.surfaceNormal, aligned.derived.surfaceNormal));
+                    REQUIRE(noDirection.derived.lastSupportState == aligned.derived.lastSupportState);
                     if (t == 1u && glm::dot(d, face) > movement::kMinLaunchSine)
                     {
                         REQUIRE(aligned.support() == movement::SupportState::Supported);
                         ++leavingHolds;
                     }
-                    today.engineStep();
+                    noDirection.engineStep();
                     aligned.engineStep();
                     ++horizontalTicks;
                 }
@@ -860,8 +759,8 @@ TEST_CASE("GroundAlignedKnockback.UnwalkableExactFaceOverAWalkableSweepIsWorldUp
                 }
                 for (std::uint32_t t = 1u; t <= 40u; ++t)
                 {
-                    reference.tick<true>(t);
-                    aligned.tick<true>(t);
+                    reference.tick(t);
+                    aligned.tick(t);
                     INFO("tilted d=(" << d.x << ", " << d.y << ", " << d.z << ") dot(d, face)=" << glm::dot(d, face)
                          << " tick " << t << " first differing field " << firstDifferingField(reference.state, aligned.state));
                     if (t == 1u)
@@ -924,7 +823,7 @@ TEST_CASE("GroundAlignedKnockback.WalkableExactFaceStillDecides", "[BrawlerMovem
             rig.ground.exactFace = pair.face;
             rig.placeOnTheHover();
             rig.hitWorld(d);
-            rig.tick<true>(1u);
+            rig.tick(1u);
             INFO("heading " << heading);
             REQUIRE(rig.support() == movement::SupportState::Unsupported);
             REQUIRE(simFrame::height(rig.state.velocity)

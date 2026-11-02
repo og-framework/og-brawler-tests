@@ -7,7 +7,7 @@ scenario is in `GoldenTraceSlopeScenario-rationale.md`, the harness in `GoldenTr
 with `BrawlerJoltSlopeGolden.inl` and `BrawlerJoltSlopeGoldenEnvelope.inl`. They were recorded at og-ground-aligned-attacks
 task 3 as the baseline with the attacks built horizontally, re-recorded at task 3b, when the convex crease pair moved
 (`GoldenTraceSlopeScenario-rationale.md` §5), and re-recorded at task 10, the flip that turned the ground-aligned attacks
-on (`brawlerGround::kGroundAlignedAttacks`), and again at task 13b, which gave the movement the attack's ground rule
+on (the initiative's compile-time knob; task 14 deleted it and the recording stayed exact), and again at task 13b, which gave the movement the attack's ground rule
 (only F's convex-crease hits changed, §4). Since task 10 five behaviour cases (§7) state what the flip is for. §6
 describes the crease reach sweep in `CreaseReachTest.cpp`, which chose the crease placement.
 
@@ -59,9 +59,10 @@ One line, `[GoldenTrace.slope]`, with these fields:
 - `maxSwingUpError` and `weaponOutOfPlaneMax`: the largest values over all swings of the two swing measures (§7). The
   second is the shipped build's counterpart of the initiative's design §7.2 (there modelled at up to 9.2e-7).
 - `extraCasts`: the sweeps the shipped attack ground sample issues over the run. Before every tick the test calls
-  `brawlerMovementSimulation::sampleAttackGround` with its default (shipped) knob on each character's state, through a
-  counting wrapper around the scene's query (`CountingQuery`); with the knob on that is one cast per character per
-  tick, the cost the flip adds to `SimulatableBrawler::integrate`, and 0 with it off.
+  `brawlerMovementSimulation::sampleAttackGround` on each character's state, through a
+  counting wrapper around the scene's query (`CountingQuery`); that is one cast per character per
+  tick, the cost the flip added to `SimulatableBrawler::integrate` (0 with the knob off, before task 10; task
+  14 deleted the knob).
 - `inbound`: per character, ticks it was hit and ticks its own swing was guard-blocked (`wasHitThisTick`,
   `wasGuardBlockedThisTick`).
 - One `|` group per shot (`shot.`): its spawn tick, ticks alive, ticks over the face interior, its height above the face
@@ -157,7 +158,7 @@ hand.
 
 `BrawlerJoltSlopeCreaseReach.PrintsTheConnectingWindows` (`[GoldenTrace]`, no golden) predicts, for each crease, role and
 swing sense, which placements of the crease pair connect, with the swings built horizontally and with the ground-aligned
-initial conditions. It runs no swing, and it selects both modes itself, so the knob does not change it.
+initial conditions. It runs no swing, and it selects both modes itself, so the knob (deleted in task 14) never changed it.
 
 - **Rest positions are measured.** `SettleScenario` puts characters `kTeleportHeight` (1.2 m) above face points on both
   sides of both creases, 0.05 to 1.00 m from the crease in 0.05 m steps (80 points, eight per scene, 1.5 m apart along
@@ -194,7 +195,7 @@ initial conditions. It runs no swing, and it selects both modes itself, so the k
 ## 7. The behaviour cases (task 10)
 
 Each case reads the one run of §2 and asserts what the ground-aligned attacks must do on the slope. With the knob set
-back to `false` every one of them fails (task 10's seen-failing run, quoted in its impl notes): the swings report
+back to off every one of them failed (task 10's seen-failing run, quoted in its impl notes; task 14 deleted the knob): the swings report
 `|R_ic kUp - n| = 0.5`, A hits neither B nor C, C's guard blocks nothing, the shots drift 3.47 m against the face, D's
 and E's knockbacks leave the face, and the overhead hits nobody.
 
@@ -218,7 +219,8 @@ and E's knockbacks leave the face, and the overhead hits nobody.
   - D's and E's fall-line knockbacks are `inPlane`, and neither leaves the face on its hit tick or during the fast part
     of its slide: either no Unsupported tick at all, or the first one comes after the hit tick and is entered below 15 %
     of the knockback speed. (The speed is the one on the tick before, so a hop on the hit tick itself would be read at
-    the pre-hit speed; the tick condition is what catches it: knob off, E is Unsupported for 22 ticks from its hit tick.)
+    the pre-hit speed; the tick condition is what catches it: with the knob off, before the flip (task 10), E was Unsupported for 22
+    ticks from its hit tick.)
     Measured: E none; D one, on tick 438 of a hit at 410, two ticks before its lockout ends, entered at 1.96 m/s. That
     tick's lift test (`detachesFromSupport`, task 13) read a velocity of 1.96 m/s whose angle out of the face was above
     2°: the hover servo's vertical correction is a few cm/s, which a 20 m/s slide hides and a 2 m/s one does not. The

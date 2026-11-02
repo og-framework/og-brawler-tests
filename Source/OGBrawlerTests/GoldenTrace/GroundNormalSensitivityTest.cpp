@@ -325,7 +325,7 @@ struct Sampler
     {
         brawlerMovementSimulation::State moved = state;
         moved.bodyState.position = position;
-        return brawlerMovementSimulation::sampleAttackGround<true>(moved, scene.staticData.m_movementStaticData, bindings, query);
+        return brawlerMovementSimulation::sampleAttackGround(moved, scene.staticData.m_movementStaticData, bindings, query);
     }
 };
 

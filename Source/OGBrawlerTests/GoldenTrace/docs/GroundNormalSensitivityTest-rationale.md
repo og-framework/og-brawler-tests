@@ -17,7 +17,7 @@ tick and no swing.
   query adapter and registers the character. The test never steps the scene: the character's movement `State` and the
   bindings of its movement declaration are read once.
 - **The sample is production.** `Sampler::at` copies that `State`, sets `bodyState.position` to the probe position and
-  calls `sampleAttackGround` with the ground-aligned path selected (`<true>`), so the movement probe sweep, the face
+  calls `sampleAttackGround` (the ground-aligned path, the only one since task 14), so the movement probe sweep, the face
   choice and the walkability test are the shipped ones. The probe volume is world-only, so the parked character does
   not matter.
 - **Two normal sources.** `SampleQuery` wraps the scene's adapter and forwards `sweep`. With `Source::Face` it changes

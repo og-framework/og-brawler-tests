@@ -181,7 +181,7 @@ GroundTick groundOf(SlopeScene& scene, unsigned int id, CountingQuery& shipped)
     const auto& bindings = brawler.getPhysicsComposite().get<brawlerMovementSimulation::PhysicsDeclaration>().bindings;
     const brawlerMovementSimulation::StaticData& sd = scene.staticData.m_movementStaticData;
     (void)brawlerMovementSimulation::sampleAttackGround(movement, sd, bindings, shipped);
-    const brawlerGround::GroundSample sample = brawlerMovementSimulation::sampleAttackGround<true>(movement, sd, bindings, scene.query);
+    const brawlerGround::GroundSample sample = brawlerMovementSimulation::sampleAttackGround(movement, sd, bindings, scene.query);
     const brawlerMovementSimulation::GroundProbe probe = brawlerMovementSimulation::probeGround(movement, sd, bindings, scene.query);
     const glm::vec3 face = brawlerMovementSimulation::attackGroundNormal(probe.hit, sd);
     return GroundTick{ glm::dvec3(sample.normal), glm::dvec3(probe.walkable ? face : simFrame::kUp) };
