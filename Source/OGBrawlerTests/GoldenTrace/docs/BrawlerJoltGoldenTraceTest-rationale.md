@@ -80,3 +80,12 @@ og-ground-aligned-attacks task 10 re-recorded it when the ground-aligned attacks
 `A.body1.GuardAxis.rotation` on ticks 212 to 266, the ticks on which A's ground probe stands on the 20° ramp (its capsule
 centre 20.45 to 21.30 m along the walk, the ramp spanning 20.5 to 21.32 m; Supported throughout), where the guard now tilts with the ramp (a 20° turn, previously
 the identity). Every other field and tick is bit-identical.
+
+og-ground-aligned-attacks task 30 re-recorded it when `decomposeVelocity` became exact on every tangent frame. The
+scenario takes the new solve on one tick: A on the 20° ramp at tick 233, whose ground normal is 0.66° off the up–forward
+plane (`dot(v, up)` = −0.0124; on every other call of the scenario it is within the 1e-6 tolerance, and the unchanged 2×2
+solve runs). A
+value-by-value diff of the two recordings changed two fields on two samples: `A.body5.CharacterCapsule.linearVelocity` and
+`A.movement.velocity` on ticks 233 and 234, in the vertical component only, by −1.49e-5 in the recorded legacy units
+(cm/s), that is −1.49e-7 m/s. Every other field and tick is bit-identical, and the envelope changed only in its
+source string.

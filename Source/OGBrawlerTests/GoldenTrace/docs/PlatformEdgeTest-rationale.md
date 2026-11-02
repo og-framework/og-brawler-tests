@@ -76,8 +76,10 @@ compare its printed lines (§7).
   `actualObl` is the angle the knockback really had.
 - **A target resting past a raised rim** sits about 0.14 m below the face plane. That is outside the swing band, whose
   half-thickness is 0.35 m about a pivot 0.3 m above the attacker's root. So for d = −0.15 the attacker overhangs too.
-- **Five placements cannot be reached** and are printed as `[PlatformEdge.unreachable]`: both tip corners at d ≤ 0.3
-  outward, and one oblique overhang. All of them are within 1 m of a rim (`kReachableFromDistance`).
+- **Seven placements cannot be reached** and are printed as `[PlatformEdge.unreachable]`: both tip corners at d ≤ 0.3
+  outward, and three oblique overhangs (d = −0.15): the top rim's seam at +30°, and since task 30 both chamfers at the
+  oblique that turns toward their tip (chamferPlus −30°, chamferMinus +30°). All of them are within 1 m of a rim
+  (`kReachableFromDistance`). Before task 30 there were five; §7.1 says why the two chamfer overhangs moved.
 
 ## 4. The per-tick record and the mirror
 
@@ -97,8 +99,9 @@ compare its printed lines (§7).
   - the servo's clamped term `servoDv`, with its stiffness and damping parts;
   - gravity;
   - the decomposition residual: the channels recomposed minus the velocity they came from (`residualDy`, `residualDv`, and
-    `vDotUp`, the second tangent's vertical part). `decomposeVelocity` reproduces the velocity exactly only while that tangent is
-    horizontal, so a non-zero residual is velocity the step dropped.
+    `vDotUp`, the second tangent's vertical part). Until task 30 `decomposeVelocity` reproduced the velocity exactly only while that tangent was horizontal, so a
+    non-zero residual was velocity the step dropped. Since task 30 it is exact on every frame, and the residual is
+    rounding: 0 above 1e-3 m/s on every tick.
   `pushDv` is the push-out's whole change, not only its vertical part.
 - **No knob.** The helpers were called with their default template arguments, and the rig never named the compile-time
   knob. So the rig measures whatever law the tree ships, and task 14's deletion of the knob (with those template
@@ -113,7 +116,8 @@ compare its printed lines (§7).
   - the mirror's velocity equals the stepped velocity to 1e-4 m/s, relative above 1 m/s (`mirrorMismatches`);
   - the stepped support equals walkable-and-not-detached (`supportMismatches`);
   - the recomputed push-out equals the recorded one (`pushOutMismatches`).
-  These three are what make the printed attribution trustworthy. On 2026-11-02 they held on 88,356 ticks of 444 runs.
+  These three are what make the printed attribution trustworthy. On 2026-11-02 they held on 88,356 ticks of 444 runs,
+  and after task 30 on 88,953 ticks of 447 runs.
 - **Seen failing** (task 23, built and run, then restored byte for byte):
   - poison A removed the servo's clamp from the mirror: `mirrorMismatches=299` and `CHECK( mirrorMismatches == 0u )`
     failed;
@@ -149,7 +153,8 @@ compare its printed lines (§7).
   top.
 - `[PlatformEdge.site]` and `[PlatformEdge.summary]` total the classes.
 - `[PlatformEdge.decomposition]` counts the chosen runs' ticks whose residual exceeds `kResidualTolerance` (1e-3 m/s), how many
-  of them were pure-face ticks, and the largest residual. On 2026-11-02: 2018 ticks, 0 on the pure face, 9.2049 m/s.
+  of them were pure-face ticks, and the largest residual. On 2026-11-02 (task 23): 2018 ticks, 0 on the pure face,
+  9.2049 m/s. After task 30: 0 ticks, 0.0000 m/s.
 - With the environment variable OG_PLATFORM_EDGE_TICKS=1, every run also prints its `[PlatformEdge.tick]` rows and every
   attempt as `[PlatformEdge.attempt]`. OG_PLATFORM_EDGE_SITE=name runs one site.
 
@@ -161,3 +166,55 @@ impl/edge_investigation_ga_23.md in the same workspace. A later task re-runs the
 compares, per site and distance: the class counts, the anomaly and its parts. The placements and hit ticks are
 deterministic, so a changed class is a changed law, not a changed setup. Check the printed `actualObl` and `hit` first:
 if those moved, the setup changed.
+
+### 7.1 Task 30's re-run (the exact velocity decomposition)
+
+Task 30 made `decomposeVelocity` exact on every tangent frame (`BrawlerMovementSimulation-rationale.md` §19.1 in
+og-brawler). Its before and after outputs are in the same workspace, under impl/scratch/ga30/logs (before_br_og.txt and
+after5_br_og.txt, with the run-by-run comparison in run_diff.txt).
+
+The summary and decomposition lines:
+
+```text
+before  [PlatformEdge.summary] runs=444 placements=265 unreachable=5 lifts=56 downPulls=23 staysOnPlatform=88 mirroredTicks=88356 mirrorMismatches=0 supportMismatches=0 pushOutMismatches=0
+before  [PlatformEdge.decomposition] lossyTicks=2018 lossyOnPureFace=0 largestResidualMps=9.2049
+after   [PlatformEdge.summary] runs=447 placements=263 unreachable=7 lifts=66 downPulls=21 staysOnPlatform=79 mirroredTicks=88953 mirrorMismatches=0 supportMismatches=0 pushOutMismatches=0
+after   [PlatformEdge.decomposition] lossyTicks=0 lossyOnPureFace=0 largestResidualMps=0.0000
+```
+
+The sites that changed (runs, lifts, down-pulls, stays, largest lift, largest down-pull; before → after). The top rim
+off the seam, the low edge and the seam crossings are unchanged.
+
+| site | runs | lifts | downPulls | stays | largest lift | largest down-pull |
+|---|---|---|---|---|---|---|
+| arcTopSeam | 17 | 4 → 3 | 2 | 5 | 0.5422 → 0.5086 | −5.0001 |
+| chamferPlus | 18 → 17 | 2 → 3 | 4 → 0 | 6 → 5 | 0.7911 → 0.8925 | −5.0001 → −0.0742 |
+| chamferMinus | 18 → 17 | 3 → 5 | 0 → 2 | 6 → 5 | 2.0152 → 0.8924 | −0.1615 → −5.0001 |
+| tipPlusLow | 18 | 2 → 3 | 3 | 3 → 2 | 0.3873 → 0.9002 | −5.0001 |
+| tipPlusMid | 18 | 4 → 6 | 3 | 5 → 2 | 0.7768 → 0.7804 | −5.0001 |
+| tipMinusLow | 18 | 2 → 3 | 3 | 3 → 2 | 0.3846 → 0.8940 | −5.0001 |
+| tipMinusMid | 18 | 3 → 7 | 3 | 4 → 2 | 0.7762 → 0.8940 | −5.0001 |
+| tipCornerPlus | 16 | 9 | 1 | 0 | 0.7529 → 0.8266 | −5.0001 |
+| tipCornerMinus | 16 | 9 | 1 | 0 | 1.4624 → 1.0182 | −5.0001 |
+
+What moved, run by run (256 of the 263 placements in both runs kept their hit tick and knockback direction, so the
+setup is the same and a changed class is the changed law):
+
+- **The setup moved only at the chamfer overhangs (d = −0.15).** That is where both characters settle on a rim normal
+  tilted sideways, which is the M4 case. The target and the attacker rest about 1-3 mm elsewhere, and the hits change:
+  - chamferPlus at +0° and +30°: the target is now at rest when hit (it was not before), and at +0° another attempt
+    wins (`actualObl` −4.1° → +3.6°);
+  - at the two oblique overhangs the best hit's direction cosine fell from 0.8774 and 0.8775 to 0.7744 (attacker shifted
+    0.9 m inward, flipped), under the 0.82 the rig requires, so they are now unreachable.
+- **Nine rim hangs now depart.** The tip faces' and chamfers' `staysOnPlatform` runs at d = 4.5 and 4.9 lost speed to the
+  decomposition on the rim (task 23: every chamfer hang lost 1.5-10.4 m/s). They now keep it and leave, and leaving a
+  rim adds M1's lift (anomaly +0.55 to +0.90 m/s, in `uvSupTilted`; at chamferPlus d = 4.5 also 0.55 m/s of
+  `uvDetTilted`), so they count as lifts.
+- **The stall is gone.** chamferMinus d = 3.5 at −30°, task 23's M4 example, falls from +2.0152 to +0.8924 m/s: its
+  8.95 m/s residual is 0, and what is left is M1 (`uvSupTilted` 0.8924).
+- **Down-pulls.** chamferPlus lost its three −5.0001 overhang down-pulls (at d = −0.15 the target now rests before the
+  hit) and its −0.29 at d = 3.5. chamferMinus gained two −5.0001 at d = −0.15 (+0° and −30°): before, those runs had a
+  6.4 m/s decomposition residual and no down-pull. Now `servo` is −5.0001 with `damp` −14.43: M2's clamp (the hit-tick
+  write leaking into the vertical channel), which the M4 loss had hidden there [inferred from the two runs' residuals].
+- **Smaller anomalies** moved by up to 0.5 m/s on runs that had a residual (for example tipPlusMid d = 3.5 at −30°, from
+  a +0.39 lift to +0.11), and arcTopSeam d = 3.5 at +0° fell from a +0.54 lift to +0.11 (its residual was 0.03 m/s).
