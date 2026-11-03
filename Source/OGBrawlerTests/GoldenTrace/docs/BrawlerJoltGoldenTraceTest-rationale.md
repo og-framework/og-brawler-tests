@@ -89,3 +89,19 @@ value-by-value diff of the two recordings changed two fields on two samples: `A.
 `A.movement.velocity` on ticks 233 and 234, in the vertical component only, by −1.49e-5 in the recorded legacy units
 (cm/s), that is −1.49e-7 m/s. Every other field and tick is bit-identical, and the envelope changed only in its
 source string.
+
+og-ground-aligned-attacks task 14b re-recorded it when the last two flat branches of the attacks were folded into the
+general expressions (user rulings of 2026-11-02). Site 2a: the machine's radial initial conditions take the
+quaternion round trip on flat ground too (`DAttackMachineSimulation-rationale.md` §16). Site 2b: `wouldGuardBlock`
+always projects into the guard's plane (`DAttackRadialSimulation-rationale.md` §7). The recorder printed
+`samples=361 fields=120 values=86640 goldenBytes=755727 envelopeBytes=26146 runs=8`. A value-by-value diff of the two
+recordings changed four fields, all A's and all from site 2a, on 751 samples, none of them signed-zero only:
+
+* `A.radial.initialAimAngle`: 321 samples, ticks 40–600, at most 2.38e-7 rad (π/2 stored two float steps higher);
+* `A.radial.initialAimRotationAxis`: 321 samples, ticks 40–600, at most 5.96e-8;
+* `A.body0.WeaponAxis.rotation`: 98 samples, ticks 40–525, at most 5.66e-7, the weapon pose the radial builds from that
+  pair;
+* `A.body0.WeaponAxis.angularVelocity`: 11 samples, ticks 164–525, at most 4.77e-6 rad/s, the same pose's rate.
+
+No hit, block, machine, movement or capsule field changed. The new recording equals, value for value, the one task 14b's
+part 1 recorded with site 2a folded alone, so site 2b changed no value. The envelope changed only in its source string.

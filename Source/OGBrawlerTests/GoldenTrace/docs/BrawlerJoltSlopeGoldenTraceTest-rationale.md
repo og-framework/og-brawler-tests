@@ -8,7 +8,8 @@ with `BrawlerJoltSlopeGolden.inl` and `BrawlerJoltSlopeGoldenEnvelope.inl`. They
 task 3 as the baseline with the attacks built horizontally, re-recorded at task 3b, when the convex crease pair moved
 (`GoldenTraceSlopeScenario-rationale.md` §5), and re-recorded at task 10, the flip that turned the ground-aligned attacks
 on (the initiative's compile-time knob; task 14 deleted it and the recording stayed exact), and again at task 13b, which gave the movement the attack's ground rule
-(only F's convex-crease hits changed, §4). Since task 10 five behaviour cases (§7) state what the flip is for. §6
+(only F's convex-crease hits changed, §4), and at task 14b, which folded the attacks' last two flat branches (only the
+swing initial conditions of F and G on the flat ground changed, §4). Since task 10 five behaviour cases (§7) state what the flip is for. §6
 describes the crease reach sweep in `CreaseReachTest.cpp`, which chose the crease placement.
 
 ## 1. The golden files and their namespace
@@ -90,7 +91,24 @@ One line, `[GoldenTrace.slope]`, with these fields:
 
 ## 4. The recordings
 
-**One ground rule (task 13b), the current golden.** Against task 10's recording only F differs: six fields
+**No flat branch in the attacks (task 14b), the current golden.** Task 14b folded site 2a (the machine's radial
+initial conditions take the quaternion round trip on flat ground too, `DAttackMachineSimulation-rationale.md` §16) and
+site 2b (`wouldGuardBlock` always projects into the guard's plane, `DAttackRadialSimulation-rationale.md` §7), as the
+user ruled on 2026-11-02. Against task 13b's recording only the swings that F and G start on the flat ground differ: six
+fields on 659 samples, none of them signed-zero only, all from site 2a:
+
+* `F.radial.initialAimAngle` (161 samples, ticks 680–1480) and `G.radial.initialAimAngle` (219, ticks 390–1480), at
+  most 2.38e-7 rad;
+* `F.radial.initialAimRotationAxis` (161, ticks 680–1480) and `G.radial.initialAimRotationAxis` (103, ticks 970–1480),
+  at most 5.96e-8;
+* `F.body0.WeaponAxis.rotation` (13, ticks 680–880), at most 2.68e-7, and `F.body0.WeaponAxis.angularVelocity` (2,
+  ticks 680 and 860), at most 1.19e-7 rad/s: the weapon pose the radial builds from that pair, and its rate.
+
+No hit, block, machine, movement or capsule field changed, and no swing on the face changed (the face is not flat, so it
+took the composite before). The new recording equals, value for value, the one task 14b's part 1 recorded with site 2a
+folded alone, so site 2b changed no value. The flat golden changed too (`BrawlerJoltGoldenTraceTest-rationale.md` §3).
+
+**One ground rule (task 13b).** Against task 10's recording only F differs: six fields
 (`F.body5.CharacterCapsule.position` and `.linearVelocity`, `F.movement.velocity`, the weapon and guard axes'
 positions, `F.movement.flags`), on the sampled ticks 990–1040 and 1100–1480 and nothing between (F is teleported
 back at slot 8's start). No other character changes. The line differs in `slopeTicks=8284` (2 more `Supported`
@@ -148,7 +166,9 @@ and the envelope's largest position metric was 0.0041 cm with no discrete diverg
 the same counts, `goldenBytes=3829129 envelopeBytes=39169`, the same envelope maximum and again no discrete divergence.
 Task 10's printed the same counts, `goldenBytes=3929364 envelopeBytes=39162`, the same position maximum, a planar
 maximum of 5.96e-8 (one float step of a chart direction in a nudged run) and no discrete divergence. Task 13b's printed
-the same counts, `goldenBytes=3929549 envelopeBytes=39171` and the same two maxima. A one-ULP edit of
+the same counts, `goldenBytes=3929549 envelopeBytes=39171` and the same two maxima. Task 14b's printed the same counts,
+`goldenBytes=3927795 envelopeBytes=39163`, the same two maxima, and an envelope that differs from task 13b's only in its
+source string. A one-ULP edit of
 one recorded value fails exact mode at that value's first sample.
 
 Re-record when a change alters the slope behaviour on purpose or the recorded fields change. Never edit either file by

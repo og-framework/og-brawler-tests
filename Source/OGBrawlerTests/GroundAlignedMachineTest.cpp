@@ -93,6 +93,18 @@ namespace groundAlignedMachineTests
         return TodaysSwingIC{aimAngle, aimRotationAxis};
     }
 
+    TodaysSwingIC generalSwingIC(const TodaysSwingIC& turn, const glm::vec3& normal)
+    {
+        const surfaceFrame::AngleAxis frame = surfaceFrame::toAngleAxis(surfaceFrame::tiltMatrix(normal)
+            * glm::mat3(glm::rotate(glm::mat4(1.f), turn.angle, turn.axis)));
+        return TodaysSwingIC{frame.angle, frame.axis};
+    }
+
+    glm::mat3 rotationOf(float angle, const glm::vec3& axis)
+    {
+        return glm::mat3(glm::rotate(glm::mat4(1.f), angle, axis));
+    }
+
     struct TodaysLaunch
     {
         glm::vec3 spawnPos;
@@ -238,22 +250,28 @@ TEST_CASE("GroundAlignedMachine.FlatSampleReproducesTodaysInitialConditions", "[
     using namespace groundAlignedMachineTests;
     const glm::vec3 capsule(0.25f, 1.f, -0.5f);
 
+    const brawlerGround::GroundSample flat{};
     int swingMismatches = 0;
     int launchMismatches = 0;
+    float worstRotation = 0.f;
     const std::vector<glm::vec3> aims = flatAims();
     for (const glm::vec3& aim : aims)
     {
-        const MachineTickResult swing = swingStart(aim, brawlerGround::GroundSample{});
+        const MachineTickResult swing = swingStart(aim, flat);
         const TodaysSwingIC today = todaysSwingIC(aim);
-        if (!(simFrameDetail::sameBits(swing.radialIC.initialAimAngle, today.angle)
-                && simFrameDetail::sameBits(swing.radialIC.initialAimRotationAxis, today.axis)))
+        const TodaysSwingIC general = generalSwingIC(today, flat.normal);
+        if (!(simFrameDetail::sameBits(swing.radialIC.initialAimAngle, general.angle)
+                && simFrameDetail::sameBits(swing.radialIC.initialAimRotationAxis, general.axis)))
         {
             ++swingMismatches;
             UNSCOPED_INFO("swing aim (" << aim.x << ", " << aim.y << ", " << aim.z << "): angle " << swing.radialIC.initialAimAngle
-                << " vs " << today.angle << ", axis (" << swing.radialIC.initialAimRotationAxis.x << ", "
+                << " vs " << general.angle << ", axis (" << swing.radialIC.initialAimRotationAxis.x << ", "
                 << swing.radialIC.initialAimRotationAxis.y << ", " << swing.radialIC.initialAimRotationAxis.z << ") vs ("
-                << today.axis.x << ", " << today.axis.y << ", " << today.axis.z << ")");
+                << general.axis.x << ", " << general.axis.y << ", " << general.axis.z << ")");
         }
+        worstRotation = std::max(worstRotation,
+            maxAbsDifference(rotationOf(swing.radialIC.initialAimAngle, swing.radialIC.initialAimRotationAxis),
+                rotationOf(today.angle, today.axis)));
 
         const MachineTickResult launch = hadoukenLaunch(aim, capsule, brawlerGround::GroundSample{});
         const TodaysLaunch todayLaunch = todaysLaunch(aim, capsule);
@@ -265,9 +283,22 @@ TEST_CASE("GroundAlignedMachine.FlatSampleReproducesTodaysInitialConditions", "[
         }
     }
 
-    INFO(aims.size() << " aims");
+    INFO(aims.size() << " aims, worst rotation difference " << worstRotation);
     CHECK(swingMismatches == 0);
     CHECK(launchMismatches == 0);
+    CHECK(worstRotation <= 5.e-7f);
+
+    for (const glm::vec3& pole : {simFrame::kForward, -simFrame::kForward})
+    {
+        INFO("pole aim (" << pole.x << ", " << pole.y << ", " << pole.z << ")");
+        const MachineTickResult swing = swingStart(pole, flat);
+        const TodaysSwingIC today = todaysSwingIC(pole);
+        CHECK(today.axis == glm::vec3(0.f, -1.f, 0.f));
+        CHECK(swing.radialIC.initialAimRotationAxis == glm::vec3(0.f, 1.f, 0.f));
+        CHECK(maxAbsDifference(rotationOf(swing.radialIC.initialAimAngle, swing.radialIC.initialAimRotationAxis),
+                  rotationOf(today.angle, today.axis))
+            <= 1.e-7f);
+    }
 }
 
 #endif

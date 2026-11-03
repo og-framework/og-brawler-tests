@@ -275,18 +275,10 @@ dAttackRadialSimulation::InitialConditions swingIcOn(const glm::vec3& normal, co
 	const LocalAim local = localAimOn(normal, aim);
 	dAttackRadialSimulation::InitialConditions ic{};
 	ic.activeAttackSequence = 0u;
-	if (surfaceFrame::isFlat(normal))
-	{
-		ic.initialAimAngle = local.angle;
-		ic.initialAimRotationAxis = local.axis;
-	}
-	else
-	{
-		const surfaceFrame::AngleAxis frame = surfaceFrame::toAngleAxis(surfaceFrame::tiltMatrix(normal)
-			* glm::mat3(glm::rotate(glm::mat4(1.f), local.angle, local.axis)));
-		ic.initialAimAngle = frame.angle;
-		ic.initialAimRotationAxis = frame.axis;
-	}
+	const surfaceFrame::AngleAxis frame = surfaceFrame::toAngleAxis(surfaceFrame::tiltMatrix(normal)
+		* glm::mat3(glm::rotate(glm::mat4(1.f), local.angle, local.axis)));
+	ic.initialAimAngle = frame.angle;
+	ic.initialAimRotationAxis = frame.axis;
 	return ic;
 }
 

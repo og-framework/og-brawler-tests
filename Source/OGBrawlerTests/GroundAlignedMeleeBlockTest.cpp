@@ -465,4 +465,39 @@ TEST_CASE("GroundAlignedMeleeBlock.FlatMarkerReproducesTodaysIndicator", "[DAtta
     CHECK(mismatches == 0);
 }
 
+TEST_CASE("GroundAlignedMeleeBlock.AGuardTiltedInsideTheFlatToleranceBlocksInItsOwnPlane", "[DAttack]")
+{
+    constexpr float tilt = 8.e-7f;
+    constexpr float height = 2.f;
+    constexpr float reach = 1.e-6f;
+    const glm::vec3 overlap(0.f);
+    const glm::mat4 leansForward = glm::rotate(glm::mat4(1.f), tilt, simFrame::kLeft);
+    const glm::mat4 leansBack = glm::rotate(glm::mat4(1.f), tilt, simFrame::kRight);
+    const glm::vec3 aboveInFront = simFrame::withHeight(simFrame::kForward * reach, height);
+    const glm::vec3 aboveBehind = simFrame::withHeight(simFrame::kForward * -reach, height);
+
+    for (const glm::mat4& guard : { leansForward, leansBack })
+    {
+        const glm::vec3 guardUp = surfaceFrame::surfaceUpOf(guard);
+        const glm::vec3 across = simFrame::flatten(guardUp);
+        INFO("guard up (" << guardUp.x << ", " << guardUp.y << ", " << guardUp.z << ")");
+        REQUIRE(surfaceFrame::isFlat(guardUp));
+        REQUIRE(glm::dot(across, across) > 0.f);
+    }
+    REQUIRE(glm::dot(surfaceFrame::surfaceUpOf(leansForward), simFrame::kForward) > 0.f);
+    REQUIRE(glm::dot(surfaceFrame::surfaceUpOf(leansBack), simFrame::kForward) < 0.f);
+
+    const Todays heightFlattenInFront = todaysWouldGuardBlock(4u, aboveInFront, leansForward, overlap);
+    const Todays heightFlattenBehind = todaysWouldGuardBlock(4u, aboveBehind, leansBack, overlap);
+    const bool planeInFront = dAttackRadialSimulation::wouldGuardBlock(4u, aboveInFront, leansForward, overlap);
+    const bool planeBehind = dAttackRadialSimulation::wouldGuardBlock(4u, aboveBehind, leansBack, overlap);
+    std::printf("[GroundAlignedMeleeBlock.nearFlat] heightFlatten inFront=%d (td=%.7g) behind=%d (td=%.7g) | plane inFront=%d behind=%d\n",
+                heightFlattenInFront.blocks ? 1 : 0, heightFlattenInFront.td, heightFlattenBehind.blocks ? 1 : 0,
+                heightFlattenBehind.td, planeInFront ? 1 : 0, planeBehind ? 1 : 0);
+    CHECK(heightFlattenInFront.blocks);
+    CHECK_FALSE(heightFlattenBehind.blocks);
+    CHECK_FALSE(planeInFront);
+    CHECK(planeBehind);
+}
+
 #endif
