@@ -570,7 +570,9 @@ TEST_CASE("DAttackOrbitCamera.NothingMovesWithoutLookHeld", "[DAttack][OrbitCame
     {
         INFO("fps " << 1.f / dt);
         const OrbitCameraState start{ -120.f, 25.f, 0.6f };
-        const PathRun run = runPath(dt, { { 2.f, false, { 500.f, -300.f }, { 1.f, 1.f } } }, start);
+        OrbitCameraSettings noReturn;
+        noReturn.returnDegPerSec = 0.f;
+        const PathRun run = runPath(dt, { { 2.f, false, { 500.f, -300.f }, { 1.f, 1.f } } }, start, kIsoTargetDeg, noReturn);
         for (const OrbitCameraState& frame : run.frames)
         {
             CHECK(frame.yawDeg == start.yawDeg);

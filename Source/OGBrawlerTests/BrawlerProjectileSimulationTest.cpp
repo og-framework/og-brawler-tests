@@ -614,6 +614,12 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardBack", "[BrawlerProjectile]")
 // Geometry: guard forward axis = +X. Projectile spawnDir = normalize(-1,0,-1), so
 // incoming = -spawnDir = normalize(+1,0,+1). angle(+X, incoming) = acos(1/sqrt2) =
 // pi/4 ≈ 0.785 rad. 0.785 > 0.25 (middle) → blocked == false → routes to hits.
+// [og-ground-aligned-attacks task 20b] That shot was pitched: the pi/4 was in the VERTICAL plane
+// (z = -1 is down in the Z-up frame the case was written in, and y = -1 since og-sim-metres-yup).
+// Since OQ17 (b) every guard measures the shot in its own plane, so a pitched shot into a facing
+// guard is blocked. The case now turns the shot pi/4 to the guard's SIDE in the horizontal plane:
+// spawnDir = normalize(-1, 0, 1) in the Y-up frame, incoming normalize(1, 0, -1), pi/4 off the
+// guard's forward (-Z).
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerProjectile.DamageOnGuardSide", "[BrawlerProjectile]")
 {
@@ -628,8 +634,8 @@ TEST_CASE("BrawlerProjectile.DamageOnGuardSide", "[BrawlerProjectile]")
     State state;
     state.slots[0].spawnTick = spawnTick;
     state.slots[0].spawnPos  = glm::vec3(0.f);
-    // incoming = -spawnDir = normalize(+1,0,+1) → pi/4 off the guard forward (+X).
-    state.slots[0].spawnDir  = glm::normalize(glm::vec3(0.f, -1.f, 1.f));
+    // incoming = -spawnDir = normalize(1, 0, -1) → pi/4 off the guard forward, to its side.
+    state.slots[0].spawnDir  = glm::normalize(glm::vec3(-1.f, 0.f, 1.f));
     state.slots[0].endTick   = 0u;
 
     InitialConditions ic;

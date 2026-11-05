@@ -79,7 +79,11 @@ Tags: `[DAttack]` puts every case in the `[@og]` whitelist; `[OrbitCamera]` sele
   exactly unchanged (no idle spring-back). Vertical-only stick and mouse input move the pitch by exactly the
   player's step and leave the yaw alone: no yaw, no pull.
 * `DAttackOrbitCamera.NothingMovesWithoutLookHeld`: full mouse and stick without `lookHeld` move nothing on
-  any frame, and the hold-off still counts down to 0.
+  any frame, and the hold-off still counts down to 0. Since og-ground-aligned-attacks task 21 it runs with
+  `returnDegPerSec` 0, the frozen camera from before that task: with the default 90°/s the camera returns to the
+  target pitch while look mode is off, which `DAttackCameraSlopeFrameTest.cpp` pins. The frame-rate sweep's "drag,
+  release 0.5 s, pan 1 s" path and the hold-off case's release phase now include that return; it is linear in time,
+  so both still hold at every frame rate.
 * `DAttackOrbitCamera.SignPins`: the Look binding is `Negate`; mouse right and stick right raise the yaw;
   mouse up and stick up lower the pitch below the horizon (look up); the invert flags flip the pitch only.
   Where Unreal's math is on the include path (§4), `FRotator(-pitch, yaw, 0)` for yaw 90° and pitch 60°

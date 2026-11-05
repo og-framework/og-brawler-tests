@@ -6,7 +6,8 @@ harness that runs the scenario is described in `GoldenTraceScene-rationale.md`, 
 `BrawlerJoltSlopeGoldenTraceTest-rationale.md`. Written by og-ground-aligned-attacks task 3 as the baseline on a 30°
 slope, while the brawler built its swings, guard and projectiles horizontally; since task 10 (the flip of the
 initiative's compile-time knob, which task 14 deleted) they follow each brawler's ground, and the golden records that. Task 10 also added
-three teleports and C's overhead (§3, §4).
+three teleports and C's overhead (§3, §4). Since task 36 the brawler movement's support law v2 is the default, which
+changed every crease knockback and F's stance at the convex rim (§3).
 
 Every length, point and direction is a native literal: metres, og axes (+Y up, forward −Z, right +X), each the float
 nearest the double-precision derivation given below. The static data and the box material are the flat scenario's
@@ -60,14 +61,14 @@ tick, 10 m or more apart. The ticks are those of the recorded trace (`slotStart`
 | slot | ticks | action | A group | crease pair | what the trace shows |
 |---|---|---|---|---|---|
 | — | 1–60 | — | all land and idle | F, G land at the concave crease | A's horizontal drift 0 |
-| 1 | 61–240 | 96 | A right swing aimed up the fall line at B | F left swing at G | B hit at 120, slides 5.17 m along the contour; G hit at 120, thrown from the landing up onto the slope (one tick Unsupported, then a slide) |
-| 2 | 241–350 | 276 | A right swing down the fall line at C | F right swing at G | C hit at 300, slides 5.17 m along the contour; G hit at 300, thrown into the landing (a 0.28 m hop) |
-| 3 | 351–460 | 386 | A left swing at D (aim −X) | G right swing at F | D hit at 410, slides 5.17 m down the fall line; F hit at 410, thrown into the slope (31 ticks Unsupported, a 1.96 m rise above the ground) |
-| 4 | 461–640 | 496 | A left swing at E (aim +X) | G left swing at F | E hit at 520, slides 5.17 m up the fall line; F hit at 520, thrown off the slope onto the landing |
-| 5 | 641–820 | 676 | B guards facing A; A overhead | F, G at the convex crease; F left swing at G | B's guard blocks the overhead; G hit at 700, thrown along the plateau |
-| 6 | 821–930 | 856 | C guards turned for a right swing; A right swing at C | F right swing at G | C's guard blocks the swing; G hit at 880, thrown off the plateau edge onto the slope |
-| 7 | 931–1040 | 966 | C guards turned for a left swing; A left swing at C | G right swing at F | C's guard blocks the swing; F hit at 990, thrown onto the plateau |
-| 8 | 1041–1220 | 1076 | B fires a projectile at A | G left swing at F | the projectile hits A; F hit at 1100, thrown down the slope off the edge |
+| 1 | 61–240 | 96 | A right swing aimed up the fall line at B | F left swing at G | B hit at 120, slides 5.17 m along the contour; G hit at 120, thrown from the landing up the slope's plane: it launches (95 ticks Unsupported; under Legacy one tick, then a slide) |
+| 2 | 241–350 | 276 | A right swing down the fall line at C | F right swing at G | C hit at 300, slides 5.17 m along the contour; G hit at 300, thrown into the landing and redirected along it, no hop (under Legacy a 0.28 m hop) |
+| 3 | 351–460 | 386 | A left swing at D (aim −X) | G right swing at F | D hit at 410, slides 5.17 m down the fall line; F hit at 410, thrown into the slope and redirected up it, no hop (under Legacy 31 ticks Unsupported, a 1.96 m rise above the ground) |
+| 4 | 461–640 | 496 | A left swing at E (aim +X) | G left swing at F | E hit at 520, slides 5.17 m up the fall line; F hit at 520, thrown off the slope onto the landing (13 ticks Unsupported) |
+| 5 | 641–820 | 676 | B guards facing A; A overhead | F, G at the convex crease; F left swing at G | B's guard blocks the overhead; G hit at 700 by F's swing, tilted with the slope since task 36, thrown up off the plateau (119 ticks Unsupported; under Legacy along the plateau) |
+| 6 | 821–930 | 856 | C guards turned for a right swing; A right swing at C | F right swing at G | C's guard blocks the swing; G hit at 880, thrown into the plateau and redirected along it, off the edge onto the slope (34 ticks Unsupported from 882) |
+| 7 | 931–1040 | 966 | C guards turned for a left swing; A left swing at C | G right swing at F | C's guard blocks the swing; F hit at 990, thrown into the slope and redirected up it, over the crest (a ski jump: still airborne when slot 8's teleport takes it at 1041; under Legacy thrown onto the plateau) |
+| 8 | 1041–1220 | 1076 | B fires a projectile at A | G left swing at F | the projectile hits A; F hit at 1100, thrown down the slope off the edge (43 ticks Unsupported) |
 | 9 | 1221–1315 | 1256 | C guards facing A; A fires at C | — | C's guard blocks the projectile |
 | 10 | 1316–1480 | 1351, 1426 | D is teleported 2 m down the fall line from C (`kFaceBelowC`); C turns down the slope and swings overhead at D (1351). A is teleported 1 m up the face from the concave crease (`kCreaseWalkStart`), walks down the fall line on ticks 1341–1400 and swings right across the crease (1426) | — | C's overhead stuns D at 1369 (D does not move); A stops with its capsule at z 10.3925, over the crease (10.3923) |
 
@@ -97,7 +98,9 @@ Each teleport is a short drop (0.08 to 0.14 m) to the hover height, settled well
   windows below); slot 5 keeps its length. Measured after the flip, slot 1's launch lands on the slope the next tick,
   slot 4's is 11 Unsupported ticks and slot 8's hit falls off the convex edge for 24. Since task 13b slot 8's falls
   for 23 and the longest flight is slot 7's, 43 ticks from 990 to 1032 (slot 7 ends at 1040; it was slot 3's 31 ticks,
-  `BrawlerJoltSlopeGoldenTraceTest-rationale.md` §7), each inside its slot.
+  `BrawlerJoltSlopeGoldenTraceTest-rationale.md` §7), each inside its slot. Since task 36 (the support law v2) the
+  long flights are slot 1's, 95 ticks (120 to 214), slot 5's, 119 (700 to 818, two ticks before the slot ends), and
+  slot 7's ski jump, which the slot cuts: on 1040, its last tick, F is still rising, and slot 8's teleport takes it.
 - **Swing sides.** A knockback goes along the swing's tangent at the target, and the tangent depends on where the target
   is and on the swing's turning sense, not on the aim. Two targets on opposite sides of the attacker, struck by opposite
   swing sides, are thrown the same way: measured with a left swing at D and a right swing at E, both slid down the fall
@@ -117,7 +120,8 @@ Each teleport is a short drop (0.08 to 0.14 m) to the hover height, settled well
   `BrawlerJoltSlopeCreaseReach.PrintsTheConnectingWindows` (`BrawlerJoltSlopeGoldenTraceTest-rationale.md` §6): a
   flat-side capsule 0.05 and 0.10 m from the concave crease rests 1.0918 and 1.0657 m high, and a slope-side capsule
   0.05 to 0.20 m from the convex crease rests 1.0828 to 1.1216 m above its face point, its probe on the plateau's edge;
-  its attack ground sample is then the plateau's up, so after the flip its swing stays horizontal.
+  its attack ground sample is then the plateau's up, so after the flip its swing stays horizontal (until task 36: the
+  support law v2's estimate takes the slope's face there from its centre probe, so that swing tilts).
 
   The sweep's windows (each side 0.05 to 1.00 m from the crease in 0.05 m steps, 400 pairs per row; both swing senses
   give the same windows; "after the flip" is task 5's ground-aligned initial conditions on each attacker's own ground
@@ -139,11 +143,21 @@ Each teleport is a short drop (0.08 to 0.14 m) to the hover height, settled well
   placement gives, and G's down swing at F is predicted to launch after the flip (slot 8). 0.1 m is inside the measured
   0.05 to 0.20 m window with a sweep step on either side; the tightest band margin is G's swing at F, 0.309 m along the
   axis against 0.35 m. The cost: at 0.1 m F's attack ground sample is the plateau's, so the scenario has no tilted
-  slope-side swing at the convex crease (that one connects only with G within about 0.05 m of the edge).
+  slope-side swing at the convex crease (that one connects only with G within about 0.05 m of the edge). Since task
+  36 the sample there is the slope's face, and F's two convex swings are tilted.
 
   With 0.3 m at both creases (task 3) four of the eight crease swings landed and none of the convex ones was predicted
   to connect after the flip. From task 3b six landed with the swings built horizontally (`creaseHits=6/8`, as the sweep predicts), and since
   the flip (task 10) all eight land (`creaseHits=8/8`), as it predicted.
+- **The capsule test (og-ground-aligned-attacks task 20).** The two bullets above describe the point test the detector
+  ran until task 20. Since then a swing connects when the band overlaps the target's movement capsule
+  (`BrawlerHitDetectionSystem-rationale.md` §11): on a vertical axis the target's capsule centre may sit from 1.01 m
+  below to 1.61 m above the attacker's, and the on-plane reach is 0.48 m to 3.42 m. The sweep then connects every pair
+  in every row: each of the sixteen `[GoldenTrace.creaseReach]` lines reads `connecting=400/400`, where the table above
+  has none, 96 (F within 0.20 m, or G at 0.05 m) and 80 (F within 0.20 m). Predicted launches after the flip: concave
+  as above (360 of 400 for F's up swing and G's down swing), convex F's up swing 320 of 400 (F 0.25 m or more) and
+  G's down swing all 400. The scenario's own placement now connects 4 + 4 at the concave crease and 4 + 4 at the convex
+  one. The golden scenario itself did not change: all eight crease swings already landed (`creaseHits=8/8`).
 - **Stillness is judged horizontally.** A resting capsule's movement velocity flickers between 0 and 0.1633 m/s
   (g·dt) on some ticks, with a vertical position dither of about 3 mm (seen on F and G at the concave crease and on E
   after its hop); the horizontal position does not move. The settle check therefore requires Supported and at most 1 mm

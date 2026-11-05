@@ -405,7 +405,7 @@ TEST_CASE("GroundAlignedProjectileBlock.SlopeMarkerLiesOnTheInnerCircleInTheGuar
     CHECK(leastTowardsShooter > 0.f);
 }
 
-TEST_CASE("GroundAlignedProjectileBlock.FlatGuardReproducesTodaysOutcomeAndMarkerBits", "[BrawlerProjectile]")
+TEST_CASE("GroundAlignedProjectileBlock.FlatGuardBlocksInItsPlaneAndKeepsTodaysMarkerBits", "[BrawlerProjectile]")
 {
     using brawlerProjectileSimulation::SlotOutcome;
     const float r = projectileStaticData().innerCircleRadius;
@@ -417,7 +417,8 @@ TEST_CASE("GroundAlignedProjectileBlock.FlatGuardReproducesTodaysOutcomeAndMarke
     int missedTheCircle = 0;
     int mismatches = 0;
     int outcomeMismatches = 0;
-    int outOfTheCone = 0;
+    int blockedOnlyInThePlane = 0;
+    int notBlocked = 0;
     for (const glm::vec3& guardRoot : roots)
     {
         for (int h = 0; h < 6; ++h)
@@ -437,11 +438,16 @@ TEST_CASE("GroundAlignedProjectileBlock.FlatGuardReproducesTodaysOutcomeAndMarke
                             + across * (0.4f * r * static_cast<float>(lateral)) + simFrame::withHeight(glm::vec3(0.f), 0.5f);
                         const glm::vec3 objectPosition = guardRoot + glm::vec3(0.05f, 0.4f, -0.03f);
                         const Todays today = todaysProjectileGuardBlocks(guard, spawnDir, halfAngle);
+                        const Todays inPlane = todaysProjectileGuardBlocks(guard,
+                            glm::normalize(simFrame::withHeight(spawnDir, 0.f)), halfAngle);
                         const Outcome flat = run(Shot{ spawnPos, spawnDir, guard, objectPosition, true });
-                        if ((flat.outcome == SlotOutcome::BlockedByGuard) != today.blocks)
+                        const bool flatBlocks = flat.outcome == SlotOutcome::BlockedByGuard;
+                        if (flatBlocks != inPlane.blocks)
                             ++outcomeMismatches;
-                        if (!today.blocks)
-                            ++outOfTheCone;
+                        if (flatBlocks && !today.blocks)
+                            ++blockedOnlyInThePlane;
+                        if (!flatBlocks)
+                            ++notBlocked;
                         if (!flat.hasBlock)
                             continue;
                         bool found = false;
@@ -458,13 +464,127 @@ TEST_CASE("GroundAlignedProjectileBlock.FlatGuardReproducesTodaysOutcomeAndMarke
     }
 
     std::printf("[GroundAlignedProjectileBlock.flatMarker] compared=%d missedTheCircle=%d mismatches=%d "
-                "outcomeMismatches=%d outOfTheCone=%d\n", compared, missedTheCircle, mismatches,
-                outcomeMismatches, outOfTheCone);
-    CHECK(compared > 0);
+                "outcomeMismatches=%d blockedOnlyInThePlane=%d notBlocked=%d\n", compared, missedTheCircle, mismatches,
+                outcomeMismatches, blockedOnlyInThePlane, notBlocked);
+    CHECK(compared == 2 * 6 * 5 * 7 * 3);
     CHECK(missedTheCircle > 0);
-    CHECK(outOfTheCone > 0);
+    CHECK(blockedOnlyInThePlane == 2 * 6 * 2 * 7 * 3);
+    CHECK(notBlocked == 0);
     CHECK(mismatches == 0);
     CHECK(outcomeMismatches == 0);
+}
+
+TEST_CASE("GroundAlignedProjectileBlock.AShotPitchedAlongTheSlopeIntoAFacingFlatGuardIsBlocked", "[BrawlerProjectile]")
+{
+    using brawlerProjectileSimulation::SlotOutcome;
+    const float halfAngle = projectileStaticData().guardMiddleSectionHalfAngle;
+    const float r = projectileStaticData().innerCircleRadius;
+    const glm::vec3 guardRoot(1.2f, 0.f, -0.7f);
+    const float pitch = glm::radians(30.f);
+
+    int shots = 0;
+    int blocked = 0;
+    int todaysBlocks = 0;
+    int markerMissing = 0;
+    float worstOffCircle = 0.f;
+    float worstTodaysAngle = 1.e9f;
+    for (int h = 0; h < 8; ++h)
+    {
+        const float shotHeading = glm::two_pi<float>() * static_cast<float>(h) / 8.f + 0.37f;
+        const glm::mat4 guard = guardPose(shotHeading + glm::pi<float>(), false, guardRoot);
+        const glm::vec3 flatDir = headingDirection(shotHeading);
+        for (const float sign : { -1.f, 1.f })
+        {
+            const glm::vec3 spawnDir = flatDir * std::cos(pitch) + simFrame::withHeight(glm::vec3(0.f), sign * std::sin(pitch));
+            const glm::vec3 spawnPos = guardRoot + simFrame::withHeight(glm::vec3(0.f), 0.5f) - spawnDir * 3.f;
+            const Todays today = todaysProjectileGuardBlocks(guard, spawnDir, halfAngle);
+            const Outcome out = run(Shot{ spawnPos, spawnDir, guard, guardRoot, true });
+            ++shots;
+            worstTodaysAngle = std::min(worstTodaysAngle, today.angle);
+            if (today.blocks)
+                ++todaysBlocks;
+            if (out.outcome == SlotOutcome::BlockedByGuard)
+                ++blocked;
+            if (!out.hasBlock)
+                ++markerMissing;
+            else
+                worstOffCircle = std::max(worstOffCircle, std::abs(glm::length(simFrame::planar(out.marker - guardRoot)) - r));
+        }
+    }
+
+    std::printf("[GroundAlignedProjectileBlock.pitchedIntoFlat] shots=%d blocked=%d todaysBlocks=%d leastTodaysAngle=%.7f rad "
+                "markerMissing=%d worstOffInnerCircle=%.3g m\n",
+                shots, blocked, todaysBlocks, worstTodaysAngle, markerMissing, worstOffCircle);
+    CHECK(shots == 16);
+    CHECK(todaysBlocks == 0);
+    CHECK(worstTodaysAngle > halfAngle);
+    CHECK(blocked == shots);
+    CHECK(markerMissing == 0);
+    CHECK(worstOffCircle <= 1.e-4f);
+}
+
+TEST_CASE("GroundAlignedProjectileBlock.ThePitchedShotIntoAFlatGuardTurnedPointThreeRadAwayIsAHit", "[BrawlerProjectile]")
+{
+    using brawlerProjectileSimulation::SlotOutcome;
+    const glm::vec3 guardRoot(1.2f, 0.f, -0.7f);
+    const float pitch = glm::radians(30.f);
+
+    int hits = 0;
+    int controlBlocks = 0;
+    int shots = 0;
+    for (int h = 0; h < 8; ++h)
+    {
+        const float shotHeading = glm::two_pi<float>() * static_cast<float>(h) / 8.f + 0.37f;
+        const glm::vec3 flatDir = headingDirection(shotHeading);
+        for (const float sign : { -1.f, 1.f })
+        {
+            const glm::vec3 spawnDir = flatDir * std::cos(pitch) + simFrame::withHeight(glm::vec3(0.f), sign * std::sin(pitch));
+            const glm::vec3 spawnPos = guardRoot + simFrame::withHeight(glm::vec3(0.f), 0.5f) - spawnDir * 3.f;
+            for (const float turn : { -0.3f, 0.3f })
+            {
+                ++shots;
+                const glm::mat4 away = guardPose(shotHeading + glm::pi<float>() + turn, false, guardRoot);
+                if (run(Shot{ spawnPos, spawnDir, away, guardRoot, true }).outcome == SlotOutcome::Hit)
+                    ++hits;
+                const glm::mat4 control = guardPose(shotHeading + glm::pi<float>() + turn * (2.f / 3.f), false, guardRoot);
+                if (run(Shot{ spawnPos, spawnDir, control, guardRoot, true }).outcome == SlotOutcome::BlockedByGuard)
+                    ++controlBlocks;
+            }
+        }
+    }
+
+    std::printf("[GroundAlignedProjectileBlock.pitchedTurnedAway] shots=%d hitsAtPointThree=%d blocksAtPointTwo=%d\n",
+                shots, hits, controlBlocks);
+    CHECK(shots == 32);
+    CHECK(hits == shots);
+    CHECK(controlBlocks == shots);
+}
+
+TEST_CASE("GroundAlignedProjectileBlock.AShotAlongAFlatGuardsUpIsAHitNotANaN", "[BrawlerProjectile]")
+{
+    using brawlerProjectileSimulation::SlotOutcome;
+    const glm::vec3 guardRoot(1.2f, 0.f, -0.7f);
+    const glm::mat4 guard = guardPose(0.f, false, guardRoot);
+    const glm::vec3 guardUp = surfaceFrame::surfaceUpOf(guard);
+    REQUIRE(surfaceFrame::isFlat(guardUp));
+
+    for (const float sign : { -1.f, 1.f })
+    {
+        const glm::vec3 spawnDir = guardUp * sign;
+        glm::vec3 residual = -spawnDir;
+        residual -= guardUp * glm::dot(residual, guardUp);
+        REQUIRE(glm::dot(residual, residual) == 0.f);
+
+        const glm::vec3 spawnPos = guardRoot + simFrame::withHeight(glm::vec3(0.f), 0.5f) - spawnDir * 2.f;
+        const Outcome out = run(Shot{ spawnPos, spawnDir, guard, guardRoot, true });
+        const bool predicate = brawlerHitDetection::projectileGuardBlocks(guard, spawnDir, glm::pi<float>());
+        std::printf("[GroundAlignedProjectileBlock.alongGuardUp] sign=%+.0f outcome=%d hasBlock=%d predicateAtHalfAnglePi=%d\n",
+                    sign, static_cast<int>(out.outcome), out.hasBlock ? 1 : 0, predicate ? 1 : 0);
+        CHECK(out.outcome == SlotOutcome::Hit);
+        CHECK_FALSE(out.hasBlock);
+        CHECK(sameBits(out.guardUp, guardUp));
+        CHECK_FALSE(predicate);
+    }
 }
 
 TEST_CASE("GroundAlignedProjectileBlock.GuardUpIsKUpOffTheGuard", "[BrawlerProjectile]")

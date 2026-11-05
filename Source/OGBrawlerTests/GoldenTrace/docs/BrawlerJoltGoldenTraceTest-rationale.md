@@ -28,6 +28,7 @@ The move changed no recorded value: the two `.inl` files are byte-unchanged and 
 | `ScriptCoversEveryTickOnce` | `[GoldenTrace]` | every character has exactly one input row on every tick |
 | `MatchesTheRecordedTrace` | `[GoldenTrace]` | runs the scenario and compares it with the committed golden, in the mode named by `OG_GOLDEN_MODE`: `exact` (the default) or `bounds`; any other value fails the case |
 | `ScenarioCoversEveryScriptedMechanic` | `[GoldenTrace]` | counts, from the live trace in the legacy frame, every mechanic the scenario must reach, and requires each |
+| `PrintsTheCoverageUnderLegacy` | `[GoldenTrace]` | runs `FlatScenarioUnderLegacy` (the flat scenario with the movement's support law set to Legacy by its `configureStaticData`), prints its `[GoldenTrace.coverage] legacy …` line and one `[GoldenTrace.legacyAgainstTheRecording] scenario=flat …` line (the exact compare with the recording, which does not fail the case), and requires only that the schemas match. Task 35 wrote it as the V2 print (PrintsTheCoverageUnderV2), while Legacy was the default; task 36 made it the Legacy print, and task 37 deletes it |
 | `Record` | `[.GoldenRecord]` | hidden: records the golden and the envelope into the folder named by `OG_GOLDEN_OUT` |
 
 The coverage count reads the trace in the legacy (canonical) frame, whose values the recorder has already
@@ -105,3 +106,29 @@ recordings changed four fields, all A's and all from site 2a, on 751 samples, no
 
 No hit, block, machine, movement or capsule field changed. The new recording equals, value for value, the one task 14b's
 part 1 recorded with site 2a folded alone, so site 2b changed no value. The envelope changed only in its source string.
+
+og-ground-aligned-attacks task 36 re-recorded it when the movement's support law v2 became the default (og-brawler's
+movement rationale, §36). The recorder printed `samples=361 fields=120 values=86640 goldenBytes=752280
+envelopeBytes=26112 runs=8`, an envelope position maximum of 5.0e-4 cm and no discrete divergence. Against task 14b's
+recording it differs in 1,521 field-samples of 16 fields, A's and B's, none of them signed-zero only, the first at
+tick 164 (`B.body5.CharacterCapsule.position`). That is the V2 run task 35's print compared with the old recording,
+and the Legacy print now reads the same count against the new one. The live coverage line changed in three counts:
+`walkTicks` 121 → 122, `knockbackTicks` 16 → 15 and `ledgeFallTicks` 141 → 143. By mechanism:
+
+* **Flat knockback ticks (the one write, no flicker).** A's hit on B at 164: under Legacy B was Unsupported on 164
+  and 166 (the flat-ground flicker, its vertical velocity −0.163 m/s, one tick of gravity, on the hit tick), and under
+  V2 it stays Supported until it leaves the ledge at 169. B then falls off the arena three ticks earlier (respawn at
+  355, not 358), so B's capsule, weapon, guard and velocity fields differ on 164–385 (`B.ringout.respawnAtTick` to
+  the end), A's score turns over
+  three ticks earlier (`A.ringout.score`, 235–237), and B lands Supported at 360.
+* **The frame normal on the ramp (GJK to the exact face).** On tick 233 the 20° ramp's sweep normal is 0.66° off the
+  up–forward plane (task 30's tick, §3 above). Legacy's frame took it, so A gained a sideways velocity of −0.0044 m/s
+  and drifted −7.4e-5 m across the walk; V2 takes the exact face, so A stays at 0. A's capsule, weapon and guard
+  positions differ from there to the end. Before 233, on the ramp's foot and face (213–232), A's velocity differs by
+  at most 8.9e-8 m/s; after it the runs take different paths, and at the ramp's top edge and the step's edge (below)
+  they differ by up to 0.31 and 0.77 m/s.
+* **Edge ticks.** At the ramp's top edge A's guard stays tilted one tick longer (`A.body1.GuardAxis.rotation`, 267).
+  At the step's edge Legacy's frame was the edge's tilted sweep normal, so A's walk split along it (0.86 m/s forward
+  and 0.61 m/s down on 310) and A was Unsupported on 320; under V2 A keeps the full walk speed (1 m/s) over the
+  edge and falls at gravity, Supported on every sample there.
+* **Crease ticks.** The flat scenario has no knockback across a crease.

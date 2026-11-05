@@ -334,6 +334,11 @@ struct Rig
         inbound.reactionKind   = kind;
         inbound.knockbackSpeed = knockback ? knockbackSpeed() : 0.f;
         inbound.hitDirectionXY = knockback ? directionXY : glm::vec2(0.f);
+        // [ga task 36] Under SupportLaw::V2 (the shipped law) the world direction too, as `resolveHitReaction`
+        // writes it: V2 reads only `hitDirectionWorld`, and a horizontal hit's world image is the chart direction
+        // at height 0. A case that sets Legacy keeps the pre-task input (no world direction, so D-06's XY path).
+        inbound.hitDirectionWorld = (knockback && sd.supportLaw == movement::SupportLaw::V2)
+            ? simFrame::compose(directionXY, 0.f) : glm::vec3(0.f);
         inbound.flinchDuration = knockback
             ? glm::max(lockoutDuration, knockbackSlideSeconds())
             : lockoutDuration;
@@ -1480,8 +1485,9 @@ struct LedgeQueryAdapter
 
     void configureFrom(const movement::StaticData& sd)
     {
+        // The probe is index 0 under either law; V2 also declares the centre probe at index 1 [ga task 36].
         const std::vector<QueryVolumeDescriptor> volumes = movement::PhysicsSetup::queryVolumes(sd);
-        REQUIRE(volumes.size() == 1u);
+        REQUIRE(volumes.size() == (sd.supportLaw == movement::SupportLaw::V2 ? 2u : 1u));
         const CapsuleGeometry* capsule = std::get_if<CapsuleGeometry>(&volumes[0].geometry);
         REQUIRE(capsule != nullptr);
         probeRadius     = capsule->radius;
@@ -2938,8 +2944,9 @@ struct WorldSweepQueryAdapter
 
     void configureFrom(const movement::StaticData& sd)
     {
+        // The probe is index 0 under either law; V2 also declares the centre probe at index 1 [ga task 36].
         const std::vector<QueryVolumeDescriptor> volumes = movement::PhysicsSetup::queryVolumes(sd);
-        REQUIRE(volumes.size() == 1u);
+        REQUIRE(volumes.size() == (sd.supportLaw == movement::SupportLaw::V2 ? 2u : 1u));
         const CapsuleGeometry* capsule = std::get_if<CapsuleGeometry>(&volumes[0].geometry);
         REQUIRE(capsule != nullptr);
         probeRadius     = capsule->radius;
@@ -4281,7 +4288,11 @@ TEST_CASE("BrawlerMovement.SlopeKnockbackStaysOnSlope", "[BrawlerMovement]")
     const float theta = 30.f;
     const glm::vec3 n = slopeNormal(theta);
 
+    // [ga task 36] LEGACY BY NAME: this case is the Legacy law's D-06 component-wise mapping. SupportLaw::V2
+    // writes the world direction and redirects a hit into the face along it (17.32 m/s here, the projection by
+    // design: `GroundAlignedKnockback.V2HitTickIntoTheFaceGivesTheProjectedVelocity`). Retired with Legacy.
     ScriptedRig rig;
+    rig.sd.supportLaw = movement::SupportLaw::Legacy;
     rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight, rig.probeLength(), n) };
     rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
 
@@ -4699,6 +4710,20 @@ TEST_CASE("BrawlerMovement.HoldGuardDoesNotFreezeAnAttackSlide", "[BrawlerMoveme
     walking.state.velocity = glm::vec3(0.f, 0.f, -walking.sd.maxWalkSpeed);
     walking.tick(1u, stick(1.f, 0.f), movement::kInputFlagHoldGuard);
     REQUIRE(walking.state.velocity == glm::vec3(0.f));
+}
+
+// [og-ground-aligned-attacks task 20b, review_ga_20 N1] The movement body's capsule and the StaticData
+// capsule that `brawlerHitDetection::detectRadialHits` tests the attack band against (task 20) are one
+// pair of numbers, spelled twice.
+TEST_CASE("BrawlerMovement.BodyCapsuleEqualsTheStaticDataCapsule", "[BrawlerMovement]")
+{
+    const auto& shapes = brawlerMovementSimulation::PhysicsSetup::body.shapes;
+    REQUIRE(shapes.size() == 1u);
+    REQUIRE(std::holds_alternative<CapsuleGeometry>(shapes.front().geometry));
+    const CapsuleGeometry& body = std::get<CapsuleGeometry>(shapes.front().geometry);
+    const simulatableBrawler::StaticData staticData;
+    CHECK(body.radius == staticData.m_movementStaticData.capsuleRadius);
+    CHECK(body.halfHeight == staticData.m_movementStaticData.capsuleHalfHeight);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

@@ -277,7 +277,7 @@ TEST_CASE("ControlsHud: camera look on and off flips the camera-look row's state
 	const MappingContext ctx = dInput::gameMapping::buildDefaultContext();
 	const std::vector<std::string> expectedOff = {
 		"5 / Pad Y Camera look (solo camera)",
-		"OFF: the camera holds still and the mouse cursor aims.",
+		"OFF: the camera returns to its default angle; the cursor aims.",
 		"H / View: close this help",
 	};
 	const std::vector<std::string> expectedOn = {
@@ -359,7 +359,7 @@ TEST_CASE("ControlsHud: a closed legend has no lines; an open one starts with th
 		"Gamepad: right stick released, the left stick moves and aims.",
 		"",
 		"5 / Pad Y Camera look (solo camera)",
-		"OFF: the camera holds still and the mouse cursor aims.",
+		"OFF: the camera returns to its default angle; the cursor aims.",
 		"H / View: close this help",
 	};
 	CHECK(legendLines(ctx, openLegend(defaultInput())) == expected);

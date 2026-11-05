@@ -263,7 +263,10 @@ namespace groundAlignedMeleeBlockTests
         Query query;
         query.objectPosition = objectPosition;
         auto resolve = [](BodyId id) { return id == BodyId{ kTargetRoot } ? kTargetId : SimCharacterId::None; };
-        brawlerHitDetection::detectRadialHits(kDt, radialStaticData, swing.ic, state, bindings, derived, physics, query, resolve);
+        const auto& movementStaticData = brawlerStaticData().m_movementStaticData;
+        const brawlerHitDetection::TargetCapsule capsule{ movementStaticData.capsuleRadius, movementStaticData.capsuleHalfHeight };
+        brawlerHitDetection::detectRadialHits(kDt, radialStaticData, capsule, swing.ic, state, bindings, derived, physics, query,
+            resolve);
         Detection out;
         out.ran = true;
         out.blocked = derived.getGuardBlockedThisTick();

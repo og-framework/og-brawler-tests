@@ -1085,6 +1085,7 @@ TEST_CASE("DAttack.SimulatableBrawler.ReplayAnchoredOnHitTickConvergesInOneCorre
         slice.reactionKind   = HitReactionKind::Knockback;
         slice.knockbackSpeed = spec.knockbackSpeed;
         slice.hitDirectionXY = glm::vec2(1.f, 0.f);
+        slice.hitDirectionWorld = simFrame::compose(slice.hitDirectionXY, 0.f);
         slice.flinchDuration = dwell;
     };
     const auto clearSlice = [&](FPeer& peer)

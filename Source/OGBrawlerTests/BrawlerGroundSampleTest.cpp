@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <variant>
 #include <vector>
 
 #include "catch_amalgamated.hpp"
@@ -70,6 +71,11 @@ struct Rig
         bindings.parentBodyId   = kBodyId;
         bindings.queryVolumeIds = { kVolumeId };
         state.bodyState.position = glm::vec3(-0.04f, 5.f, -0.03f);
+    }
+
+    explicit Rig(movement::SupportLaw law) : Rig()
+    {
+        sd.supportLaw = law;
     }
 
     float probeLength() const { return sd.rideHeight + sd.snapDistance; }
@@ -228,7 +234,7 @@ TEST_CASE("BrawlerGroundSample.AlignedReturnsUpOffWalkableGround", "[BrawlerMove
 
     SECTION("a face steeper than the walkable cap")
     {
-        Rig rig;
+        Rig rig(movement::SupportLaw::Legacy);
         const glm::vec3 steep = tiltedNormal(50.f);
         REQUIRE(glm::dot(steep, movement::kWorldUp) < rig.sd.cosMaxSlope);
         rig.query.scriptedSweeps = { floorHit(0.5f, steep, steep) };
@@ -237,19 +243,19 @@ TEST_CASE("BrawlerGroundSample.AlignedReturnsUpOffWalkableGround", "[BrawlerMove
     }
     SECTION("a steep exact face under a walkable sweep normal")
     {
-        Rig rig;
+        Rig rig(movement::SupportLaw::Legacy);
         rig.query.scriptedSweeps = { floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(50.f)) };
         REQUIRE(simFrameDetail::sameBits(rig.sample().normal, simFrame::kUp));
     }
     SECTION("a miss")
     {
-        Rig rig;
+        Rig rig(movement::SupportLaw::Legacy);
         REQUIRE(simFrameDetail::sameBits(rig.sample().normal, simFrame::kUp));
         REQUIRE(rig.query.sweepCalls.size() == 1u);
     }
     SECTION("an unblocked hit that carries normals")
     {
-        Rig rig;
+        Rig rig(movement::SupportLaw::Legacy);
         SweepHit unblocked = floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(30.f));
         unblocked.blocked = false;
         rig.query.scriptedSweeps = { unblocked };
@@ -257,7 +263,7 @@ TEST_CASE("BrawlerGroundSample.AlignedReturnsUpOffWalkableGround", "[BrawlerMove
     }
     SECTION("a vertical exact face under a walkable sweep normal")
     {
-        Rig rig;
+        Rig rig(movement::SupportLaw::Legacy);
         rig.query.scriptedSweeps = { floorHit(0.5f, tiltedNormal(20.f), simFrame::kForward) };
         REQUIRE(simFrameDetail::sameBits(rig.sample().normal, simFrame::kUp));
     }
@@ -267,7 +273,7 @@ TEST_CASE("BrawlerGroundSample.AlignedSampleIsTheSharedGroundNormal", "[BrawlerM
 {
     using namespace groundSampleTests;
 
-    const Rig base;
+    const Rig base(movement::SupportLaw::Legacy);
     const movement::StaticData& sd = base.sd;
     std::vector<SweepHit> hits = {
         floorHit(0.5f, tiltedNormal(10.f), glm::vec3(0.f)),
@@ -302,7 +308,7 @@ TEST_CASE("BrawlerGroundSample.AlignedSampleIsTheSharedGroundNormal", "[BrawlerM
     int worldUp       = 0;
     for (const SweepHit& hit : hits)
     {
-        Rig rig;
+        Rig rig(movement::SupportLaw::Legacy);
         rig.query.scriptedSweeps = { hit };
         const brawlerGround::GroundSample sample = rig.sample();
         const brawlerGround::GroundSample before = sampleBeforeTheSharedHelper(hit, rig.sd);
@@ -318,7 +324,7 @@ TEST_CASE("BrawlerGroundSample.AlignedSampleIsTheSharedGroundNormal", "[BrawlerM
             ++walkableFaces;
     }
 
-    Rig unbound;
+    Rig unbound(movement::SupportLaw::Legacy);
     unbound.bindings.queryVolumeIds.clear();
     REQUIRE(simFrameDetail::sameBits(unbound.sample().normal, sampleBeforeTheSharedHelper(SweepHit{}, unbound.sd).normal));
 
@@ -326,6 +332,141 @@ TEST_CASE("BrawlerGroundSample.AlignedSampleIsTheSharedGroundNormal", "[BrawlerM
     REQUIRE(hits.size() == 13u + 37u * 14u * 2u);
     REQUIRE(walkableFaces > 0);
     REQUIRE(worldUp > 0);
+}
+
+TEST_CASE("BrawlerGroundSample.LegacyDeclaresExactlyOneQueryVolume", "[BrawlerMovement]")
+{
+    using namespace groundSampleTests;
+
+    const simulatableBrawler::StaticData shipped;
+    REQUIRE(shipped.m_movementStaticData.supportLaw == movement::SupportLaw::V2);
+
+    movement::StaticData legacy = shipped.m_movementStaticData;
+    movement::StaticData v2     = shipped.m_movementStaticData;
+    legacy.supportLaw = movement::SupportLaw::Legacy;
+    v2.supportLaw = movement::SupportLaw::V2;
+
+    const std::vector<QueryVolumeDescriptor> one = movement::PhysicsSetup::queryVolumes(legacy);
+    const std::vector<QueryVolumeDescriptor> two = movement::PhysicsDeclaration::queryVolumes(v2);
+    REQUIRE(one.size() == 1u);
+    REQUIRE(movement::PhysicsDeclaration::queryVolumes(legacy).size() == 1u);
+    REQUIRE(two.size() == 2u);
+
+    const CapsuleGeometry* probe = std::get_if<CapsuleGeometry>(&one[0].geometry);
+    const CapsuleGeometry* probeV2 = std::get_if<CapsuleGeometry>(&two[0].geometry);
+    REQUIRE(probe != nullptr);
+    REQUIRE(probeV2 != nullptr);
+    REQUIRE(probe->radius == legacy.capsuleRadius - movement::kProbeShrink);
+    REQUIRE(probe->halfHeight == legacy.capsuleHalfHeight - movement::kProbeShrink);
+    REQUIRE(probeV2->radius == probe->radius);
+    REQUIRE(probeV2->halfHeight == probe->halfHeight);
+    REQUIRE(one[0].offsetTransform == two[0].offsetTransform);
+    REQUIRE(one[0].searchCategories.bits == two[0].searchCategories.bits);
+    REQUIRE(one[0].traceCategory == two[0].traceCategory);
+
+    const SphereGeometry* centre = std::get_if<SphereGeometry>(&two[1].geometry);
+    REQUIRE(centre != nullptr);
+    REQUIRE(centre->radius == movement::kCenterProbeRadius);
+    const glm::vec3 centreOffset(two[1].offsetTransform[3]);
+    REQUIRE(simFrameDetail::sameBits(centreOffset,
+        simFrame::withHeight(glm::vec3(0.f), -(v2.capsuleHalfHeight - movement::kCenterProbeRadius))));
+    REQUIRE(simFrame::height(centreOffset) - centre->radius == -v2.capsuleHalfHeight);
+    REQUIRE(glm::mat3(two[1].offsetTransform) == glm::mat3(1.f));
+    REQUIRE(two[1].searchCategories.bits == one[0].searchCategories.bits);
+    REQUIRE(two[1].traceCategory == one[0].traceCategory);
+}
+
+TEST_CASE("BrawlerGroundSample.V2SampleIsTheEstimatesFaceNormal", "[BrawlerMovement]")
+{
+    using namespace groundSampleTests;
+
+    constexpr QueryVolumeId kCentreId{ 94u };
+    const Rig base;
+    const movement::StaticData& sd = base.sd;
+    std::vector<SweepHit> hits = {
+        floorHit(0.5f, tiltedNormal(10.f), glm::vec3(0.f)),
+        floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(30.f)),
+        floorHit(0.5f, tiltedNormal(29.f), tiltedNormal(30.f)),
+        floorHit(0.5f, tiltedNormal(20.f), tiltedNormal(50.f)),
+        floorHit(0.5f, tiltedNormal(20.f), simFrame::kForward),
+        floorHit(0.5f, tiltedNormal(sd.maxSlopeAngleDeg + 5.f), glm::vec3(0.f)),
+        floorHit(0.5f, tiltedNormal(sd.maxSlopeAngleDeg + 5.f), tiltedNormal(30.f)),
+        SweepHit{},
+    };
+    for (int gjk = -90; gjk <= 90; gjk += 5)
+        for (int face = -105; face <= 90; face += 15)
+            for (const bool blocked : { true, false })
+            {
+                SweepHit hit = floorHit(0.5f, tiltedNormal(static_cast<float>(gjk)),
+                    face < -90 ? glm::vec3(0.f) : tiltedNormal(static_cast<float>(face)));
+                hit.blocked = blocked;
+                hits.push_back(hit);
+            }
+    const SweepHit centres[] = {
+        SweepHit{},
+        floorHit(0.4f, tiltedNormal(30.f), glm::vec3(0.f)),
+        floorHit(0.4f, tiltedNormal(30.f), tiltedNormal(30.f)),
+        floorHit(0.4f, tiltedNormal(20.f), simFrame::kForward),
+        floorHit(0.4f, tiltedNormal(60.f), tiltedNormal(60.f)),
+    };
+
+    int estimates = 0;
+    int centreSweeps = 0;
+    int kinds[3] = { 0, 0, 0 };
+    for (const SweepHit& hit : hits)
+        for (const SweepHit& centre : centres)
+            for (const movement::SupportLaw law : { movement::SupportLaw::Legacy, movement::SupportLaw::V2 })
+            {
+                Rig sampled;
+                Rig estimated;
+                for (Rig* rig : { &sampled, &estimated })
+                {
+                    rig->sd.supportLaw = law;
+                    rig->bindings.queryVolumeIds = { kVolumeId, kCentreId };
+                    rig->query.scriptedSweeps = { hit, centre };
+                }
+                const brawlerGround::GroundSample sample = sampled.sample();
+                const movement::GroundSupport g = movement::estimateSupport(estimated.state, estimated.sd, estimated.bindings, estimated.query);
+                INFO("law " << int(law) << " hit blocked " << hit.blocked << " normal=(" << hit.normal.x << ", " << hit.normal.y << ", "
+                     << hit.normal.z << ") surfaceNormal=(" << hit.surfaceNormal.x << ", " << hit.surfaceNormal.y << ", "
+                     << hit.surfaceNormal.z << ") centre blocked " << centre.blocked);
+                REQUIRE(simFrameDetail::sameBits(sample.normal, g.faceNormal));
+                REQUIRE(sampled.query.sweepCalls.size() == estimated.query.sweepCalls.size());
+                for (std::size_t i = 0u; i < sampled.query.sweepCalls.size(); ++i)
+                    REQUIRE(sameCall(sampled.query.sweepCalls[i], estimated.query.sweepCalls[i]));
+                REQUIRE(sampled.query.sweepCalls[0].volumeId == kVolumeId);
+                if (law == movement::SupportLaw::Legacy)
+                {
+                    REQUIRE(sampled.query.sweepCalls.size() == 1u);
+                    REQUIRE(simFrameDetail::sameBits(sample.normal, movement::attackGroundNormal(hit, sd)));
+                    continue;
+                }
+                const bool provided = glm::dot(hit.surfaceNormal, hit.surfaceNormal) > 0.f;
+                const bool edge = hit.blocked && provided && glm::dot(hit.surfaceNormal, hit.normal) < movement::kEdgeContactCos;
+                REQUIRE(sampled.query.sweepCalls.size() == (edge ? 2u : 1u));
+                if (edge)
+                {
+                    const auto& second = sampled.query.sweepCalls[1];
+                    REQUIRE(second.volumeId == kCentreId);
+                    REQUIRE(second.transform == sampled.query.sweepCalls[0].transform);
+                    REQUIRE(second.delta == sampled.query.sweepCalls[0].delta);
+                    ++centreSweeps;
+                }
+                REQUIRE(simFrameDetail::sameBits(g.frameNormal, g.faceNormal));
+                REQUIRE(g.eligible == (g.kind != movement::SupportKind::None));
+                if (g.kind != movement::SupportKind::Face)
+                    REQUIRE(simFrameDetail::sameBits(g.faceNormal, simFrame::kUp));
+                ++kinds[static_cast<int>(g.kind)];
+                ++estimates;
+            }
+
+    std::printf("[BrawlerGroundSample.v2] estimates=%d centreSweeps=%d none=%d face=%d lip=%d\n", estimates, centreSweeps,
+        kinds[0], kinds[1], kinds[2]);
+    REQUIRE(estimates == int(hits.size() * 5u));
+    REQUIRE(centreSweeps > 0);
+    REQUIRE(kinds[0] > 0);
+    REQUIRE(kinds[1] > 0);
+    REQUIRE(kinds[2] > 0);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

@@ -157,6 +157,8 @@ struct Scene
         , systems(std::piecewise_construct, HitDetection(bodies, query), brawlerHitRouting::System{}, brawlerRingout::ScoreSystem{})
         , executor(storage, staticData, bodies, query)
     {
+        if constexpr (requires { ScenarioT::configureStaticData(staticData); })
+            ScenarioT::configureStaticData(staticData);
         query.excludeStaticBodiesFromQueries(staticBodies.physicsOnly);
         for (const SpawnPoint& spawnPoint : ScenarioT::spawnTable())
             staticData.m_ringoutStaticData.spawnPoints[spawnPoint.slot] = spawnPoint.point;

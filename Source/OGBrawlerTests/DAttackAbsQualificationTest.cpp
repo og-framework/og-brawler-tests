@@ -221,7 +221,13 @@ static RadialTickResult radialTick(float hitHeight, float halfThickness)
     // [og-netcode-v2-field-defects task 9] The production tick's second step: detection runs
     // AFTER the radial's integrate, on the state it left, exactly as
     // brawlerHitDetection::System::preIntegrate does for every character on the next tick (task 20).
-    brawlerHitDetection::detectRadialHits(kDt, staticData, composite.get<InitialConditions>(),
+    // [og-ground-aligned-attacks task 20] The detector tests the target's movement CAPSULE against the
+    // band since task 20 (`capsuleOverlapsAttackBand`). This rig pins a property of the point test, so it
+    // hands the detector a POINT capsule: radius 1e-6 m and halfHeight equal to it (no segment), which
+    // reduces the band test to the old three comparisons widened by 1e-6 m, far inside every margin here.
+    // The site under test (`glm::abs` on the axial distance) moved into the band test with them.
+    constexpr brawlerHitDetection::TargetCapsule pointTarget{ 1e-6f, 1e-6f };
+    brawlerHitDetection::detectRadialHits(kDt, staticData, pointTarget, composite.get<InitialConditions>(),
         composite.get<State>(), bindings, derived, physics, query,
         [](BodyId root) { return root == BodyId{ 5u } ? SimCharacterId{ 5u } : SimCharacterId::None; });
 

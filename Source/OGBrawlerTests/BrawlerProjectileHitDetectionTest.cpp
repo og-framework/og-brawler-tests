@@ -24,6 +24,9 @@
 //         `targetContact` is set: its guard (if enabled) FIRST, then its body.
 //         A guard facing the shot stands in front of the body; the projectile takes the FIRST
 //         non-parent entry, so the order is the rig's model of that.
+//         [og-ground-aligned-attacks task 20b] The order no longer decides a block: the struck
+//         character's guard entry decides wherever it is listed (BrawlerProjectileHitDetection.h
+//         `guardEntryOf`). The cases at the end of this file run both orders on a scripted report.
 //       - every OTHER projectile body within `projectileContact` of the volume that is not parked.
 //         Body transforms are read as last written, so a body parked mid-pass disappears from
 //         every later query: the physics-thread write model.
@@ -39,10 +42,12 @@
 #include "catch_amalgamated.hpp"
 
 #include "OGBrawler/BrawlerHitDetectionSystem.h"
+#include "OGBrawler/BrawlerProjectileHitDetection.h"
 #include "OGBrawler/BrawlerHitRoutingSystem.h"
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
 #include "BrawlerTestInputs.h"
+#include "BrawlerSimulationMocks.h"
 #include "OGBrawler/BrawlerInboundHit.h"
 #include "OGBrawler/BrawlerProjectileSimulation.h"
 #include "OGBrawler/DAttackMachineSimulation.h"
@@ -60,6 +65,8 @@
 #include "OGSimulation/SimulationFrame.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -69,6 +76,8 @@
 #include <vector>
 
 #include "glm/geometric.hpp"
+#include "glm/gtc/constants.hpp"
+#include "glm/gtc/matrix_transform.hpp"
 
 namespace projectileDetectionTests
 {
@@ -732,6 +741,210 @@ TEST_CASE("HitDetection.Projectile.AnUnintegratedShooterRoutesItsShotOnce",
         CHECK(rig.routedTargetHits() == 3);
         CHECK(rig.samples.back().endTick[0] == R);
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// THE TARGET'S GUARD DECIDES, WHICHEVER ENTRY IS LISTED FIRST [og-ground-aligned-attacks task 20b]
+// A shot can reach the target's weapon sphere (`body`) and its concentric guard sphere on the same
+// tick, and the Jolt adapter sorts the weapon entry first (declaration 0 before 1). Each case runs a
+// scripted report through the single-shooter `detectProjectileHits`, in both entry orders.
+// ---------------------------------------------------------------------------
+namespace projectileGuardEntryTests
+{
+using brawlerProjectileSimulation::SlotOutcome;
+using brawlerTestMocks::MockPhysicsAdapter;
+using brawlerTestMocks::MockSpatialQueryAdapter;
+
+constexpr std::uint32_t kPool           = static_cast<std::uint32_t>(brawlerProjectileSimulation::kMaxProjectilePoolSize);
+constexpr std::uint32_t kShooterRootId  = kPool;
+constexpr std::uint32_t kTargetRootId   = kPool + 1u;
+constexpr std::uint32_t kTargetWeapon   = kPool + 2u;
+constexpr std::uint32_t kTargetGuard    = kPool + 3u;
+constexpr std::uint32_t kOtherRootId    = kPool + 4u;
+constexpr std::uint32_t kOtherGuard     = kPool + 5u;
+constexpr std::uint32_t kOtherShot      = kPool + 6u;
+constexpr std::uint32_t kBodyCount      = kPool + 7u;
+constexpr std::uint32_t kEntrySpawnTick = 100u;
+
+enum class Entry { TargetBody, TargetGuard, OtherGuard, Projectile };
+
+inline const char* entryName(Entry e)
+{
+    switch (e)
+    {
+    case Entry::TargetBody:  return "body";
+    case Entry::TargetGuard: return "guard";
+    case Entry::OtherGuard:  return "otherGuard";
+    case Entry::Projectile:  return "projectile";
+    }
+    return "?";
+}
+
+inline SpatialQueryHit entryHit(Entry e)
+{
+    SpatialQueryHit hit{};
+    hit.objectPosition = simFrame::withHeight(glm::vec3(0.f), 0.3f);
+    switch (e)
+    {
+    case Entry::TargetBody:
+        hit.bodyId = BodyId{ kTargetWeapon };  hit.rootBodyId = BodyId{ kTargetRootId };
+        hit.objectCategories = CollisionCategories::single(collisionCategory::body);
+        break;
+    case Entry::TargetGuard:
+        hit.bodyId = BodyId{ kTargetGuard };   hit.rootBodyId = BodyId{ kTargetRootId };
+        hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
+        break;
+    case Entry::OtherGuard:
+        hit.bodyId = BodyId{ kOtherGuard };    hit.rootBodyId = BodyId{ kOtherRootId };
+        hit.objectCategories = CollisionCategories::single(collisionCategory::guard);
+        break;
+    case Entry::Projectile:
+        hit.bodyId = BodyId{ kOtherShot };     hit.rootBodyId = BodyId{ kOtherRootId };
+        hit.objectCategories = CollisionCategories::single(collisionCategory::projectile);
+        break;
+    }
+    return hit;
+}
+
+// The shot travels along -kForward; a guard whose forward is +kForward faces it.
+inline glm::vec3 entryShotDirection() { return -simFrame::kForward; }
+
+inline glm::mat4 guardAt(float heading, const glm::vec3& root)
+{
+    glm::mat4 m = glm::rotate(glm::mat4(1.f), heading, simFrame::kUp);
+    m[3] = glm::vec4(root, 1.f);
+    return m;
+}
+
+inline const glm::vec3 kTargetGuardRoot(0.25f, 0.f, -0.5f);
+inline const glm::vec3 kWeaponCentre(-0.75f, 0.3f, 1.5f);
+
+struct EntryResult
+{
+    SlotOutcome   outcome = SlotOutcome::None;
+    std::uint32_t struckRoot = 0u;
+    glm::vec3     targetRootPosition{ 0.f };
+};
+
+// `targetGuardHeading`: 0 faces the shot, pi faces away. The other character's guard (when listed)
+// always faces the shot, and the weapon body is turned away and placed elsewhere, so a predicate
+// that read either of them instead of the target's guard would change the outcome.
+inline EntryResult classify(const std::vector<Entry>& order, float targetGuardHeading)
+{
+    using namespace brawlerProjectileSimulation;
+    static const simulatableBrawler::StaticData brawlerData;
+    const StaticData& sd = brawlerData.m_projectileStaticData;
+
+    State state;
+    state.slots[0].spawnTick = kEntrySpawnTick;
+    state.slots[0].spawnPos  = simFrame::withHeight(glm::vec3(0.f), 0.5f) + simFrame::kForward * 2.f;
+    state.slots[0].spawnDir  = entryShotDirection();
+    state.slots[0].endTick   = 0u;
+
+    MockPhysicsAdapter physics{ kBodyCount };
+    physics.bodies[kTargetGuard].transform  = guardAt(targetGuardHeading, kTargetGuardRoot);
+    physics.bodies[kTargetWeapon].transform = guardAt(glm::pi<float>(), kWeaponCentre);
+    physics.bodies[kOtherGuard].transform   = guardAt(0.f, glm::vec3(3.f, 0.f, 0.f));
+
+    MockSpatialQueryAdapter query;
+    for (const Entry e : order)
+        query.nextReport.hits.push_back(entryHit(e));
+
+    std::array<RuntimeBindings, kMaxProjectilePoolSize> bindings{};
+    for (std::uint32_t i = 0; i < kMaxProjectilePoolSize; ++i)
+    {
+        bindings[i].ownBodyId      = BodyId{ i };
+        bindings[i].parentBodyId   = BodyId{ kShooterRootId };
+        bindings[i].queryVolumeIds = { QueryVolumeId{ i } };
+    }
+    DerivedState derived;
+    brawlerHitDetection::detectProjectileHits(projectileDetectionTests::kDt, kEntrySpawnTick, sd, state, bindings, derived, physics, query);
+
+    const SlotDetection& d = derived.detectedThisTick[0];
+    return EntryResult{ d.outcome, d.struckRootBodyId.value, d.targetRootPosition };
+}
+
+inline std::string describe(const std::vector<Entry>& order, const EntryResult& r)
+{
+    std::string s = "[";
+    for (std::size_t i = 0; i < order.size(); ++i)
+        s += std::string(i ? ", " : "") + entryName(order[i]);
+    return s + "] -> outcome " + std::to_string(static_cast<int>(r.outcome))
+         + " struckRoot " + std::to_string(r.struckRoot);
+}
+} // namespace projectileGuardEntryTests
+
+TEST_CASE("HitDetection.Projectile.AFacingGuardBlocksWhicheverEntryIsListedFirst", "[BrawlerProjectile]")
+{
+    using namespace projectileGuardEntryTests;
+    for (const std::vector<Entry>& order : { std::vector<Entry>{ Entry::TargetBody, Entry::TargetGuard },
+                                             std::vector<Entry>{ Entry::TargetGuard, Entry::TargetBody } })
+    {
+        const EntryResult r = classify(order, 0.f);
+        std::printf("[ProjectileGuardEntry.facing] %s\n", describe(order, r).c_str());
+        INFO(describe(order, r));
+        CHECK(r.outcome == SlotOutcome::BlockedByGuard);
+        CHECK(r.struckRoot == kTargetRootId);
+        CHECK(r.targetRootPosition == kTargetGuardRoot);
+    }
+}
+
+TEST_CASE("HitDetection.Projectile.AGuardFacingAwayIsAHitInBothOrders", "[BrawlerProjectile]")
+{
+    using namespace projectileGuardEntryTests;
+    for (const std::vector<Entry>& order : { std::vector<Entry>{ Entry::TargetBody, Entry::TargetGuard },
+                                             std::vector<Entry>{ Entry::TargetGuard, Entry::TargetBody } })
+    {
+        const EntryResult r = classify(order, glm::pi<float>());
+        std::printf("[ProjectileGuardEntry.facingAway] %s\n", describe(order, r).c_str());
+        INFO(describe(order, r));
+        CHECK(r.outcome == SlotOutcome::Hit);
+        CHECK(r.struckRoot == kTargetRootId);
+        CHECK(r.targetRootPosition == kTargetGuardRoot);
+    }
+}
+
+TEST_CASE("HitDetection.Projectile.NoGuardEntryOfTheStruckCharacterIsAHit", "[BrawlerProjectile]")
+{
+    using namespace projectileGuardEntryTests;
+    for (const std::vector<Entry>& order : { std::vector<Entry>{ Entry::TargetBody },
+                                             std::vector<Entry>{ Entry::TargetBody, Entry::OtherGuard } })
+    {
+        const EntryResult r = classify(order, 0.f);
+        std::printf("[ProjectileGuardEntry.noGuard] %s\n", describe(order, r).c_str());
+        INFO(describe(order, r));
+        CHECK(r.outcome == SlotOutcome::Hit);
+        CHECK(r.struckRoot == kTargetRootId);
+        CHECK(r.targetRootPosition == glm::vec3(0.f));
+    }
+}
+
+TEST_CASE("HitDetection.Projectile.AProjectileEntryFirstCancelsInBothOrders", "[BrawlerProjectile]")
+{
+    using namespace projectileGuardEntryTests;
+    for (const std::vector<Entry>& order : { std::vector<Entry>{ Entry::Projectile, Entry::TargetBody, Entry::TargetGuard },
+                                             std::vector<Entry>{ Entry::Projectile, Entry::TargetGuard, Entry::TargetBody } })
+    {
+        const EntryResult r = classify(order, 0.f);
+        std::printf("[ProjectileGuardEntry.projectileFirst] %s\n", describe(order, r).c_str());
+        INFO(describe(order, r));
+        CHECK(r.outcome == SlotOutcome::CancelledByProjectile);
+    }
+}
+
+// The `break`: one contact per slot, the first non-parent entry. A projectile listed AFTER the target
+// does not cancel the slot.
+TEST_CASE("HitDetection.Projectile.AProjectileListedAfterTheTargetDoesNotCancel", "[BrawlerProjectile]")
+{
+    using namespace projectileGuardEntryTests;
+    const EntryResult hit = classify({ Entry::TargetBody, Entry::Projectile }, glm::pi<float>());
+    const EntryResult block = classify({ Entry::TargetBody, Entry::TargetGuard, Entry::Projectile }, 0.f);
+    std::printf("[ProjectileGuardEntry.projectileAfter] %s | %s\n",
+        describe({ Entry::TargetBody, Entry::Projectile }, hit).c_str(),
+        describe({ Entry::TargetBody, Entry::TargetGuard, Entry::Projectile }, block).c_str());
+    CHECK(hit.outcome == SlotOutcome::Hit);
+    CHECK(block.outcome == SlotOutcome::BlockedByGuard);
 }
 
 #endif // WITH_LOW_LEVEL_TESTS

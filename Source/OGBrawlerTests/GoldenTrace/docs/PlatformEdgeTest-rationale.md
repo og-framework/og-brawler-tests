@@ -74,25 +74,37 @@ compare its printed lines (§7).
   - both swings.
   It keeps the hit whose direction is closest to the wanted one, and requires a cosine of at least 0.82. The printed
   `actualObl` is the angle the knockback really had.
-- **A target resting past a raised rim** sits about 0.14 m below the face plane. That is outside the swing band, whose
-  half-thickness is 0.35 m about a pivot 0.3 m above the attacker's root. So for d = −0.15 the attacker overhangs too.
-- **Seven placements cannot be reached** and are printed as `[PlatformEdge.unreachable]`: both tip corners at d ≤ 0.3
-  outward, and three oblique overhangs (d = −0.15): the top rim's seam at +30°, and since task 30 both chamfers at the
-  oblique that turns toward their tip (chamferPlus −30°, chamferMinus +30°). All of them are within 1 m of a rim
-  (`kReachableFromDistance`). Before task 30 there were five; §7.1 says why the two chamfer overhangs moved.
+- **A target resting past a raised rim** sits about 0.14 m below the face plane. Until og-ground-aligned-attacks task 20
+  its capsule centre was outside the swing band, whose half-thickness is 0.35 m about a pivot 0.3 m above the attacker's
+  root, so for d = −0.15 the attacker had to overhang too. Since task 20 a swing hits when the band overlaps the target's
+  capsule, and the search's first placement (no inward shift, no flip) reaches it (§7.2).
+- **Four placements cannot be reached** and are printed as `[PlatformEdge.unreachable]`: both tip corners at d ≤ 0.3
+  outward. All of them are within 1 m of a rim (`kReachableFromDistance`). Before task 30 there were five, from task 30
+  seven (§7.1), and task 20 reached the three oblique overhangs (the top rim's seam at +30°, chamferPlus −30°,
+  chamferMinus +30°; §7.2).
 
 ## 4. The per-tick record and the mirror
 
-- **The probe.** Before each step, `runOnce` copies the target's movement `State` and calls `probeGround` with the
-  movement declaration's bindings. That is the sweep `integrate` makes on that tick: the query sees statics only, and
-  nothing moves the body between the copy and the probe.
+- **The probe.** Before each step, `runOnce` copies the target's movement `State` and calls `estimateSupport` (since
+  og-ground-aligned-attacks task 32; `probeGround` before) with the movement declaration's bindings. That is the support
+  estimate `integrate` makes on that tick, with its one sweep: the query sees statics only, and nothing moves the body
+  between the copy and the probe. The record's probe fields are the estimate's `probe`, and its attack ground is the
+  estimate's `faceNormal`.
 - **The record.** After the step it reads:
   - the support bits, `DerivedState::surfaceNormal` (the basis n), the push-out, and the post-step velocity;
   - the inbound-hit slice and the attack machine's state.
 - **The mirror.** `mirrorIntegrate` recomputes the step's velocity from those inputs with the movement's own helpers
-  (`attackGroundNormal`, `writesKnockbackVelocity`, `detachesFromSupport`, `buildTangentFrame`, `decomposeVelocity`,
-  `moveTowards`, `computeDesiredVelocityUV_ContinuousAccelBrake`) and the servo expression of `integrate`. It splits the
-  vertical change into its parts:
+  (the `GroundSupport` from `estimateSupport`, then `writesKnockbackVelocity`, `classifySupport`, `buildTangentFrame`, `decomposeVelocity`,
+  `moveTowards`, `computeDesiredVelocityUV_ContinuousAccelBrake`) and the servo expression of `integrate`. Since
+  og-ground-aligned-attacks task 34 a V2 run takes `writesKnockbackVelocityV2` and `classifySupportV2` in place of the
+  first two, and its hit-tick channels are `currentUV` on every hit tick, as in `integrate`. Since
+  og-ground-aligned-attacks task 35 a V2 run also applies the redirect into the face (`redirectsIntoFace`, then
+  `v −= n · dot(v, n)`) after its classification and before its frame, as `integrate` does, and records the redirect's
+  vertical change as `redirectDy` (0 on a tick it does not fire). Since
+  og-ground-aligned-attacks task 33 its frame is its own classification's, `SupportDecision::frameNormal`; before, it was
+  the recorded `DerivedState::surfaceNormal`. So a frame change inside `classifySupport` or the estimate reaches the
+  mirror directly, and `mirrorMismatches` compares it with the stepped velocity. The record still prints
+  `DerivedState::surfaceNormal` as n. It splits the vertical change into its parts:
   - `pushDy`: the push-out;
   - `writeDy`: the knockback write;
   - `uvDy`: the in-plane channels' vertical share in the basis n;
@@ -114,10 +126,30 @@ compare its printed lines (§7).
 - Every placement at least 1 m from a rim was reached.
 - On every tick except the teleport tick:
   - the mirror's velocity equals the stepped velocity to 1e-4 m/s, relative above 1 m/s (`mirrorMismatches`);
-  - the stepped support equals walkable-and-not-detached (`supportMismatches`);
+  - the stepped support equals the mirror's `classifySupport` support, which is walkable-and-not-detached under the
+    Legacy law (`supportMismatches`; until task 32 the rig computed that expression itself);
   - the recomputed push-out equals the recorded one (`pushOutMismatches`).
   These three are what make the printed attribution trustworthy. On 2026-11-02 they held on 88,356 ticks of 444 runs,
-  and after task 30 on 88,953 ticks of 447 runs.
+  after task 30 on 88,953 ticks of 447 runs, and after task 20 on 78,605 ticks of 395 runs.
+- Since og-ground-aligned-attacks task 31, the Legacy law's support counters (§8; Legacy shipped until task 36): 249 flips, 17 rim hangs and 435 lip
+  ticks over the 266 placements. They are checked only when every site runs and `supportLawName` is `legacy`.
+- Since og-ground-aligned-attacks task 34's rework, under V2 only: every reached placement at d = −0.15 on a tip or
+  tip-corner site (the six sites whose names start with `tip`, 16 placements) has a run-line `servo` of at most
+  `kEventThreshold`, and when every site runs there are exactly 16 of them. These are the targets hanging past a tip,
+  on a `Lip`, where a downward hit used to take a +5.0001 m/s servo kick on the hit tick (the movement's rationale §34,
+  row 3). The largest is 0.2077 (tipMinusMid +0°): a horizontal hit, `vyEdge` 0, so no kick, only about one tick of
+  the servo holding the body against gravity (`g·dt` = 0.1633).
+  Seen failing: with the one-sided row 3 restored, `CHECK( e.servo <= kEventThreshold )` failed on tipPlusMid +30°,
+  tipMinusMid −30°, tipCornerPlus +30° and tipCornerMinus −30°, each `5.0001f <= 0.25f`; with the site filter
+  matching no site, `CHECK( lipHitPlacements == 16u )` failed, `0 == 16`.
+- Since og-ground-aligned-attacks task 35's rework 1, under V2 only, by the estimate reference (§8): when every site
+  runs there is at most one estimate lift and no estimate down-pull. Every estimate lift, with any site filter, must be
+  tipCornerPlus at d = 4.9 m along the fall line (oblique 0°), with an `estimateRedirect` of 0. That one is the slide
+  onto the tip's `Lip`, +1.769 m/s, all of it the servo's damping; the redirect into the face does not act on a `Lip`
+  (the movement's rationale §35).
+  Seen failing: with the redirect's `Face` term deleted, `CHECK( e.estimateRedirect == 0.f )` failed, `1.67458f == 0.0f`
+  (anomaly 1.85156, servo 0.176981), and nothing else in `[@og]`: the lift count and the site checks still held, so the
+  redirect share is the check that catches that term.
 - **Seen failing** (task 23, built and run, then restored byte for byte):
   - poison A removed the servo's clamp from the mirror: `mirrorMismatches=299` and `CHECK( mirrorMismatches == 0u )`
     failed;
@@ -127,7 +159,7 @@ compare its printed lines (§7).
 
 ## 6. What it prints, and the definitions
 
-- `[PlatformEdge.run]`, once per placement.
+- `[PlatformEdge.run]`, once per placement, only with OG_SUPPORT_LAW_RUNS=1 since task 31 (§8). Its content is unchanged.
   - The rest state at the swing tick: support, clearance, the GJK normal's tilt, and whether the exact face is the top.
   - The departure: the outcome, the edge tick, the departure tick and the report tick.
   - The speed and vertical speed entering the edge, the anomaly, and its parts.
@@ -157,6 +189,8 @@ compare its printed lines (§7).
   9.2049 m/s. After task 30: 0 ticks, 0.0000 m/s.
 - With the environment variable OG_PLATFORM_EDGE_TICKS=1, every run also prints its `[PlatformEdge.tick]` rows and every
   attempt as `[PlatformEdge.attempt]`. OG_PLATFORM_EDGE_SITE=name runs one site.
+- `[PlatformEdge.unreachable]` prints only with OG_SUPPORT_LAW_RUNS=1 since task 31. `[PlatformEdge.site]`,
+  `[PlatformEdge.summary]` and `[PlatformEdge.decomposition]` always print, with their content unchanged.
 
 ## 7. Re-running it for a later task
 
@@ -218,3 +252,90 @@ setup is the same and a changed class is the changed law):
   write leaking into the vertical channel), which the M4 loss had hidden there [inferred from the two runs' residuals].
 - **Smaller anomalies** moved by up to 0.5 m/s on runs that had a residual (for example tipPlusMid d = 3.5 at −30°, from
   a +0.39 lift to +0.11), and arcTopSeam d = 3.5 at +0° fell from a +0.54 lift to +0.11 (its residual was 0.03 m/s).
+
+### 7.2 Task 20's re-run (the melee capsule hit test)
+
+og-ground-aligned-attacks task 20 made the melee detector test the target's movement capsule against the attack band
+instead of its centre (`BrawlerHitDetectionSystem-rationale.md` §11 in og-brawler). Its before and after outputs are in
+the initiative workspace, under impl/scratch/ga20_impl/logs (pe_before.txt and pe_final.txt).
+
+```text
+before  [PlatformEdge.summary] runs=447 placements=263 unreachable=7 lifts=66 downPulls=21 staysOnPlatform=79 mirroredTicks=88953 mirrorMismatches=0 supportMismatches=0 pushOutMismatches=0
+after   [PlatformEdge.summary] runs=395 placements=266 unreachable=4 lifts=66 downPulls=23 staysOnPlatform=79 mirroredTicks=78605 mirrorMismatches=0 supportMismatches=0 pushOutMismatches=0
+```
+
+- **258 of the 263 placements in both runs print the same `[PlatformEdge.run]` line, field for field.**
+- **The five that moved are all oblique overhangs (d = −0.15, ±30°):** arcTop at both obliques, arcTopSeam at −30°,
+  chamferPlus at +30° and chamferMinus at −30°. Before, the chosen hit had a
+  direction cosine of 0.875 to 0.895 (`actualObl` within 3.5° of the rim normal). Now the search's first placement
+  (inward shift 0, no flip) connects on the other swing side: the target rests 0.138 m (chamferPlus: 0.105 m) below
+  the attacker along the face normal (`[PlatformEdge.attempt]` `alongNormalM`, after task 20), and its capsule overlaps
+  the band where its centre did not [inferred: before task 20 that first attempt did not win the search]. Cosine
+  0.991 to 0.999, `actualObl` ±22.3° to ±27.8°, close to the wanted ±30°. Each keeps its class.
+- **Three overhangs are reached for the first time:** arcTopSeam +30° and chamferMinus +30° (both down-pulls, −5.0001)
+  and chamferPlus −30° (no anomaly). Hence `placements` 263 → 266, `unreachable` 7 → 4 and `downPulls` 21 → 23.
+- **`runs` fell from 447 to 395** because the attacker search stops at the first attempt whose cosine reaches
+  `kGoodDirectionCos`, and more first attempts now connect. It counts attempts, not placements.
+- Lifts, stays, the decomposition line and the three mismatch counters are unchanged.
+
+## 8. The support-law scorecard additions (task 31)
+
+og-ground-aligned-attacks task 31 made this case the third rig of the support-law scorecard; the other two are in
+`SupportLawScorecardTest.cpp` (`SupportLawScorecardTest-rationale.md`). Nothing it measured before changed: the summary,
+decomposition and site lines are byte-identical to the tree before task 31, and so are the 234 run lines of the
+pre-task capture that could be compared (its other 32 were garbled by interleaved error output).
+
+- **Three counters per placement** (`supportCountersOf`), over the ticks from the hit tick up to, not including, the
+  first floor-contact tick (`onFloor`), or to the end of the run:
+  - `flips`: ticks whose support differs from the tick before. The hit tick counts, and so does the detach of a
+    departure; the landing on the floor does not;
+  - `lipTicks`: ticks whose GJK normal is walkable while the exact face is not (`walkable` and not `faceWalkable`);
+  - `rimHang` (0 or 1): the placement's outcome is `staysOnPlatform` and the target ends the run past the rim line. Only
+    a real rim counts: the rim point must lie on the platform's boundary (`insideMargin` within 1 mm,
+    `kRimOnBoundaryM`). That leaves out the two seam crossings, whose "rim" is the seam 5 m inside the slab; without the
+    filter they added 30 "hangs".
+- **Lines.** `[PlatformEdge.support]` per placement with those three, after its `[PlatformEdge.run]` line, and both only
+  with OG_SUPPORT_LAW_RUNS=1. One totals line always prints after the decomposition line:
+  `[SupportLaw.scorecard] law=… rig=platformEdge runs=… flips=… lifts=… downPulls=… rimHangs=… lipTicks=…`, where
+  `runs` counts the reached placements (266), not the attempts of the summary line (395).
+- **The law** (since og-ground-aligned-attacks task 33). The case runs twice in one binary:
+  `PlatformEdge.KnockbacksAcrossTheImportedPlatformRims` under `SupportLaw::Legacy` and
+  `PlatformEdge.KnockbacksAcrossTheImportedPlatformRimsUnderV2` under `SupportLaw::V2`. Each sets `gSupportLaw` through a
+  `SupportLawScope`, and `EdgeScenario::configureStaticData` writes it into the movement StaticData before the scene
+  registers the characters (`GoldenTraceScene-rationale.md` §1), so V2 runs register the centre probe too.
+  - Every line of a V2 run says so. A line whose format already has a law field prints law=v2; every other line gets
+    ` law=v2` right after its bracket tag (`lawTag`), which is empty under Legacy. So the Legacy lines are
+    byte-identical to task 32's, and dropping every line that contains law=v2 leaves exactly the Legacy output.
+  - Under V2 only, each tick line ends with ` kind=Face`, ` kind=Lip` or ` kind=None` (`kindField`, the estimate's
+    `GroundSupport::kind`), and one more totals line prints after the scorecard line:
+    `[PlatformEdge.estimate] law=v2 noneTicks=… faceTicks=… lipTicks=…`, the estimate's kinds over the mirrored ticks
+    of the chosen runs.
+  - ⚠ The scorecard line's `lipTicks` is the geometric counter above (a walkable GJK normal over an unwalkable exact
+    face), under both laws; it is not V2's `Lip` kind, which the estimate line counts.
+  - The pins (flips 249, rimHangs 17, lipTicks 435) are checked under Legacy only.
+  - Since task 32 the mirror's ground and classification are the production `estimateSupport` and `classifySupport`,
+    and since task 33 its frame is that classification's (§4). So the mirror follows either law, and
+    `mirrorMismatches=0` and `supportMismatches=0` hold under both (measured in task 33). The rest of the mirror (the
+    push-out, the channels, the servo) is its own copy of `integrate`'s expressions.
+- **The V2 edge-tick reference** (since og-ground-aligned-attacks task 34, a lead ruling on task 33's review). Under V2
+  the centre probe keeps the estimate on `Face(top)` for a tick or two past the capsule's last pure-face contact, which is
+  the edge tick of §6, so one or two ticks of in-face deceleration counted there as a lift or a down-pull. Every departing
+  V2 run is therefore measured a second time, from the estimate's last `Face` tick (`isEstimateFace`: `kind` is `Face`,
+  the run is supported, and the estimate's face is the top), with the same anomaly and threshold (`classOf`).
+  - The run line ends with ` estimateEdge=… estimateEdgeAtHit=… estimateAnomaly=… estimateServo=… estimateRedirect=…
+    estimateClass=…` (`estimateField`, empty under Legacy and on a run that stays). `estimateServo` sums the servo's
+    clamped term from that tick to the report tick, and `estimateRedirect` (since og-ground-aligned-attacks task 35)
+    the redirect's vertical change (`redirectDy`, §4) over the same ticks.
+  - After each `[PlatformEdge.site]` line a V2 run prints
+    `[PlatformEdge.estimateSite] law=v2 site=… runs=… lifts=… downPulls=… largestLift=… largestDownPull=…`, and after
+    `[PlatformEdge.estimate]` one totals line, `[PlatformEdge.estimateSummary] law=v2 lifts=… downPulls=…`.
+  - Since task 34's rework one more V2 totals line follows it, `[PlatformEdge.lipHits] law=v2 placements=… largestServo=…`:
+    the count and the largest run-line `servo` of the Lip-hit placements that §5's V2 check covers.
+  - The §6 definition still prints in every line (`anomaly`, `class`, and the site and summary counts), so the
+    numbers stay comparable with tasks 31 to 33. V2 is judged by the estimate's.
+- **Seen failing** (task 31, built and run, then restored byte for byte), one poison per counter:
+  - flips counting only Unsupported → Supported: `31 == 249`;
+  - `rimHang` without the boundary filter: `47 == 17`;
+  - lip ticks counting a walkable exact face instead: `10434 == 435`.
+- The measured baseline, with the per-site table of these counters, is in the initiative workspace,
+  impl/support_law_baseline.md.

@@ -9,6 +9,7 @@
 #include "../GroundAlignedMachineRig.h"
 
 #include "OGBrawler/BrawlerGroundFrame.h"
+#include "OGBrawler/BrawlerHitDetectionSystem.h"
 #include "OGBrawler/BrawlerMovementSimulation.h"
 #include "OGBrawler/DAttackDirectionClassifier.h"
 #include "OGBrawler/DAttackMachineSimulation.h"
@@ -68,7 +69,7 @@ inline constexpr float kSlopeSideX = -1.f;
 inline constexpr float kFlatSideX = 1.f;
 inline constexpr float kStillPerTickM = 0.001f;
 inline const float kDesignLaunchSine = std::sin(glm::radians(2.f));
-inline constexpr uint32_t kScenarioConcaveToday = 2u;
+inline constexpr uint32_t kScenarioConcaveToday = 4u;
 inline constexpr uint32_t kScenarioConcaveFlip = 4u;
 inline constexpr uint32_t kScenarioConvexToday = 4u;
 inline constexpr uint32_t kScenarioConvexFlip = 4u;
@@ -269,15 +270,15 @@ Reach reachOf(const simulatableBrawler::StaticData& staticData, const glm::vec3&
 
     const glm::vec3 hitDirection = target - rootTranslation;
     const float signedDistanceAlongRotationAxis = glm::dot(hitDirection, worldSequenceRotationAxis);
-    const float lengthAlongRotationAxis = glm::abs(signedDistanceAlongRotationAxis);
     const glm::vec3 hitDirectionOnRotationPlane = hitDirection - signedDistanceAlongRotationAxis * worldSequenceRotationAxis;
-    const float hitDistance = glm::length(hitDirectionOnRotationPlane);
-    const bool hitIsInCircle = hitDistance > radial.getAttackCircle().getInnerRadius()
-        && hitDistance < radial.getAttackCircle().getOuterRadius()
-        && lengthAlongRotationAxis < radial.getAttackCircle().getHalfThickness();
     reach.alongAxisM = signedDistanceAlongRotationAxis;
-    reach.onPlaneM = hitDistance;
-    if (!hitIsInCircle)
+    reach.onPlaneM = glm::length(hitDirectionOnRotationPlane);
+    const brawlerHitDetection::TargetCapsule capsule{ staticData.m_movementStaticData.capsuleRadius,
+        staticData.m_movementStaticData.capsuleHalfHeight };
+    if (!brawlerHitDetection::capsuleOverlapsAttackBand(rootTranslation, worldSequenceRotationAxis, radial.getAttackCircle(), target,
+            capsule))
+        return reach;
+    if (glm::dot(hitDirectionOnRotationPlane, hitDirectionOnRotationPlane) <= 0.f)
         return reach;
     const glm::vec3 normalizedHitDirection = glm::normalize(hitDirectionOnRotationPlane);
     const DAttackSegment hitAttackSegment = dAttackRadialSimulation::getAttackSegment(initialConditions, radial, normalizedHitDirection);

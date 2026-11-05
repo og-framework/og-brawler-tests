@@ -27,6 +27,14 @@ type is a struct of static members, because a template parameter cannot name a n
 | `spawnTable` | the ring-out spawn points the scene writes into the static data |
 | `teleports` | scripted teleports: character, tick, target point (§4) |
 
+**An optional member, `configureStaticData`** (since og-ground-aligned-attacks task 33). `simulatableBrawler::StaticData`
+can be neither copied nor moved, so a scenario cannot change one field of the value `staticData` returns. When the
+scenario declares `static void configureStaticData(simulatableBrawler::StaticData&)`, the scene calls it first in its
+constructor body, before it registers any character, so a field it sets reaches every character's query volumes. The
+support-law rigs set `m_movementStaticData.supportLaw` with it (`SupportLawScorecardTest.cpp`, `PlatformEdgeTest.cpp`,
+`SupportEstimateTest.cpp`). The Jolt world has already read the gravity by then, so the member must not change it. The
+concept does not require the member, and neither golden scenario declares it.
+
 The flat test's `FlatScenario` forwards each member to `goldenTraceScenario` (its two characters A and B, its spawn
 table of slot 0 at `kSpawnA` and slot 1 at `kRespawnB`, and no teleports). The slope scenario is
 `goldenTraceSlopeScenario::Scenario` (`GoldenTraceSlopeScenario-rationale.md`). A `static_assert` beside each one checks

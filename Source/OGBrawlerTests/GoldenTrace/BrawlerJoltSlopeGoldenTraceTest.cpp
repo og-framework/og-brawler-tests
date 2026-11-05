@@ -82,6 +82,16 @@ namespace
 using SlopeScenario = goldenTraceSlopeScenario::Scenario;
 using SlopeScene = goldenTraceScene::Scene<SlopeScenario>;
 
+struct SlopeScenarioUnderLegacy : SlopeScenario
+{
+    static void configureStaticData(simulatableBrawler::StaticData& staticData)
+    {
+        staticData.m_movementStaticData.supportLaw = brawlerMovementSimulation::SupportLaw::Legacy;
+    }
+};
+
+static_assert(goldenTraceScene::Scenario<SlopeScenarioUnderLegacy>, "the slope scenario under the legacy support law is a scenario");
+
 inline constexpr double kNormalTolerance = 1e-6;
 inline constexpr double kFaceInteriorMargin = 0.5;
 inline constexpr double kOnFaceDistance = 1e-3;
@@ -174,7 +184,8 @@ struct GroundTick
     glm::dvec3 movementGround{ 0.0, 1.0, 0.0 };
 };
 
-GroundTick groundOf(SlopeScene& scene, unsigned int id, CountingQuery& shipped)
+template <typename SceneT>
+GroundTick groundOf(SceneT& scene, unsigned int id, CountingQuery& shipped)
 {
     const SimulatableBrawler& brawler = scene.storage.get<SimulatableBrawler>(id);
     const auto& movement = brawler.getAllState().getState().get<brawlerMovementSimulation::State>();
@@ -182,9 +193,8 @@ GroundTick groundOf(SlopeScene& scene, unsigned int id, CountingQuery& shipped)
     const brawlerMovementSimulation::StaticData& sd = scene.staticData.m_movementStaticData;
     (void)brawlerMovementSimulation::sampleAttackGround(movement, sd, bindings, shipped);
     const brawlerGround::GroundSample sample = brawlerMovementSimulation::sampleAttackGround(movement, sd, bindings, scene.query);
-    const brawlerMovementSimulation::GroundProbe probe = brawlerMovementSimulation::probeGround(movement, sd, bindings, scene.query);
-    const glm::vec3 face = brawlerMovementSimulation::attackGroundNormal(probe.hit, sd);
-    return GroundTick{ glm::dvec3(sample.normal), glm::dvec3(probe.walkable ? face : simFrame::kUp) };
+    const brawlerMovementSimulation::GroundSupport ground = brawlerMovementSimulation::estimateSupport(movement, sd, bindings, scene.query);
+    return GroundTick{ glm::dvec3(sample.normal), glm::dvec3(ground.eligible ? ground.faceNormal : simFrame::kUp) };
 }
 
 struct ShotTick
@@ -218,7 +228,8 @@ struct CharacterTick
     std::vector<ShotTick> shots;
 };
 
-CharacterTick sampleOf(const SlopeScene& scene, unsigned int id, uint32_t tick)
+template <typename SceneT>
+CharacterTick sampleOf(const SceneT& scene, unsigned int id, uint32_t tick)
 {
     const goldenTraceScene::DetectionLog& log = scene.detections.at(id);
     const SimulatableBrawler& brawler = scene.storage.get<SimulatableBrawler>(id);
@@ -399,9 +410,10 @@ std::size_t indexOf(unsigned int id)
     return characters.size();
 }
 
+template <typename ScenarioT>
 SlopeMeasurements measureTheSlope()
 {
-    SlopeScene scene(std::nullopt, 1.f);
+    goldenTraceScene::Scene<ScenarioT> scene(std::nullopt, 1.f);
     CountingQuery shipped{ scene.query };
     const auto characters = SlopeScenario::characters();
     const std::vector<Rectangle> ground = exposedGround();
@@ -617,7 +629,7 @@ SlopeMeasurements measureTheSlope()
 
 const SlopeMeasurements& theSlope()
 {
-    static const SlopeMeasurements measured = measureTheSlope();
+    static const SlopeMeasurements measured = measureTheSlope<SlopeScenario>();
     return measured;
 }
 
@@ -673,9 +685,10 @@ double largestOutOfPlane(const SlopeMeasurements& measured)
     return largest;
 }
 
-void printSlopeMeasurements(const SlopeMeasurements& measured)
+void printSlopeMeasurements(const SlopeMeasurements& measured, const char* law = "")
 {
     std::string line = "[GoldenTrace.slope]";
+    line += law;
     char buffer[768];
     uint32_t tiltedSwings = 0u;
     for (const SwingRecord& swing : measured.swings)
@@ -751,6 +764,20 @@ TEST_CASE("BrawlerJoltSlopeGoldenTrace.PrintsTheSlopeMeasurements", "[GoldenTrac
     REQUIRE(measured.slopeTicks > 0u);
 }
 
+TEST_CASE("BrawlerJoltSlopeGoldenTrace.PrintsTheSlopeMeasurementsUnderLegacy", "[GoldenTrace]")
+{
+    const SlopeMeasurements measured = measureTheSlope<SlopeScenarioUnderLegacy>();
+    printSlopeMeasurements(measured, " law=legacy");
+    const goldenTrace::Trace live = goldenTraceScene::runScenario<SlopeScenarioUnderLegacy>();
+    const goldenTrace::CompareResult against = goldenTrace::compareExact(recordedSlopeGolden(), live);
+    std::printf("[GoldenTrace.legacyAgainstTheRecording] scenario=slope samples=%zu values=%zu mismatchingValues=%zu "
+                "samplesPassedBeforeFirstMismatch=%u first=%s\n",
+        against.comparedSamples, live.values.size(), against.mismatchingValues, against.ticksPassedBeforeFirstMismatch,
+        against.firstMismatch.empty() ? "none" : against.firstMismatch.c_str());
+    REQUIRE(measured.slopeTicks > 0u);
+    CHECK(against.schemaProblem == "");
+}
+
 TEST_CASE("BrawlerJoltSlopeGoldenTrace.SwingsFollowTheGround", "[GoldenTrace]")
 {
     const SlopeMeasurements& measured = theSlope();
@@ -814,16 +841,12 @@ TEST_CASE("BrawlerJoltSlopeGoldenTrace.KnockbacksFollowTheAttackersSwing", "[Gol
         INFO(prefixOf(target) << " same-face fall-line knockback: " << knockback->unsupportedTicks << " Unsupported ticks, the first at "
              << knockback->firstUnsupportedTick << " entered at " << knockback->speedIntoFirstUnsupported << " m/s");
         CHECK(knockback->crossing == GroundCrossing::InPlane);
-        CHECK((knockback->unsupportedTicks == 0u
-               || (knockback->firstUnsupportedTick > knockback->hitTick
-                   && knockback->speedIntoFirstUnsupported <= 0.15 * knockback->knockbackSpeed)));
+        CHECK(knockback->unsupportedTicks == 0u);
     }
 
     std::array<uint32_t, 2> longLaunches{};
     std::array<uint32_t, 2> entries{};
     std::array<uint32_t, 2> inPlane{};
-    std::array<uint32_t, 2> crossings{};
-    uint32_t convexLongDetaches = 0u;
     for (const Knockback& knockback : measured.knockbacks)
     {
         if (!isACreaseCharacter(knockback.attacker) || !isACreaseCharacter(knockback.target))
@@ -836,29 +859,47 @@ TEST_CASE("BrawlerJoltSlopeGoldenTrace.KnockbacksFollowTheAttackersSwing", "[Gol
         {
             CHECK(knockback.firstUnsupportedTick == knockback.hitTick);
             longLaunches[crease] += knockback.unsupportedTicks >= 10u ? 1u : 0u;
-            ++crossings[crease];
         }
         else if (knockback.crossing == GroundCrossing::Enters)
         {
-            CHECK(knockback.firstUnsupportedTick != knockback.hitTick);
             ++entries[crease];
-            ++crossings[crease];
-        }
-        else
-        {
-            ++inPlane[crease];
-            if (crease == 1u)
+            if (crease == 0u)
+                CHECK(knockback.unsupportedTicks == 0u);
+            else
             {
-                CHECK(knockback.firstUnsupportedTick == knockback.hitTick);
-                convexLongDetaches += knockback.unsupportedTicks >= 10u ? 1u : 0u;
+                CHECK(knockback.firstUnsupportedTick > knockback.hitTick);
+                CHECK(knockback.unsupportedTicks >= 10u);
             }
         }
+        else
+            ++inPlane[crease];
     }
-    CHECK(longLaunches[0] >= 1u);
-    CHECK(entries[0] >= 1u);
-    CHECK(crossings[1] == 0u);
-    CHECK(inPlane[1] == 4u);
-    CHECK(convexLongDetaches == 4u);
+    CHECK(longLaunches[0] == 2u);
+    CHECK(entries[0] == 2u);
+    CHECK(longLaunches[1] == 2u);
+    CHECK(entries[1] == 2u);
+    CHECK(inPlane[0] == 0u);
+    CHECK(inPlane[1] == 0u);
+
+    const Knockback* slideOfF = knockbackIn(measured, goldenTraceSlopeScenario::kCharacterG, goldenTraceSlopeScenario::kCharacterF, slotWindow(3u));
+    REQUIRE(slideOfF != nullptr);
+    CHECK(slideOfF->hitTick == 410u);
+    CHECK(slideOfF->travel == Catch::Approx(3.9861).margin(5e-5));
+    CHECK(slideOfF->apex == Catch::Approx(1.8964).margin(5e-5));
+
+    const Knockback* skiJumpOfF = knockbackIn(measured, goldenTraceSlopeScenario::kCharacterG, goldenTraceSlopeScenario::kCharacterF, slotWindow(7u));
+    REQUIRE(skiJumpOfF != nullptr);
+    CHECK(skiJumpOfF->hitTick == 990u);
+    CHECK(skiJumpOfF->crossing == GroundCrossing::Enters);
+    CHECK(skiJumpOfF->firstUnsupportedTick == 991u);
+    CHECK(skiJumpOfF->peakClearanceRise == Catch::Approx(3.7524).margin(5e-5));
+
+    const Knockback* fallOfF = knockbackIn(measured, goldenTraceSlopeScenario::kCharacterG, goldenTraceSlopeScenario::kCharacterF, slotWindow(8u));
+    REQUIRE(fallOfF != nullptr);
+    CHECK(fallOfF->hitTick == 1100u);
+    CHECK(fallOfF->crossing == GroundCrossing::Leaves);
+    CHECK(fallOfF->unsupportedTicks == 43u);
+    CHECK(fallOfF->peakClearanceRise == Catch::Approx(1.6450).margin(5e-5));
 
     REQUIRE(measured.stuns.size() == 1u);
     const Stun& stun = measured.stuns.front();

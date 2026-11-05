@@ -122,3 +122,13 @@ It does not measure:
   1e-6 rad.
 - **GJK normal, creases:** the concave crease never differs; the convex crease flips 7 % to 11 % of its pairs, and its
   δ = 1e-4 band spans −24 to 0 cm (0.24 m), the GJK edge band −23 to −1 cm.
+
+## 7. Since og-ground-aligned-attacks task 36 (the support law v2)
+
+The face source is `sampleAttackGround`, and since task 36 that is the support law v2's estimate (og-brawler's movement
+rationale, §33 and §36). The checks of §4 did not move. Against §6:
+- **Face normal, creases:** no pair differs at either crease at any δ. At the convex crease the position 24 cm down
+  the slope no longer switches between the slope face and world up: the estimate takes the slope's face from its
+  centre probe where Legacy fell back to world up. The edge band at the convex crease is −1 to 0 cm (−23 to 0 cm at
+  task 5b), and the band of differing normals is empty.
+- **Face normal, interior** and **the GJK normal**, interior and creases: unchanged.

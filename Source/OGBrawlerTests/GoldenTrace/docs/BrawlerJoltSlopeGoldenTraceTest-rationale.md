@@ -9,7 +9,8 @@ task 3 as the baseline with the attacks built horizontally, re-recorded at task 
 (`GoldenTraceSlopeScenario-rationale.md` §5), and re-recorded at task 10, the flip that turned the ground-aligned attacks
 on (the initiative's compile-time knob; task 14 deleted it and the recording stayed exact), and again at task 13b, which gave the movement the attack's ground rule
 (only F's convex-crease hits changed, §4), and at task 14b, which folded the attacks' last two flat branches (only the
-swing initial conditions of F and G on the flat ground changed, §4). Since task 10 five behaviour cases (§7) state what the flip is for. §6
+swing initial conditions of F and G on the flat ground changed, §4), and at task 36, which made the movement's support law v2
+the default (§4). Since task 10 five behaviour cases (§7) state what the flip is for. §6
 describes the crease reach sweep in `CreaseReachTest.cpp`, which chose the crease placement.
 
 ## 1. The golden files and their namespace
@@ -29,6 +30,7 @@ compare case fails at its first `REQUIRE`.
 | `ScriptCoversEveryTickOnce` | `[GoldenTrace]` | every one of the seven characters has exactly one input row on every tick |
 | `MatchesTheRecordedTrace` | `[GoldenTrace]` | runs the scenario and compares it with the golden in the mode `OG_GOLDEN_MODE` names, as the flat case does (`goldenTraceScene::requireMatchesTheRecordedTrace`, `BrawlerJoltGoldenTraceTest-rationale.md` §2) |
 | `PrintsTheSlopeMeasurements` | `[GoldenTrace]` | prints one `[GoldenTrace.slope]` line (§3) |
+| `PrintsTheSlopeMeasurementsUnderLegacy` | `[GoldenTrace]` | the same measurement with the movement's support law set to Legacy, and how far that run is from the recording (§2.1); task 37 deletes it |
 | `SwingsFollowTheGround` | `[GoldenTrace]` | every swing's plane at its start and through the swing (§7) |
 | `SideSwingsHitUpAndDownTheSlope` | `[GoldenTrace]` | A's side swings hit B, up the slope, and C, down it (§7) |
 | `GuardsBlockInTheGroundPlane` | `[GoldenTrace]` | B's guard blocks A's overhead, C's guard each side swing (§7) |
@@ -41,6 +43,24 @@ The full names are `BrawlerJoltSlopeGoldenTrace.` followed by the case name.
 The measurement and the five behaviour cases read one run of the scenario: `theSlope` runs it the first time a case
 asks and keeps the result (a function-local `static`), so the cases cost one run together. The run reads every
 character after every tick and, before every tick, re-takes each character's ground the way the tick is about to (§3).
+
+### 2.1 The Legacy print (og-ground-aligned-attacks task 36; task 35's V2 print)
+
+`PrintsTheSlopeMeasurementsUnderLegacy` runs the scenario as `SlopeScenarioUnderLegacy`, the slope scenario with one
+addition: its `configureStaticData` sets `m_movementStaticData.supportLaw` to `SupportLaw::Legacy`. The measurement is
+the same code (`measureTheSlope` and the two samplers are templates over the scenario), run once more and not cached,
+so the `theSlope` run of the cases above stays the shipped law's.
+- It prints the `[GoldenTrace.slope]` line with ` law=legacy` after the tag. At task 36 that line equals, byte for
+  byte, the unlabelled line of the build before the flip, so it is the flip's before.
+- It runs the Legacy scenario a second time through `runScenario` and compares it with the recording in exact mode,
+  without failing on a mismatch: one `[GoldenTrace.legacyAgainstTheRecording] scenario=slope samples=… values=…
+  mismatchingValues=… samplesPassedBeforeFirstMismatch=… first=…` line. At task 36 it reads `mismatchingValues=2965
+  samplesPassedBeforeFirstMismatch=121`, the numbers of task 35's V2 print against the old recording. The case
+  requires only that the schemas match.
+- Task 35 wrote it as the V2 print (PrintsTheSlopeMeasurementsUnderV2 over SlopeScenarioUnderV2), while Legacy
+  was the default, with three checks of what V2 changes at the concave crease. Since task 36 V2 is the run of the
+  cases above, so those checks are in `KnockbacksFollowTheAttackersSwing` (§7), and this case keeps the Legacy run
+  for comparison until the initiative's task 37 deletes it with the law.
 
 ## 3. The measurements
 
@@ -87,11 +107,49 @@ One line, `[GoldenTrace.slope]`, with these fields:
   the hit tick, which is `brawlerMovementSimulation::attackGroundNormal` of the probe's hit when the probe is walkable
   and world up otherwise, re-taken from the target's state before the tick exactly as the movement's step 2 takes it
   (since task 13b both use that helper; before it the test and step 2 took the exact face with no walkable test).
+  Since og-ground-aligned-attacks task 33 the test reads it as step 2 does, from
+  `brawlerMovementSimulation::estimateSupport`: its `faceNormal` when `eligible`, else world up. Under
+  `SupportLaw::Legacy` those are the same two values as above; under `SupportLaw::V2`, the shipped law since task 36,
+  they are the v2 estimate's.
   `leaves` above `kMinLaunchSine` (sin 2°), `enters` below its negative, `inPlane` between.
 
 ## 4. The recordings
 
-**No flat branch in the attacks (task 14b), the current golden.** Task 14b folded site 2a (the machine's radial
+**Support law v2 (task 36), the current golden.** Task 36 made `SupportLaw::V2` the movement's default (og-brawler's
+movement rationale, §36) and re-recorded. The new recording equals the V2 run task 35's print compared with the old
+one: against task 14b's recording it differs in 2,965 field-samples, the first at tick 121
+(`G.body5.CharacterCapsule.position`), none of them signed-zero only, and the Legacy print (§2.1) reads the same
+count against the new one. Only D, F and G differ (5, 11 and 8 fields); A, B, C and E are bit-identical on every
+sample. Each difference ends at that character's next teleport (`GoldenTraceSlopeScenario-rationale.md` §4), so the
+divergence from tick 121 is G's, and each later one starts again from the recording's state. By mechanism:
+
+* **The frame normal on the face (GJK to the exact face).** No recorded value moved. On this face the sweep normal
+  is already within 7.51e-8 of the face (Legacy's `maxNormalDifference`; V2's is 1.55e-8), far below the 1e-4 rad
+  the initiative's support-law design allowed for. A's slides of B and C along the contour (120, 300) and of E up the
+  fall line (520), and every rest on the face, are bit-identical.
+* **Edge ticks (the convex rim).** F stands 0.1 m from the plateau's edge from slot 5 on. Its probe there is an edge
+  contact, and the V2 estimate takes the slope's face from the centre probe where Legacy's `attackGroundNormal` gave
+  world up. So F's guard follows the face (`F.body1.GuardAxis.rotation` on 645–990 and 1045–1100), its two convex swings are
+  tilted (`F.radial.initialAimAngle` and `.initialAimRotationAxis` from 680, `F.body0.WeaponAxis.rotation` and
+  `.angularVelocity` on 680–715 and 860–895; `tiltedSwings` 11 → 13), and their tangents at G change
+  (`G.hit.inboundDirection` at 700 and 880).
+* **A slide's last ticks (the event-driven transitions).** D's fall-line slide from A's hit at 410 no longer leaves the
+  face for one tick at 438, where Legacy's per-tick lift test read the hover servo's few cm/s on a 1.96 m/s slide. D's
+  fields differ from 440 on, by at most 1.03 cm (its rest), until its teleport at 1316. This is the slope's form of the flat
+  golden's knockback flicker, which the one write removed there (`BrawlerJoltGoldenTraceTest-rationale.md` §3).
+* **Crease ticks.** Every crease knockback changes (§7): G on 121–240 (F's hit at 120 leaves the slope by its
+  direction and launches, 95 Unsupported ticks against 1; G's guard pose in flight on 135–214), G on 300–345 (300
+  enters and is redirected along the landing: no hop), F on 410–460 (410 enters and is redirected up the slope: no
+  hop), F on 535–640 (520 leaves: 13 Unsupported ticks against 11), G on 700–820 (700 now leaves: 119), G on 880–930
+  (880 now enters at the plateau and is redirected along it, off the edge: 34 from 882), F on 990–1040 (990 now
+  enters and is redirected up the slope, over the crest: 50 from 991, cut by slot 8's teleport, §7) and F on
+  1100–1480 (1100 leaves and falls off the edge: 43; F is not teleported again).
+
+The line now reads `slopeTicks=8204 normalDiffersTicks=0 maxNormalDifference=1.55e-08 ... tiltedSwings=13 ...
+extraCasts=10768` (it was `8284`, `7.51e-08`, `11` and `10360`). The 408 extra casts are the centre probe's sweeps
+on edge contacts, issued by the attack sample's estimate.
+
+**No flat branch in the attacks (task 14b).** Task 14b folded site 2a (the machine's radial
 initial conditions take the quaternion round trip on flat ground too, `DAttackMachineSimulation-rationale.md` §16) and
 site 2b (`wouldGuardBlock` always projects into the guard's plane, `DAttackRadialSimulation-rationale.md` §7), as the
 user ruled on 2026-11-02. Against task 13b's recording only the swings that F and G start on the flat ground differ: six
@@ -168,7 +226,8 @@ Task 10's printed the same counts, `goldenBytes=3929364 envelopeBytes=39162`, th
 maximum of 5.96e-8 (one float step of a chart direction in a nudged run) and no discrete divergence. Task 13b's printed
 the same counts, `goldenBytes=3929549 envelopeBytes=39171` and the same two maxima. Task 14b's printed the same counts,
 `goldenBytes=3927795 envelopeBytes=39163`, the same two maxima, and an envelope that differs from task 13b's only in its
-source string. A one-ULP edit of
+source string. Task 36's printed the same counts, `goldenBytes=3931012 envelopeBytes=39166`, the same two maxima
+(position 0.0041 cm, planar 5.96e-8) and no discrete divergence. A one-ULP edit of
 one recorded value fails exact mode at that value's first sample.
 
 Re-record when a change alters the slope behaviour on purpose or the recorded fields change. Never edit either file by
@@ -191,10 +250,12 @@ initial conditions. It runs no swing, and it selects both modes itself, so the k
 - **The initial conditions are production.** Each swing's comes from `groundAlignedMachineRig::integrateOnce`, a direct
   `integrate3` call, with the scenario's own `swing` input row for that side: horizontal with a default `GroundSample`,
   ground-aligned with the attacker's measured sample. The test requires the machine to start that side's sequence.
-- **The band is the detector's expressions, re-typed.** `reachOf` repeats the lines of `detectRadialHits` from the hit
-  direction to the in-circle test, with the pivot at capsule + `attachmentOffset`, the axis from the IC and the
-  sequence, and the ring from `getAttackCircle`; it then calls `getAttackSegment` on the on-plane direction and requires
-  a damaging segment. Three things are assumed, not run: the weapon body sits at capsule + `attachmentOffset` (the
+- **The band is the detector's own test.** `reachOf` calls `brawlerHitDetection::capsuleOverlapsAttackBand`, the
+  detector's band test since og-ground-aligned-attacks task 20, with the pivot at capsule + `attachmentOffset`, the axis
+  from the IC and the sequence, the ring from `getAttackCircle` and the target capsule from the movement StaticData.
+  It then skips a centre with no on-plane direction, as the detector does, calls `getAttackSegment` on the on-plane
+  direction and requires a damaging segment. Until task 20 it re-typed the point test's lines, which could drift from
+  the detector; that is why the call replaced them. Three things are assumed, not run: the weapon body sits at capsule + `attachmentOffset` (the
   radial's integrate puts it there; the world step can move it slightly before the next detection), the overlap query
   reports the target (its capsule is about 2.1 m from the pivot, inside the 3 m query sphere), and the weapon reaches the
   target's segment (a damaging segment that lasts at least one tick is visited; the test requires that duration).
@@ -207,10 +268,19 @@ initial conditions. It runs no swing, and it selects both modes itself, so the k
   as slope-distance:flat-distance windows, and in the ground-aligned mode the launching ones. `[GoldenTrace.creaseBest]`,
   per crease and number of swings connecting in both modes: the placements with the most predicted launches.
   `[GoldenTrace.creaseScenario]`: every swing at the scenario's own placement.
-- **The checks.** At the scenario's placement: concave 2 swings connecting horizontally and 4 ground-aligned, convex 4
+- **The checks.** At the scenario's placement: concave 4 swings connecting horizontally and 4 ground-aligned, convex 4
   and 4, and at least one convex launch. Moving the crease pair without re-running the sweep fails them. With task 3's
   0.3 m at the convex crease they failed: convex 2 horizontally, 0 ground-aligned, no launch. The flip measured all 8
-  connecting, as predicted.
+  connecting, as predicted. Until og-ground-aligned-attacks task 20 the concave check was 2 horizontally: the slope-side
+  attacker's horizontal swing missed G with G's capsule centre 0.512 m below the swing plane (`axisM -0.5120`), outside
+  the point test's 0.35 m, while G's capsule reached into the band. The capsule test connects both, and the line now
+  reads `today=8/8 flip=8/8 concave(today 4 flip 4 launching 2) convex(today 4 flip 4 launching 1)`.
+- **Since og-ground-aligned-attacks task 36** the attack sample is the support law v2's estimate. A slope-side
+  capsule 0.05 to 0.20 m from the convex crease samples the slope's face there (`attackSampleDotFace` 1.0000; it was
+  0.8660, world up, under Legacy), so the slope-side attacker's ground-aligned up swing at the convex crease launches
+  from all 400 placements (320 under Legacy, which needed F 0.25 m or more from the crease), the convex
+  `[GoldenTrace.creaseBest]` line lists 400 placements (320), and the scenario line reads `convex(today 4 flip 4
+  launching 2)`. The concave crease is unchanged. The case's checks did not move.
 
 ## 7. The behaviour cases (task 10)
 
@@ -227,47 +297,43 @@ and E's knockbacks leave the face, and the overhead hits nobody.
   directions perpendicular to the sequence's local rotation axis must stay within 1e-5 of the plane perpendicular to
   that axis's world image at the start (`bladeOutOfPlane`: the larger dot of the two directions, turned by the body's
   recorded rotation, with that axis). A's seven swings on the face must be tilted, so a flat run cannot pass. Measured:
-  17 swings (11 tilted; F's at the convex crease sample the plateau), up error at most 1.79e-7, out of plane at most
-  1.38e-6.
+  17 swings, up error at most 1.79e-7, out of plane at most 1.38e-6. 13 are tilted since task 36: F's two at the
+  convex crease take the slope's face from the support estimate's centre probe. Under Legacy they sampled the
+  plateau's up, and 11 were tilted.
 - **`SideSwingsHitUpAndDownTheSlope`.** A knockback from A on B in slot 1 and on C in slot 2.
 - **`GuardsBlockInTheGroundPlane`.** In slot 5 (B guards, A's overhead) and slots 6 and 7 (C guards, A's right and left
   swings) A's detection log counts a guard block and A lands no knockback on the guard.
 - **`ProjectilesFollowTheSlope`.** Exactly two shots. For each, over at least 3 ticks above the face interior, its
   height above the face plane changes by at most 1e-4 m; and A's shot is blocked with C as the target. Both shots end
   after 4 ticks (the target is 2 m away), at 1.4729 m above the face, deviating by at most 3.9e-7 m.
-- **`KnockbacksFollowTheAttackersSwing`.**
-  - D's and E's fall-line knockbacks are `inPlane`, and neither leaves the face on its hit tick or during the fast part
-    of its slide: either no Unsupported tick at all, or the first one comes after the hit tick and is entered below 15 %
-    of the knockback speed. (The speed is the one on the tick before, so a hop on the hit tick itself would be read at
-    the pre-hit speed; the tick condition is what catches it: with the knob off, before the flip (task 10), E was Unsupported for 22
-    ticks from its hit tick.)
-    Measured: E none; D one, on tick 438 of a hit at 410, two ticks before its lockout ends, entered at 1.96 m/s. That
-    tick's lift test (`detachesFromSupport`, task 13) read a velocity of 1.96 m/s whose angle out of the face was above
-    2°: the hover servo's vertical correction is a few cm/s, which a 20 m/s slide hides and a 2 m/s one does not. The
-    case states the slide; the end-of-decay tick is the movement law's, routed to the initiative's lead.
-  - Crease hits, by the crossing on the hit tick. Every `leaves` hit detaches on the hit tick, and the concave crease
-    has a `leaves` hit that stays Unsupported for at least 10 ticks (G at F, tick 520, 11 ticks). The convex crease has
-    none since task 13b (next bullet). The concave `leaves` hit of F at G (120) is Unsupported for one tick only: G
-    is thrown from the landing along F's swing plane, which is the slope's, so the next tick its probe finds the slope with the velocity
-    in it, and it slides 5.12 m up the face. Every `enters` hit is Supported on its hit tick (no launch there); the
-    concave crease has two. They do not stay Supported: F at G (300, the landing) leaves 2 ticks later for 18 ticks (a 0.28 m
-    hop); G at F (410, into the slope) leaves 20 ticks later for 31 (a 1.96 m clearance rise). These two are the
-    into-ground behaviour the initiative's design OQ14 left emergent (a dip, then a hop), for the user's G3 check; their
-    travel and least clearance are in the line.
-  - ⚠ The convex crease, since task 13b. F stands 0.1 m from the edge. Its sweep's GJK normal there is an edge normal,
-    (0, 0.977, 0.211), which is walkable, and its exact face is the slope box's upper end face, (0, 0.5, −0.866), 60°
-    from world up, which is not. Task 10's movement took that end face as F's ground, so G's horizontal swings counted
-    as `leaves` (990) and `enters` (1100) at ±0.8503, while the attack sample gave F world up. Since task 13b the movement
-    and this test take the ground from `brawlerMovementSimulation::attackGroundNormal`, which gives world up there, so
-    all four convex hits are `inPlane` (F's on G at 700 and 880, as before, and G's on F at 990 and 1100): **the
-    convex `leaves` launch does not occur at this placement.** No character was moved to force one. The case asserts
-    the convex outcome as measured:
-    no `leaves` or `enters` hit there, four `inPlane` hits, each `Unsupported` from its own hit tick for at least 10
-    ticks (15, 36, 43 and 23; 700 and 880 are unchanged from task 10). F's detach is the flat-ground law's: F rests
-    with a vertical velocity of +1.11e-6 m/s (the hover servo's residue), and on a hit tick the world-up lift test `dot(velocity, up) > 0` reads it. The
-    knockback then runs in the tangent frame of the 12.2° edge normal, so thrown onto the plateau (990) F rises 0.84 m
-    and is airborne 0.72 s, and thrown down the slope (1100) it falls off the edge for 23 ticks. 990's measurements
-    equal those of task 10's knob-off recording of this scenario. With step 2 back on the pre-task face the case fails
-    (`1101 == 1100`: the 1100 hit stays `Supported` on its hit tick).
+- **`KnockbacksFollowTheAttackersSwing`** (restated for support law v2 at task 36).
+  - D's and E's fall-line knockbacks are `inPlane`, and neither has an Unsupported tick. Until task 36 the case allowed
+    one late Unsupported tick, entered below 15 % of the knockback speed, for D's tick 438 of a hit at 410: Legacy's
+    per-tick lift test (`detachesFromSupport`, task 13) read the hover servo's few cm/s on a 1.96 m/s slide as more
+    than 2° out of the face. V2 changes support only on events (og-brawler's movement rationale, §34), and D stays
+    Supported.
+  - Crease hits, by the crossing on the hit tick:
+    - Every `leaves` hit detaches on its hit tick and stays Unsupported for at least 10 ticks, two at each crease:
+      F at G (120, 95 ticks) and G at F (520, 13) at the concave crease, F at G (700, 119) and G at F (1100, 43) at
+      the convex one. G's hit on F at 1100 is checked: `leaves`, 43 ticks, a peak clearance rise of 1.6450 m within
+      5e-5 m.
+    - Both concave `enters` hits, F at G (300) and G at F (410), have no Unsupported tick: the redirect sends the
+      velocity along the face at `V · cos θ` (the movement rationale, §35). G's hit on F at 410 is checked: 3.9861 m
+      of travel and a 1.8964 m apex, each within 5e-5 m. F rests at its hover with a clearance that prints 0.100000
+      but sits a rounding above `rideHeight`, so this holds only while the redirect also covers a written hit tick
+      above the hover; without that it reads 2.6684 m and 1.2414 m.
+    - Both convex `enters` hits, F at G (880) and G at F (990), are redirected along the ground they hit and leave
+      the convex crest after their hit tick for at least 10 ticks (34 from 882, 50 from 991). At 990 F is thrown up
+      the slope at 17.42 m/s and flies off the crest: the ski jump of the initiative's support-law design. It is
+      checked: `enters`, first Unsupported on 991, a peak clearance rise of 3.7524 m within 5e-5 m. ⚠ That flight
+      does not end inside slot 7. On 1040, the slot's last tick, F is still rising (0.34 m/s), and slot 8's teleport
+      takes it at 1041, so 50 ticks is what the slot leaves, not the airtime, and the true apex is about 6 mm higher.
+    - No crease hit is `inPlane`.
+  - Under Legacy (the `law=legacy` line) the concave hit at 120 landed on the slope after one tick, the two concave
+    entering hits hopped (300: 18 ticks, a 0.28 m hop; 410: 31 ticks, a 1.96 m rise), and since task 13b all four
+    convex hits were `inPlane`. At F's 0.1 m from the edge the sweep finds an edge contact, (0, 0.977, 0.211), and
+    `attackGroundNormal` gave world up there, so the movement and this test took the plateau's up as F's ground and
+    each convex hit detached from its own hit tick for at least 10 ticks (15, 36, 43 and 23). V2's estimate takes the
+    slope's face there from its centre probe (the movement rationale, §33).
   - C's overhead on D in slot 10 is the scenario's one melee stun: D stays Supported and does not move (0 Unsupported
     ticks, 0 m). The overhead's row is a Stun with no knockback, so its downswing tangent writes nothing.

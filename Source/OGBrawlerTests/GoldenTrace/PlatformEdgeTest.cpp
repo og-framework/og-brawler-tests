@@ -65,7 +65,9 @@ inline constexpr glm::vec3 kFloorCentre{ 19.115f, -0.25f, -16.f };
 inline constexpr glm::vec3 kFloorHalfExtents{ 30.f, 0.25f, 30.f };
 inline constexpr std::array<float, 6u> kDistances = { -0.15f, 0.3f, 1.5f, 3.5f, 4.5f, 4.9f };
 inline constexpr float kReachableFromDistance = 1.f;
+inline constexpr float kLipHitDistance = kDistances.front();
 inline constexpr float kFloorContactHeight = 0.05f;
+inline constexpr float kRimOnBoundaryM = 1e-3f;
 inline constexpr std::array<float, 3u> kObliqueDeg = { 0.f, 30.f, -30.f };
 
 struct PlatformFrame
@@ -185,6 +187,20 @@ simulatableBrawler::PlayerInput inputOf(const goldenTraceScenario::InputRow& row
     return input;
 }
 
+inline brawlerMovementSimulation::SupportLaw gSupportLaw = brawlerMovementSimulation::SupportLaw::Legacy;
+
+const char* lawName() { return gSupportLaw == brawlerMovementSimulation::SupportLaw::V2 ? "v2" : "legacy"; }
+
+const char* lawTag() { return gSupportLaw == brawlerMovementSimulation::SupportLaw::V2 ? " law=v2" : ""; }
+
+struct SupportLawScope
+{
+    explicit SupportLawScope(brawlerMovementSimulation::SupportLaw law) { gSupportLaw = law; }
+    ~SupportLawScope() { gSupportLaw = brawlerMovementSimulation::SupportLaw::Legacy; }
+    SupportLawScope(const SupportLawScope&) = delete;
+    SupportLawScope& operator=(const SupportLawScope&) = delete;
+};
+
 struct EdgeScenario
 {
     static constexpr const char* kGenerator = "PlatformEdge.run";
@@ -206,6 +222,7 @@ struct EdgeScenario
     static bool isSampleTick(uint32_t) { return false; }
     static StaticWorldDescription statics() { return platformStatics(); }
     static simulatableBrawler::StaticData staticData(float gravityScale) { return goldenTraceScenario::scenarioStaticData(gravityScale); }
+    static void configureStaticData(simulatableBrawler::StaticData& staticData) { staticData.m_movementStaticData.supportLaw = gSupportLaw; }
     static simulatableBrawler::PlayerInput inputAt(unsigned int id, uint32_t tick)
     {
         if (id == kAttacker && tick == kSwingTick)
@@ -229,6 +246,7 @@ struct TickRow
     bool blocked = false;
     bool walkable = false;
     bool faceWalkable = false;
+    brawlerMovementSimulation::SupportKind kind = brawlerMovementSimulation::SupportKind::None;
     int hull = -1;
     float impactHeight = 0.f;
     glm::vec3 gjk{ 0.f };
@@ -252,6 +270,7 @@ struct TickRow
     float pushDy = 0.f;
     float pushDv = 0.f;
     float writeDy = 0.f;
+    float redirectDy = 0.f;
     float residualDy = 0.f;
     float residualDv = 0.f;
     float vDotUp = 0.f;
@@ -261,8 +280,10 @@ struct Mirror
 {
     glm::vec3 vPush{ 0.f };
     glm::vec3 vWritten{ 0.f };
+    float redirectDy = 0.f;
     bool written = false;
     bool detached = false;
+    bool supported = false;
     float servoDv = 0.f;
     float stiffDv = 0.f;
     float dampDv = 0.f;
@@ -274,7 +295,7 @@ struct Mirror
 };
 
 Mirror mirrorIntegrate(const brawlerMovementSimulation::State& pre, const brawlerMovementSimulation::StaticData& sd,
-    const brawlerMovementSimulation::GroundProbe& probe, const glm::vec3& n, bool supported, bool committed,
+    const brawlerMovementSimulation::GroundSupport& ground, bool supported, bool committed,
     const brawlerInboundHit::DerivedState& inbound, uint32_t tick, float dt)
 {
     using namespace brawlerMovementSimulation;
@@ -294,16 +315,26 @@ Mirror mirrorIntegrate(const brawlerMovementSimulation::State& pre, const brawle
         }
     }
     m.vPush = state.velocity;
-    const glm::vec3 face = attackGroundNormal(probe.hit, sd);
-    m.written = writesKnockbackVelocity(inbound, face, probe.walkable, committed);
+    const bool v2 = sd.supportLaw == SupportLaw::V2;
+    m.written = v2 ? writesKnockbackVelocityV2(inbound, committed)
+                   : writesKnockbackVelocity(inbound, ground.faceNormal, ground.eligible, committed);
     if (m.written)
         state.velocity = inbound.hitDirectionWorld * inbound.knockbackSpeed;
     m.vWritten = state.velocity;
-    m.detached = detachesFromSupport(state, kWorldUp, face, committed);
+    const SupportDecision decision = v2 ? classifySupportV2(state, sd, ground, committed, m.written, inbound.hitDirectionWorld)
+                                        : classifySupport(state, ground, committed);
+    m.detached = decision.detached;
+    m.supported = decision.support != SupportState::Unsupported;
+    if (v2 && redirectsIntoFace(state, sd, ground, decision.support, committed, m.written))
+    {
+        const float before = state.velocity.y;
+        state.velocity -= ground.faceNormal * glm::dot(state.velocity, ground.faceNormal);
+        m.redirectDy = state.velocity.y - before;
+    }
 
     glm::vec3 u(simFrame::kForward);
     glm::vec3 v(simFrame::kRight);
-    buildTangentFrame(n, u, v);
+    buildTangentFrame(decision.frameNormal, u, v);
     const VelocityChannels channels = decomposeVelocity(state.velocity, u, v, kWorldUp);
     m.residual = (u * channels.uv.x + v * channels.uv.y + kWorldUp * channels.up) - state.velocity;
     m.vDotUp = glm::dot(v, kWorldUp);
@@ -311,7 +342,7 @@ Mirror mirrorIntegrate(const brawlerMovementSimulation::State& pre, const brawle
     if (committed)
     {
         if (inbound.wasHitThisTick)
-            velocityUV = m.written ? channels.uv : inbound.hitDirectionXY * inbound.knockbackSpeed;
+            velocityUV = (m.written || v2) ? channels.uv : inbound.hitDirectionXY * inbound.knockbackSpeed;
         else
             velocityUV = moveTowards(channels.uv, glm::vec2(0.f), sd.launchDecel * dt);
     }
@@ -323,7 +354,7 @@ Mirror mirrorIntegrate(const brawlerMovementSimulation::State& pre, const brawle
     float accelUp = sd.gravity;
     if (supported)
     {
-        const float e = sd.rideHeight - probe.clearance;
+        const float e = sd.rideHeight - ground.probe.clearance;
         const float servo = (e >= 0.f) ? sd.hoverStiffness * e - sd.hoverDamping * channels.up - sd.gravity
                                        : glm::max(sd.hoverStiffness * e, -sd.hoverPullDownAccel);
         const float clamped = glm::clamp(servo, -sd.hoverMaxAccel, sd.hoverMaxAccel);
@@ -375,7 +406,8 @@ RunResult runOnce(const Placement& placement, const PlatformFrame& frame, const 
         const brawlerMovementSimulation::State pre = target.getAllState().getState().template get<brawlerMovementSimulation::State>();
         const bool teleporting = target.getAllState().getState().template get<brawlerMovementSimulation::InitialConditions>().teleportPending != 0u;
         const auto& bindings = target.getPhysicsComposite().template get<brawlerMovementSimulation::PhysicsDeclaration>().bindings;
-        const brawlerMovementSimulation::GroundProbe probe = brawlerMovementSimulation::probeGround(pre, sd, bindings, scene.query);
+        const brawlerMovementSimulation::GroundSupport ground = brawlerMovementSimulation::estimateSupport(pre, sd, bindings, scene.query);
+        const brawlerMovementSimulation::GroundProbe& probe = ground.probe;
 
         scene.step(tick);
 
@@ -393,12 +425,13 @@ RunResult runOnce(const Placement& placement, const PlatformFrame& frame, const 
         row.clearance = probe.clearance;
         row.blocked = probe.hit.blocked;
         row.walkable = probe.walkable;
+        row.kind = ground.kind;
         row.faceWalkable = probe.hit.blocked && glm::dot(probe.hit.surfaceNormal, brawlerMovementSimulation::kWorldUp) >= sd.cosMaxSlope;
         row.hull = probe.hit.blocked ? hullSideOf(frame.chart(probe.hit.impactPoint).y) : -1;
         row.impactHeight = probe.hit.impactPoint.y;
         row.gjk = probe.hit.normal;
         row.exact = probe.hit.surfaceNormal;
-        row.attackGround = brawlerMovementSimulation::attackGroundNormal(probe.hit, sd);
+        row.attackGround = ground.faceNormal;
         row.n = derived.surfaceNormal;
         row.vRaw = pre.velocity;
         row.vActual = post.velocity;
@@ -413,7 +446,7 @@ RunResult runOnce(const Placement& placement, const PlatformFrame& frame, const 
         if (!teleporting)
         {
             const bool supported = row.support != 0u;
-            const Mirror m = mirrorIntegrate(pre, sd, probe, row.n, supported, row.committed, inbound, tick, dt);
+            const Mirror m = mirrorIntegrate(pre, sd, ground, supported, row.committed, inbound, tick, dt);
             row.mirrored = true;
             row.vMirror = m.vOut;
             row.vWritten = m.vWritten;
@@ -430,9 +463,10 @@ RunResult runOnce(const Placement& placement, const PlatformFrame& frame, const 
             row.residualDv = glm::length(m.residual);
             row.vDotUp = m.vDotUp;
             row.writeDy = m.vWritten.y - m.vPush.y;
+            row.redirectDy = m.redirectDy;
             if (glm::length(m.vOut - post.velocity) > kMirrorTolerance * std::max(1.f, glm::length(post.velocity)))
                 ++result.mirrorMismatches;
-            if (supported != (probe.walkable && !m.detached))
+            if (supported != m.supported)
                 ++result.supportMismatches;
             if (glm::length((pre.bodyState.position - (pre.positionCmd + pre.velocity * dt)) - derived.lastPushOut) > 1e-5f
                 && (pre.flags & brawlerMovementSimulation::kFlagHasCommand) != 0u)
@@ -530,6 +564,12 @@ struct Event
     float minNTiltDeg = 0.f;
     float maxNTiltDeg = 0.f;
     std::string label;
+    bool estimateEdgeAtHit = false;
+    uint32_t estimateEdgeTick = 0u;
+    float estimateAnomaly = 0.f;
+    float estimateServo = 0.f;
+    float estimateRedirect = 0.f;
+    std::string estimateLabel;
 };
 
 float tiltDeg(const glm::vec3& normal, const glm::vec3& outwardHorizontal)
@@ -545,6 +585,17 @@ bool exactIsTop(const TickRow& row, const PlatformFrame& frame)
 bool isPureFace(const TickRow& row, const PlatformFrame& frame)
 {
     return exactIsTop(row, frame) && row.support != 0u && glm::dot(row.gjk, frame.normal) > kFaceMatchCos;
+}
+
+bool isEstimateFace(const TickRow& row, const PlatformFrame& frame)
+{
+    return row.kind == brawlerMovementSimulation::SupportKind::Face && row.support != 0u
+        && glm::dot(row.attackGround, frame.normal) > kFaceMatchCos;
+}
+
+const char* classOf(float anomaly)
+{
+    return anomaly > kEventThreshold ? "lift" : (anomaly < -kEventThreshold ? "downPull" : "none");
 }
 
 bool onFloor(const TickRow& row)
@@ -645,8 +696,73 @@ Event analyse(const RunResult& run, const PlatformFrame& frame, const RimSite& s
             e.maxNTiltDeg = std::max(e.maxNTiltDeg, tiltDeg(row.n, outwardHorizontal));
         }
     }
-    e.label = e.anomaly > kEventThreshold ? "lift" : (e.anomaly < -kEventThreshold ? "downPull" : "none");
+    e.label = classOf(e.anomaly);
+
+    std::size_t estimateEdgeIndex = hitIndex;
+    for (std::size_t index = hitIndex; index < departIndex; ++index)
+        if (isEstimateFace(run.rows[index], frame))
+            estimateEdgeIndex = index + 1u;
+    e.estimateEdgeAtHit = estimateEdgeIndex == hitIndex;
+    e.estimateEdgeTick = run.rows[estimateEdgeIndex].tick;
+    const glm::vec3 estimateReference = e.estimateEdgeAtHit ? run.rows[hitIndex].vWritten : run.rows[estimateEdgeIndex].vRaw;
+    for (std::size_t index = estimateEdgeIndex; index <= reportIndex; ++index)
+    {
+        const TickRow& row = run.rows[index];
+        e.estimateAnomaly = row.vActual.y - (estimateReference.y + g * dt * float(index - estimateEdgeIndex + 1u));
+        e.estimateServo += row.servoDv;
+        e.estimateRedirect += row.redirectDy;
+    }
+    e.estimateLabel = classOf(e.estimateAnomaly);
     return e;
+}
+
+struct SupportCounters
+{
+    uint32_t flips = 0u;
+    bool rimHang = false;
+    uint32_t lipTicks = 0u;
+};
+
+SupportCounters supportCountersOf(const RunResult& run, const Event& e, const RimSite& site)
+{
+    SupportCounters counters;
+    std::size_t hitIndex = 0u;
+    while (run.rows[hitIndex].tick != run.hitTick)
+        ++hitIndex;
+    std::size_t floorIndex = hitIndex;
+    while (floorIndex < run.rows.size() && !onFloor(run.rows[floorIndex]))
+        ++floorIndex;
+    for (std::size_t index = hitIndex; index < floorIndex; ++index)
+    {
+        const TickRow& row = run.rows[index];
+        if (index > 0u && row.support != run.rows[index - 1u].support)
+            ++counters.flips;
+        if (row.blocked && row.walkable && !row.faceWalkable)
+            ++counters.lipTicks;
+    }
+    counters.rimHang = std::abs(insideMargin(site.rim)) < kRimOnBoundaryM && e.label == "staysOnPlatform" && run.rows.back().pastRim > 0.f;
+    return counters;
+}
+
+
+const char* kindField(brawlerMovementSimulation::SupportKind kind)
+{
+    if (gSupportLaw != brawlerMovementSimulation::SupportLaw::V2)
+        return "";
+    if (kind == brawlerMovementSimulation::SupportKind::Face)
+        return " kind=Face";
+    return kind == brawlerMovementSimulation::SupportKind::Lip ? " kind=Lip" : " kind=None";
+}
+
+std::string estimateField(const Event& e)
+{
+    if (gSupportLaw != brawlerMovementSimulation::SupportLaw::V2 || !e.departs)
+        return "";
+    char buffer[200];
+    std::snprintf(buffer, sizeof(buffer), " estimateEdge=%u estimateEdgeAtHit=%d estimateAnomaly=%.4f estimateServo=%.4f estimateRedirect=%.4f estimateClass=%s",
+        e.estimateEdgeTick, e.estimateEdgeAtHit ? 1 : 0, double(e.estimateAnomaly), double(e.estimateServo), double(e.estimateRedirect),
+        e.estimateLabel.c_str());
+    return buffer;
 }
 
 const char* sideName(Swing side) { return side == Swing::Right ? "R" : "L"; }
@@ -660,10 +776,10 @@ void printTicks(const RunResult& run, const Event& e, const PlatformFrame& frame
     {
         if (row.tick + 2u < e.hitTick || row.tick > last)
             continue;
-        std::printf("[PlatformEdge.tick] site=%s d=%.2f obl=%+.0f t=%u rel=%d past=%.3f y=%.4f sup=%s clr=%.4f blk=%d hull=%d "
+        std::printf("[PlatformEdge.tick]%s site=%s d=%.2f obl=%+.0f t=%u rel=%d past=%.3f y=%.4f sup=%s clr=%.4f blk=%d hull=%d "
                     "walk=%d faceWalk=%d gjkTilt=%.2f exactTilt=%.2f exactDotTop=%.5f groundTop=%d nTilt=%.2f commit=%d hitTick=%d "
                     "written=%d detached=%d vyRaw=%.4f vyWritten=%.4f vy=%.4f |v|=%.4f vN=%.4f chanUp=%.4f servo=%.4f stiff=%.4f "
-                    "damp=%.4f uvDy=%.4f pushDy=%.4f pushDv=%.4f residualDy=%.4f residualDv=%.4f vDotUp=%.4f mirrorErr=%.2e\n",
+                    "damp=%.4f uvDy=%.4f pushDy=%.4f pushDv=%.4f residualDy=%.4f residualDv=%.4f vDotUp=%.4f mirrorErr=%.2e%s\n", lawTag(),
             site.name, double(e.distance), double(e.obliqueDeg), row.tick, int(row.tick) - int(e.hitTick), double(row.pastRim),
             double(row.position.y), supportName(row.support), double(row.clearance), row.blocked ? 1 : 0, row.hull, row.walkable ? 1 : 0,
             row.faceWalkable ? 1 : 0, double(tiltDeg(row.gjk, outwardHorizontal)), double(tiltDeg(row.exact, outwardHorizontal)),
@@ -672,17 +788,18 @@ void printTicks(const RunResult& run, const Event& e, const PlatformFrame& frame
             row.detached ? 1 : 0, double(row.vRaw.y), double(row.vWritten.y), double(row.vActual.y), double(glm::length(row.vActual)),
             double(glm::dot(row.vActual, frame.normal)), double(row.channelUp), double(row.servoDv), double(row.stiffDv),
             double(row.dampDv), double(row.uvDy), double(row.pushDy), double(row.pushDv), double(row.residualDy),
-            double(row.residualDv), double(row.vDotUp), double(row.mirrored ? glm::length(row.vMirror - row.vActual) : 0.f));
+            double(row.residualDv), double(row.vDotUp), double(row.mirrored ? glm::length(row.vMirror - row.vActual) : 0.f),
+            kindField(row.kind));
     }
 }
 
 void printRun(const Event& e, const PlatformFrame& frame, const RimSite& site)
 {
     const glm::vec3 outwardHorizontal = horizontalUnit(frame.inPlane(site.outward));
-    std::printf("[PlatformEdge.run] site=%s d=%.2f obl=%+.0f actualObl=%+.1f side=%s rested=%d restSup=%s restClr=%.4f restGjkTilt=%.2f "
+    std::printf("[PlatformEdge.run]%s site=%s d=%.2f obl=%+.0f actualObl=%+.1f side=%s rested=%d restSup=%s restClr=%.4f restGjkTilt=%.2f "
                 "restExactTop=%d hit=%u dirCos=%.4f outcome=%s edgeAtHit=%d edge=%u depart=%u report=%u landing=%u speed=%.3f "
                 "vyEdge=%.4f anomaly=%.4f dy=%.4f servo=%.4f stiff=%.4f damp=%.4f uvSupTilted=%.4f uvDetTilted=%.4f uvOther=%.4f "
-                "push=%.4f pushDv=%.4f residualDy=%.4f residualDv=%.4f flips=%u detachedWalkable=%u disagree=%u lipFace=%u hullSwitch=%u nTilt=[%.2f,%.2f] class=%s\n",
+                "push=%.4f pushDv=%.4f residualDy=%.4f residualDv=%.4f flips=%u detachedWalkable=%u disagree=%u lipFace=%u hullSwitch=%u nTilt=[%.2f,%.2f] class=%s%s\n", lawTag(),
         site.name, double(e.distance), double(e.obliqueDeg), double(e.actualObliqueDeg), sideName(e.side), e.rested ? 1 : 0,
         supportName(e.rest.support), double(e.rest.clearance), double(tiltDeg(e.rest.gjk, outwardHorizontal)),
         exactIsTop(e.rest, frame) ? 1 : 0, e.hitTick, double(e.directionCos), e.departs ? "departs" : "stays", e.edgeAtHit ? 1 : 0,
@@ -690,10 +807,10 @@ void printRun(const Event& e, const PlatformFrame& frame, const RimSite& site)
         double(e.heightDeviation), double(e.servo), double(e.stiff), double(e.damp), double(e.uvSupportedTilted),
         double(e.uvDetachedTilted), double(e.uvOther), double(e.push), double(e.pushSpeedLoss), double(e.residualDy),
         double(e.residualDv), e.supportFlips, e.detachedWalkableTicks, e.disagreeTicks,
-        e.lipFaceTicks, e.hullSwitches, double(e.minNTiltDeg), double(e.maxNTiltDeg), e.label.c_str());
+        e.lipFaceTicks, e.hullSwitches, double(e.minNTiltDeg), double(e.maxNTiltDeg), e.label.c_str(), estimateField(e).c_str());
 }
 
-TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRims", "[GoldenTrace]")
+void knockbacksAcrossTheRims()
 {
     const PlatformFrame frame = platformFrame();
     {
@@ -705,6 +822,11 @@ TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRims", "[GoldenTrace]
     }
     const bool printEveryTick = goldenTraceScene::environmentValue("OG_PLATFORM_EDGE_TICKS").value_or("") == "1";
     const std::string onlySite = goldenTraceScene::environmentValue("OG_PLATFORM_EDGE_SITE").value_or("");
+    const bool printRuns = goldenTraceScene::environmentValue("OG_SUPPORT_LAW_RUNS").value_or("") == "1";
+    const char* law = lawName();
+    uint32_t supportFlips = 0u;
+    uint32_t rimHangs = 0u;
+    uint32_t lipTicks = 0u;
 
     std::vector<Event> events;
     uint32_t runs = 0u;
@@ -715,6 +837,7 @@ TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRims", "[GoldenTrace]
     uint32_t unreachable = 0u;
     uint32_t lossyTicks = 0u;
     uint32_t lossyOnPureFace = 0u;
+    std::array<uint32_t, 3u> kindTicks = { 0u, 0u, 0u };
     float largestResidual = 0.f;
     for (const RimSite& site : kSites)
     {
@@ -746,8 +869,8 @@ TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRims", "[GoldenTrace]
                             if (printEveryTick)
                             {
                                 const glm::vec3 offset = run.rest.position - run.attackerAtSwing;
-                                std::printf("[PlatformEdge.attempt] site=%s d=%.2f obl=%+.0f shift=%.2f flip=%d side=%s rested=%d hit=%d "
-                                            "dirCos=%.4f meleeHits=%u inPlaneM=%.3f alongNormalM=%.3f targetPast=%.3f\n",
+                                std::printf("[PlatformEdge.attempt]%s site=%s d=%.2f obl=%+.0f shift=%.2f flip=%d side=%s rested=%d hit=%d "
+                                            "dirCos=%.4f meleeHits=%u inPlaneM=%.3f alongNormalM=%.3f targetPast=%.3f\n", lawTag(),
                                     site.name, double(distance), double(oblique), double(shift), flipAttacker ? 1 : 0, sideName(side),
                                     run.rested ? 1 : 0, run.hit ? 1 : 0, double(event.directionCos), run.attackerHits,
                                     double(glm::length(offset - frame.normal * glm::dot(offset, frame.normal))),
@@ -765,12 +888,24 @@ TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRims", "[GoldenTrace]
                 if (!chosen.has_value())
                 {
                     ++unreachable;
-                    std::printf("[PlatformEdge.unreachable] site=%s d=%.2f obl=%+.0f\n", site.name, double(distance), double(oblique));
+                    if (printRuns)
+                        std::printf("[PlatformEdge.unreachable]%s site=%s d=%.2f obl=%+.0f\n", lawTag(), site.name, double(distance), double(oblique));
                     continue;
                 }
-                printRun(chosenEvent, frame, site);
+                const SupportCounters counters = supportCountersOf(*chosen, chosenEvent, site);
+                supportFlips += counters.flips;
+                rimHangs += counters.rimHang ? 1u : 0u;
+                lipTicks += counters.lipTicks;
+                if (printRuns)
+                {
+                    printRun(chosenEvent, frame, site);
+                    std::printf("[PlatformEdge.support] law=%s site=%s d=%.2f obl=%+.0f flips=%u rimHang=%d lipTicks=%u\n", law, site.name,
+                        double(distance), double(oblique), counters.flips, counters.rimHang ? 1 : 0, counters.lipTicks);
+                }
                 for (const TickRow& row : chosen->rows)
                 {
+                    if (row.mirrored)
+                        ++kindTicks[static_cast<std::size_t>(row.kind)];
                     if (!row.mirrored || row.residualDv <= kResidualTolerance)
                         continue;
                     ++lossyTicks;
@@ -783,13 +918,20 @@ TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRims", "[GoldenTrace]
             }
     }
 
+    const bool v2 = gSupportLaw == brawlerMovementSimulation::SupportLaw::V2;
     uint32_t lifts = 0u;
     uint32_t downPulls = 0u;
     uint32_t stays = 0u;
+    uint32_t estimateLifts = 0u;
+    uint32_t estimateDownPulls = 0u;
     for (const RimSite& site : kSites)
     {
         uint32_t siteLifts = 0u;
         uint32_t siteDown = 0u;
+        uint32_t siteEstimateLifts = 0u;
+        uint32_t siteEstimateDown = 0u;
+        float largestEstimateLift = 0.f;
+        float largestEstimateDown = 0.f;
         uint32_t siteStays = 0u;
         uint32_t siteRuns = 0u;
         float largestLift = 0.f;
@@ -804,26 +946,96 @@ TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRims", "[GoldenTrace]
             siteStays += e.label == "staysOnPlatform" ? 1u : 0u;
             largestLift = std::max(largestLift, e.anomaly);
             largestDown = std::min(largestDown, e.anomaly);
+            siteEstimateLifts += e.departs && e.estimateLabel == "lift" ? 1u : 0u;
+            siteEstimateDown += e.departs && e.estimateLabel == "downPull" ? 1u : 0u;
+            if (e.departs)
+            {
+                largestEstimateLift = std::max(largestEstimateLift, e.estimateAnomaly);
+                largestEstimateDown = std::min(largestEstimateDown, e.estimateAnomaly);
+            }
         }
         if (siteRuns == 0u)
             continue;
         lifts += siteLifts;
         downPulls += siteDown;
         stays += siteStays;
-        std::printf("[PlatformEdge.site] site=%s runs=%u lifts=%u downPulls=%u staysOnPlatform=%u largestLift=%.4f largestDownPull=%.4f\n",
+        estimateLifts += siteEstimateLifts;
+        estimateDownPulls += siteEstimateDown;
+        std::printf("[PlatformEdge.site]%s site=%s runs=%u lifts=%u downPulls=%u staysOnPlatform=%u largestLift=%.4f largestDownPull=%.4f\n", lawTag(),
             site.name, siteRuns, siteLifts, siteDown, siteStays, double(largestLift), double(largestDown));
+        if (v2)
+            std::printf("[PlatformEdge.estimateSite] law=v2 site=%s runs=%u lifts=%u downPulls=%u largestLift=%.4f largestDownPull=%.4f\n",
+                site.name, siteRuns, siteEstimateLifts, siteEstimateDown, double(largestEstimateLift), double(largestEstimateDown));
     }
-    std::printf("[PlatformEdge.summary] runs=%u placements=%zu unreachable=%u lifts=%u downPulls=%u staysOnPlatform=%u mirroredTicks=%u "
-                "mirrorMismatches=%u supportMismatches=%u pushOutMismatches=%u\n",
+    std::printf("[PlatformEdge.summary]%s runs=%u placements=%zu unreachable=%u lifts=%u downPulls=%u staysOnPlatform=%u mirroredTicks=%u "
+                "mirrorMismatches=%u supportMismatches=%u pushOutMismatches=%u\n", lawTag(),
         runs, events.size(), unreachable, lifts, downPulls, stays, mirroredTicks, mirrorMismatches, supportMismatches, pushOutMismatches);
 
-    std::printf("[PlatformEdge.decomposition] lossyTicks=%u lossyOnPureFace=%u largestResidualMps=%.4f\n", lossyTicks, lossyOnPureFace,
+    std::printf("[PlatformEdge.decomposition]%s lossyTicks=%u lossyOnPureFace=%u largestResidualMps=%.4f\n", lawTag(), lossyTicks, lossyOnPureFace,
         double(largestResidual));
+    std::printf("[SupportLaw.scorecard] law=%s rig=platformEdge runs=%zu flips=%u lifts=%u downPulls=%u rimHangs=%u lipTicks=%u\n", law,
+        events.size(), supportFlips, lifts, downPulls, rimHangs, lipTicks);
+    if (std::string(law) != "legacy")
+    {
+        std::printf("[PlatformEdge.estimate] law=%s noneTicks=%u faceTicks=%u lipTicks=%u\n", law, kindTicks[0], kindTicks[1], kindTicks[2]);
+        std::printf("[PlatformEdge.estimateSummary] law=%s lifts=%u downPulls=%u\n", law, estimateLifts, estimateDownPulls);
+    }
+    if (v2)
+    {
+        uint32_t lipHitPlacements = 0u;
+        float largestLipHitServo = 0.f;
+        for (const Event& e : events)
+        {
+            if (e.distance != kLipHitDistance || std::string(e.site).rfind("tip", 0u) != 0u)
+                continue;
+            ++lipHitPlacements;
+            largestLipHitServo = std::max(largestLipHitServo, e.servo);
+            INFO("Lip-hit placement " << e.site << " oblique " << e.obliqueDeg << " servo " << e.servo);
+            CHECK(e.servo <= kEventThreshold);
+        }
+        std::printf("[PlatformEdge.lipHits] law=v2 placements=%u largestServo=%.4f\n", lipHitPlacements, double(largestLipHitServo));
+        if (onlySite.empty())
+            CHECK(lipHitPlacements == 16u);
+        if (onlySite.empty())
+        {
+            CHECK(estimateLifts <= 1u);
+            CHECK(estimateDownPulls == 0u);
+        }
+        for (const Event& e : events)
+        {
+            if (!e.departs || e.estimateLabel != "lift")
+                continue;
+            INFO("estimate lift " << e.site << " d " << e.distance << " oblique " << e.obliqueDeg << " anomaly " << e.estimateAnomaly
+                 << " servo " << e.estimateServo << " redirect " << e.estimateRedirect);
+            CHECK(std::string(e.site) == "tipCornerPlus");
+            CHECK(e.distance == kDistances.back());
+            CHECK(e.obliqueDeg == 0.f);
+            CHECK(e.estimateRedirect == 0.f);
+        }
+    }
+    if (onlySite.empty() && std::string(law) == "legacy")
+    {
+        CHECK(supportFlips == 249u);
+        CHECK(rimHangs == 17u);
+        CHECK(lipTicks == 435u);
+    }
 
     CHECK(mirroredTicks > 0u);
     CHECK(mirrorMismatches == 0u);
     CHECK(supportMismatches == 0u);
     CHECK(pushOutMismatches == 0u);
+}
+
+TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRims", "[GoldenTrace]")
+{
+    const SupportLawScope law(brawlerMovementSimulation::SupportLaw::Legacy);
+    knockbacksAcrossTheRims();
+}
+
+TEST_CASE("PlatformEdge.KnockbacksAcrossTheImportedPlatformRimsUnderV2", "[GoldenTrace]")
+{
+    const SupportLawScope law(brawlerMovementSimulation::SupportLaw::V2);
+    knockbacksAcrossTheRims();
 }
 
 } // namespace platformEdgeTests
