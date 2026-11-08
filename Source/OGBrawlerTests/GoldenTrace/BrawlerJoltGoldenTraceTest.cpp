@@ -90,16 +90,6 @@ struct FlatScenario
 
 static_assert(goldenTraceScene::Scenario<FlatScenario>, "the flat scenario provides everything goldenTraceScene::Scene reads");
 
-struct FlatScenarioUnderLegacy : FlatScenario
-{
-    static void configureStaticData(simulatableBrawler::StaticData& staticData)
-    {
-        staticData.m_movementStaticData.supportLaw = brawlerMovementSimulation::SupportLaw::Legacy;
-    }
-};
-
-static_assert(goldenTraceScene::Scenario<FlatScenarioUnderLegacy>, "the flat scenario under the legacy support law is a scenario");
-
 struct TraceReader
 {
     const goldenTrace::Trace& trace;
@@ -307,18 +297,6 @@ TEST_CASE("BrawlerJoltGoldenTrace.ScenarioCoversEveryScriptedMechanic", "[Golden
     CHECK(coverage.detectedGuardBlocks >= 2u);
     CHECK(coverage.detectedProjectileHits >= 1u);
     CHECK(coverage.detectedProjectileBlocks >= 1u);
-}
-
-TEST_CASE("BrawlerJoltGoldenTrace.PrintsTheCoverageUnderLegacy", "[GoldenTrace]")
-{
-    const goldenTrace::Trace live = goldenTraceScene::runScenario<FlatScenarioUnderLegacy>();
-    printCoverage("legacy", coverageOf(live));
-    const goldenTrace::CompareResult against = goldenTrace::compareExact(recordedGolden(), live);
-    std::printf("[GoldenTrace.legacyAgainstTheRecording] scenario=flat samples=%zu values=%zu mismatchingValues=%zu "
-                "samplesPassedBeforeFirstMismatch=%u first=%s\n",
-        against.comparedSamples, live.values.size(), against.mismatchingValues, against.ticksPassedBeforeFirstMismatch,
-        against.firstMismatch.empty() ? "none" : against.firstMismatch.c_str());
-    CHECK(against.schemaProblem == "");
 }
 
 TEST_CASE("BrawlerJoltGoldenTrace.Record", "[.GoldenRecord]")

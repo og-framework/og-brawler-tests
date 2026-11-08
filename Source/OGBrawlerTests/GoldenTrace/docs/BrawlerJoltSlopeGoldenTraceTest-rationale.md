@@ -1,4 +1,11 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- lint-external-ref: PrintsTheSlopeMeasurementsUnderLegacy -- a RETIRED Catch2 case -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records it -->
+<!-- lint-external-ref: SlopeScenarioUnderLegacy -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: SupportLaw::Legacy -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: SupportLaw::V2 -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: brawlerMovementSimulation::attackGroundNormal -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: attackGroundNormal -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: detachesFromSupport -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
 # BrawlerJoltSlopeGoldenTraceTest — rationale
 
 Source: `BrawlerJoltSlopeGoldenTraceTest.cpp`. This file has no guards document: nothing in it needs a `⛔` tag. The
@@ -30,7 +37,7 @@ compare case fails at its first `REQUIRE`.
 | `ScriptCoversEveryTickOnce` | `[GoldenTrace]` | every one of the seven characters has exactly one input row on every tick |
 | `MatchesTheRecordedTrace` | `[GoldenTrace]` | runs the scenario and compares it with the golden in the mode `OG_GOLDEN_MODE` names, as the flat case does (`goldenTraceScene::requireMatchesTheRecordedTrace`, `BrawlerJoltGoldenTraceTest-rationale.md` §2) |
 | `PrintsTheSlopeMeasurements` | `[GoldenTrace]` | prints one `[GoldenTrace.slope]` line (§3) |
-| `PrintsTheSlopeMeasurementsUnderLegacy` | `[GoldenTrace]` | the same measurement with the movement's support law set to Legacy, and how far that run is from the recording (§2.1); task 37 deletes it |
+| `PrintsTheSlopeMeasurementsUnderLegacy` | `[GoldenTrace]` | the same measurement with the movement's support law set to Legacy, and how far that run is from the recording (§2.1); task 37 deleted it with the Legacy law |
 | `SwingsFollowTheGround` | `[GoldenTrace]` | every swing's plane at its start and through the swing (§7) |
 | `SideSwingsHitUpAndDownTheSlope` | `[GoldenTrace]` | A's side swings hit B, up the slope, and C, down it (§7) |
 | `GuardsBlockInTheGroundPlane` | `[GoldenTrace]` | B's guard blocks A's overhead, C's guard each side swing (§7) |
@@ -44,7 +51,10 @@ The measurement and the five behaviour cases read one run of the scenario: `theS
 asks and keeps the result (a function-local `static`), so the cases cost one run together. The run reads every
 character after every tick and, before every tick, re-takes each character's ground the way the tick is about to (§3).
 
-### 2.1 The Legacy print (og-ground-aligned-attacks task 36; task 35's V2 print)
+### 2.1 The Legacy print (og-ground-aligned-attacks task 36; task 35's V2 print; deleted by task 37)
+
+⭐ **Retired with the Legacy support law (task 37).** The case, its scenario and its `law=legacy` print are deleted. The
+paragraphs below are the record of what it ran.
 
 `PrintsTheSlopeMeasurementsUnderLegacy` runs the scenario as `SlopeScenarioUnderLegacy`, the slope scenario with one
 addition: its `configureStaticData` sets `m_movementStaticData.supportLaw` to `SupportLaw::Legacy`. The measurement is
@@ -109,8 +119,8 @@ One line, `[GoldenTrace.slope]`, with these fields:
   (since task 13b both use that helper; before it the test and step 2 took the exact face with no walkable test).
   Since og-ground-aligned-attacks task 33 the test reads it as step 2 does, from
   `brawlerMovementSimulation::estimateSupport`: its `faceNormal` when `eligible`, else world up. Under
-  `SupportLaw::Legacy` those are the same two values as above; under `SupportLaw::V2`, the shipped law since task 36,
-  they are the v2 estimate's.
+  `SupportLaw::Legacy` those were the same two values as above; under `SupportLaw::V2`, the shipped law since task 36
+  and the only one since task 37, they are the v2 estimate's.
   `leaves` above `kMinLaunchSine` (sin 2°), `enters` below its negative, `inPlane` between.
 
 ## 4. The recordings

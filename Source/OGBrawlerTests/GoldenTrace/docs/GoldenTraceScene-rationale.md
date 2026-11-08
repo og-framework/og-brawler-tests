@@ -32,8 +32,9 @@ can be neither copied nor moved, so a scenario cannot change one field of the va
 scenario declares `static void configureStaticData(simulatableBrawler::StaticData&)`, the scene calls it first in its
 constructor body, before it registers any character, so a field it sets reaches every character's query volumes. The
 support-law rigs set `m_movementStaticData.supportLaw` with it (`SupportLawScorecardTest.cpp`, `PlatformEdgeTest.cpp`,
-`SupportEstimateTest.cpp`). The Jolt world has already read the gravity by then, so the member must not change it. The
-concept does not require the member, and neither golden scenario declares it.
+`SupportEstimateTest.cpp`) until og-ground-aligned-attacks task 37 deleted that switch with the Legacy law; since then
+no scenario declares the member, and the scene keeps the hook for the next field that needs it. The Jolt world has
+already read the gravity by then, so the member must not change it. The concept does not require the member.
 
 The flat test's `FlatScenario` forwards each member to `goldenTraceScenario` (its two characters A and B, its spawn
 table of slot 0 at `kSpawnA` and slot 1 at `kRespawnB`, and no teleports). The slope scenario is

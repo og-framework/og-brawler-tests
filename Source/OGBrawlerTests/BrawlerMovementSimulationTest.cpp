@@ -334,11 +334,9 @@ struct Rig
         inbound.reactionKind   = kind;
         inbound.knockbackSpeed = knockback ? knockbackSpeed() : 0.f;
         inbound.hitDirectionXY = knockback ? directionXY : glm::vec2(0.f);
-        // [ga task 36] Under SupportLaw::V2 (the shipped law) the world direction too, as `resolveHitReaction`
-        // writes it: V2 reads only `hitDirectionWorld`, and a horizontal hit's world image is the chart direction
-        // at height 0. A case that sets Legacy keeps the pre-task input (no world direction, so D-06's XY path).
-        inbound.hitDirectionWorld = (knockback && sd.supportLaw == movement::SupportLaw::V2)
-            ? simFrame::compose(directionXY, 0.f) : glm::vec3(0.f);
+        // [ga tasks 36, 37] The world direction too, as `resolveHitReaction` writes it: the movement reads only
+        // `hitDirectionWorld`, and a horizontal hit's world image is the chart direction at height 0.
+        inbound.hitDirectionWorld = knockback ? simFrame::compose(directionXY, 0.f) : glm::vec3(0.f);
         inbound.flinchDuration = knockback
             ? glm::max(lockoutDuration, knockbackSlideSeconds())
             : lockoutDuration;
@@ -1485,9 +1483,9 @@ struct LedgeQueryAdapter
 
     void configureFrom(const movement::StaticData& sd)
     {
-        // The probe is index 0 under either law; V2 also declares the centre probe at index 1 [ga task 36].
+        // The probe is index 0 and the centre probe index 1 [ga tasks 36, 37].
         const std::vector<QueryVolumeDescriptor> volumes = movement::PhysicsSetup::queryVolumes(sd);
-        REQUIRE(volumes.size() == (sd.supportLaw == movement::SupportLaw::V2 ? 2u : 1u));
+        REQUIRE(volumes.size() == 2u);
         const CapsuleGeometry* capsule = std::get_if<CapsuleGeometry>(&volumes[0].geometry);
         REQUIRE(capsule != nullptr);
         probeRadius     = capsule->radius;
@@ -2060,7 +2058,8 @@ TEST_CASE("BrawlerMovement.LandingSettlesWithoutBounce", "[BrawlerMovement]")
 // probe still reads walkable ground. ⭐ TASK 57 / RULING #29 SHRANK THAT WINDOW BUT DID NOT CLOSE
 // IT: once the ascent carries the character ABOVE ride height the law is gravity alone, so only
 // the first tick or two of a launch are damped now. At the knockback speed that was already
-// survivable; at a jump speed it is still `detachesFromSupport` that has to fix it.
+// survivable; at a jump speed it is still step 2's classification that has to fix it (`classifySupport`; the
+// Legacy predicate this sentence first named went with that law in og-ground-aligned-attacks task 37).
 // ---------------------------------------------------------------------------
 TEST_CASE("BrawlerMovement.UpwardLaunchIsDampedNotOverwritten", "[BrawlerMovement]")
 {
@@ -2217,73 +2216,6 @@ TEST_CASE("BrawlerMovement.LedgeFallStartsFromRest", "[BrawlerMovement]")
     REQUIRE(ballisticDeltas.size() >= 3u);
     for (const float delta : ballisticDeltas)
         REQUIRE(delta == Catch::Approx(rig.gravityPerTick()).margin(1.0000001e-5f));
-}
-
-// ---------------------------------------------------------------------------
-// ⭐⭐ THE DETACH GATE IS NO LONGER VACUOUS [movement-sim task 27].
-//
-// `DetachGateIsVacuousUntilJumpLands` STOOD HERE and its own header said to delete it the day the
-// predicate was filled, because "a vacuity pin that outlives its vacuity is a false comfort". Task
-// 27 fills it — and NOT with the enumerator the old fence anticipated. There is no `Launched`
-// state by design (user ruling 2026-09-12); the arm is keyed on what actually matters,
-// `committed && dot(velocity, up) > 0`, so it is FALSE for every horizontal knockback that ships today
-// and TRUE the day a lift is authored, with no enumerator knowledge at all.
-//
-// ⛔ BOTH ARMS ARE DRIVEN HERE, which is what the old case could not do. Two of the three inputs
-// are held while the third moves, so a predicate that ignored `committed`, or that ignored the
-// sign of the vertical channel, fails a named arm rather than passing by luck.
-// ⛔ STILL DOES NOT PROVE step 2 consults it — that wiring was verified under task 56 by poisoning
-// the predicate to `return true` and watching four hover cases go red together; the run is in
-// `impl/impl_notes_seam_56.md` §2. What IS new is that the poison is no longer the only way to
-// reach the true arm.
-// ---------------------------------------------------------------------------
-TEST_CASE("BrawlerMovement.XYKnockbackDoesNotDetach", "[BrawlerMovement]")
-{
-    using namespace movementTests;
-
-    movement::State state;
-
-    // ARM 1 -- NOT COMMITTED. Nothing detaches, at any vertical speed, with any flags bit set.
-    // This is the whole of the old vacuity case, kept: it is the shipped answer for walking,
-    // braking, falling and flinching, and the arm every other case in this file runs under.
-    for (const float vz : { 0.f, 50.f, -50.f })
-    {
-        state.velocity = simFrame::withHeight(glm::vec3(0.f), vz);
-        for (const std::uint8_t flags : { std::uint8_t(0u), std::uint8_t(0xFFu) })
-        {
-            state.flags = flags;
-            INFO("uncommitted vz=" << vz << " flags=0x" << std::hex << int(flags));
-            REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, false));
-        }
-    }
-
-    // ARM 2 -- COMMITTED AND PURELY HORIZONTAL: the shipped knockback. `hitDirectionXY` is a horizontal
-    // (forward, right) unit vector and the assignment writes the tangential channels only, so the vertical channel
-    // is whatever the hover servo left there. On flat ground in the steady state that is exactly
-    // zero, and `> 0.f` is STRICT, so a 5 m shove stays SUPPORTED and keeps its hover.
-    state.flags = 0u;
-    state.velocity = glm::vec3(-20.f, 0.f, -20.f);
-    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, true));
-
-    // ...and a committed body still SETTLING downward does not detach either. Detaching on a
-    // negative vertical channel would drop a knockback out of support on any tick the servo is
-    // pulling it back to ride height.
-    state.velocity = glm::vec3(0.f, -0.01f, -20.f);
-    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, true));
-
-    // ARM 3 -- COMMITTED AND RISING: the arm the fence was written for, and the one an authored
-    // lift (a launcher, a ski jump) reaches without adding a single enumerator.
-    state.velocity = glm::vec3(0.f, 0.01f, -0.f);
-    REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, true));
-    state.velocity = glm::vec3(0.f, 20.f, -20.f);
-    REQUIRE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, true));
-
-    // ⭐ THE DISCRIMINATOR. The same rising velocity, uncommitted, does NOT detach — which is what
-    // makes arm 3 a statement about `committed` and not merely about the sign of `vz`. Without
-    // this line a predicate that read `dot(velocity, up) > 0` alone would pass every arm above,
-    // and `UpwardLaunchIsDampedNotOverwritten` — which seeds exactly this velocity while
-    // uncommitted — would have started detaching silently.
-    REQUIRE_FALSE(movement::detachesFromSupport(state, movement::kWorldUp, movement::kWorldUp, false));
 }
 
 // ===========================================================================
@@ -2944,9 +2876,9 @@ struct WorldSweepQueryAdapter
 
     void configureFrom(const movement::StaticData& sd)
     {
-        // The probe is index 0 under either law; V2 also declares the centre probe at index 1 [ga task 36].
+        // The probe is index 0 and the centre probe index 1 [ga tasks 36, 37].
         const std::vector<QueryVolumeDescriptor> volumes = movement::PhysicsSetup::queryVolumes(sd);
-        REQUIRE(volumes.size() == (sd.supportLaw == movement::SupportLaw::V2 ? 2u : 1u));
+        REQUIRE(volumes.size() == 2u);
         const CapsuleGeometry* capsule = std::get_if<CapsuleGeometry>(&volumes[0].geometry);
         REQUIRE(capsule != nullptr);
         probeRadius     = capsule->radius;
@@ -4142,8 +4074,10 @@ TEST_CASE("BrawlerMovement.KnockbackHitLaunches", "[BrawlerMovement]")
          << simFrame::height(rig.state.velocity) << ") for direction (" << first.x << ", " << first.y << ")");
     REQUIRE(simFrame::forwardRight(rig.state.velocity).x == Catch::Approx(first.x * rig.knockbackSpeed()).margin(1e-4f));
     REQUIRE(simFrame::forwardRight(rig.state.velocity).y == Catch::Approx(-first.y * rig.knockbackSpeed()).margin(1e-4f));
-    // ⭐ THE SPEED IS THE SPEED, not its projection: `u` and `v` are orthonormal, so mapping the
-    // horizontal world direction onto them component-wise preserves the magnitude exactly.
+    // ⭐ THE SPEED IS THE SPEED, not its projection: the hit tick writes the unit world direction times
+    // the knockback speed and the decomposition into `u`, `v` and `up` is exact, so the magnitude is
+    // preserved. (Until og-ground-aligned-attacks task 37 the Legacy law mapped the chart direction onto
+    // the orthonormal `u` and `v` component-wise instead; on flat ground the two agree.)
     REQUIRE(glm::length(simFrame::forwardRight(rig.state.velocity))
             == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
 
@@ -4265,84 +4199,6 @@ TEST_CASE("BrawlerMovement.HoldGuardDoesNotFreezeASlide", "[BrawlerMovement]")
     walking.state.velocity = glm::vec3(0.f, 0.f, -walking.sd.maxWalkSpeed);
     walking.tick(1u, stick(1.f, 0.f), movement::kInputFlagHoldGuard);
     REQUIRE(walking.state.velocity == glm::vec3(0.f));
-}
-
-// ---------------------------------------------------------------------------
-// ⭐⭐ A SHOVE ON A SLOPE STAYS ON THE SLOPE. The hit direction is a horizontal (forward, right) unit vector and
-// it is mapped into the tangent frame COMPONENT-WISE (`d.x -> u`, `d.y -> v`), which is exact
-// because `buildTangentFrame` makes `u`'s horizontal projection forward-aligned and `v` horizontal
-// whenever the normal is walkable. The consequences, both measured here: the launched velocity is
-// PERPENDICULAR to the surface normal, and its horizontal speed is `knockbackSpeed * cos(theta)`
-// -- the character covers 5 m ALONG THE FACE, not 5 m of ground.
-//
-// ⛔ THE PLAUSIBLE WRONG EDIT this case exists to catch is
-// `glm::vec2(dot(dWorld, u), dot(dWorld, v))` -- the projection. It is the reflex spelling, it is
-// dimensionally innocent, and on a 30 degree face it launches at 17.32 m/s instead of 20, losing
-// 13.4 % of the user's 5 m. See `docs/BrawlerMovementSimulation-rationale.md` D-06.
-// [movement-sim task 27]
-// ---------------------------------------------------------------------------
-TEST_CASE("BrawlerMovement.SlopeKnockbackStaysOnSlope", "[BrawlerMovement]")
-{
-    using namespace movementTests;
-
-    const float theta = 30.f;
-    const glm::vec3 n = slopeNormal(theta);
-
-    // [ga task 36] LEGACY BY NAME: this case is the Legacy law's D-06 component-wise mapping. SupportLaw::V2
-    // writes the world direction and redirects a hit into the face along it (17.32 m/s here, the projection by
-    // design: `GroundAlignedKnockback.V2HitTickIntoTheFaceGivesTheProjectedVelocity`). Retired with Legacy.
-    ScriptedRig rig;
-    rig.sd.supportLaw = movement::SupportLaw::Legacy;
-    rig.query.scriptedSweeps = { floorHitAt(rig.sd.rideHeight, rig.probeLength(), n) };
-    rig.state.bodyState.position = simFrame::withHeight(glm::vec3(0.f), 0.96f + rig.sd.rideHeight);
-
-    rig.hit(HitReactionKind::Knockback, glm::vec2(1.f, 0.f), 0.f);
-    rig.tick(1u, stick(0.f, 0.f));
-
-    const glm::vec3 velocity = rig.state.velocity;
-    const float horizontal = glm::length(simFrame::forwardRight(velocity));
-    INFO("30 deg face: v=(" << simFrame::forwardRight(velocity).x << ", " << simFrame::forwardRight(velocity).y << ", " << simFrame::height(velocity)
-         << ")  |v|=" << glm::length(velocity) << "  horizontal=" << horizontal
-         << "  expected horizontal=" << (rig.knockbackSpeed() * glm::cos(glm::radians(theta)))
-         << "  dot(v, n)=" << glm::dot(velocity, n));
-
-    REQUIRE(rig.support() == movement::SupportState::Supported);
-    // 1. ON the face: no component into or out of it.
-    REQUIRE(glm::dot(velocity, n) == Catch::Approx(0.f).margin(1e-4f));
-    // 2. AT the authored speed, along the face -- this is the row the projection spelling fails.
-    REQUIRE(glm::length(velocity) == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
-    // 3. ...so the HORIZONTAL speed is knockbackSpeed * cos(theta), and the case names the number
-    //    the wrong spelling would have produced as the full speed.
-    REQUIRE(horizontal
-            == Catch::Approx(rig.knockbackSpeed() * glm::cos(glm::radians(theta))).margin(1e-4f));
-    REQUIRE(simFrame::height(velocity)
-            == Catch::Approx(rig.knockbackSpeed() * glm::sin(glm::radians(theta))).margin(1e-4f));
-    // ...and the two are genuinely different, so row 2 discriminates.
-    REQUIRE(glm::abs(glm::length(velocity) - horizontal) > 1.f);
-
-    // 4. THE CHANNELS, read back through the file's own independent dual basis: all of the speed
-    //    is in `u`, none in `v`, and the vertical channel is untouched by the assignment.
-    const glm::vec3 channels = channelsOf(velocity, n);
-    REQUIRE(channels.x == Catch::Approx(rig.knockbackSpeed()).margin(1e-4f));
-    REQUIRE(channels.y == Catch::Approx(0.f).margin(1e-4f));
-    REQUIRE(channels.z == Catch::Approx(0.f).margin(1e-4f));
-
-    // THE UP-SLOPE SHOVE KEEPS ITS HOVER HOLD [og-ground-aligned-attacks task 10]. Task 27's detach
-    // arm was `committed && dot(velocity, up) > 0` -- WORLD height -- and on a slope an up-slope
-    // shove carries `knockbackSpeed * sin(theta)` of it (10 m/s here), so until the flip the NEXT
-    // tick's step 2 detached it (the finding task 27 measured and routed in
-    // `impl/impl_notes_seam_27.md`). Since the flip the lift test on a non-flat face is the
-    // surface-relative one (`detachesFromSupport(state, up, face, committed)`, og-ground-aligned-attacks
-    // task 13): `dot(velocity, face) > kMinLaunchSine * |velocity|`, and a velocity in the face has
-    // `dot(v, n) == 0`, so the slide stays Supported. The world-height premise is still asserted, so
-    // the row is about the arm and not about a shove with no world height.
-    rig.tick(2u, stick(0.f, 0.f));
-    INFO("tick 2 on the face: support=" << int(rig.support())
-         << " (0 Unsupported, 1 Supported)  v.z=" << simFrame::height(rig.state.velocity)
-         << "  -- world z carries the TANGENTIAL channel on a slope; the vertical CHANNEL is "
-         << channelsOf(rig.state.velocity, n).z);
-    REQUIRE(glm::dot(velocity, movement::kWorldUp) > 0.f);
-    REQUIRE(rig.support() == movement::SupportState::Supported);
 }
 
 // ---------------------------------------------------------------------------
@@ -4504,14 +4360,15 @@ TEST_CASE("BrawlerMovement.AttackSlideDirectionIsLockedAgainstTheStick", "[Brawl
 
 // ---------------------------------------------------------------------------
 // ⭐⭐ A SLIDE UP A SLOPE KEEPS ITS HOVER HOLD, and this is the case the whole branch placement
-// exists for. `locked` is NOT a tenant of the `committed` arm: `committed` also feeds
-// `detachesFromSupport(state, up, face, committed)` (⛔G-07). Until og-ground-aligned-attacks task 10
-// that was `committed && dot(velocity, up) > 0` on every face, and a tangential slide up a face
-// carries world z, so folding this law into `committed` would have detached the character and flown
-// it off the slope. Since the flip a non-flat face takes the surface-relative arm
-// (`committed && dot(velocity, face) > kMinLaunchSine * |velocity|`, task 13), under which a
-// same-face slide stays Supported whether or not it is committed (`SlopeKnockbackStaysOnSlope`);
-// the rows below still pin the attack slide's ramp and hold. The control arm below shows the SAME
+// exists for. `locked` is NOT a tenant of the `committed` arm: `committed` also feeds step 2's
+// classification (`classifySupport`). Until og-ground-aligned-attacks task 10 its detach arm was
+// `committed && dot(velocity, up) > 0` on every face, and a tangential slide up a face carries
+// world z, so folding this law into `committed` would have detached the character and flown it off
+// the slope. Since og-ground-aligned-attacks task 37 the support law v2 is the only law: a committed
+// body detaches on a written hit tick whose direction leaves its face, or at or above its hover when
+// `dot(velocity, n)` passes the separation floor, so a same-face slide (`dot(v, n) == 0`) stays
+// Supported whether or not it is committed; the rows below still pin the attack slide's ramp and
+// hold. The control arm below shows the SAME
 // fixture detaching a committed velocity that LEAVES the face, so the hold is not a fixture that
 // could never detach.
 // ---------------------------------------------------------------------------

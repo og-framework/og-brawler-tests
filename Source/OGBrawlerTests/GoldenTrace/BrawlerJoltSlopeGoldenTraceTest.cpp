@@ -82,16 +82,6 @@ namespace
 using SlopeScenario = goldenTraceSlopeScenario::Scenario;
 using SlopeScene = goldenTraceScene::Scene<SlopeScenario>;
 
-struct SlopeScenarioUnderLegacy : SlopeScenario
-{
-    static void configureStaticData(simulatableBrawler::StaticData& staticData)
-    {
-        staticData.m_movementStaticData.supportLaw = brawlerMovementSimulation::SupportLaw::Legacy;
-    }
-};
-
-static_assert(goldenTraceScene::Scenario<SlopeScenarioUnderLegacy>, "the slope scenario under the legacy support law is a scenario");
-
 inline constexpr double kNormalTolerance = 1e-6;
 inline constexpr double kFaceInteriorMargin = 0.5;
 inline constexpr double kOnFaceDistance = 1e-3;
@@ -685,10 +675,9 @@ double largestOutOfPlane(const SlopeMeasurements& measured)
     return largest;
 }
 
-void printSlopeMeasurements(const SlopeMeasurements& measured, const char* law = "")
+void printSlopeMeasurements(const SlopeMeasurements& measured)
 {
     std::string line = "[GoldenTrace.slope]";
-    line += law;
     char buffer[768];
     uint32_t tiltedSwings = 0u;
     for (const SwingRecord& swing : measured.swings)
@@ -762,20 +751,6 @@ TEST_CASE("BrawlerJoltSlopeGoldenTrace.PrintsTheSlopeMeasurements", "[GoldenTrac
     const SlopeMeasurements& measured = theSlope();
     printSlopeMeasurements(measured);
     REQUIRE(measured.slopeTicks > 0u);
-}
-
-TEST_CASE("BrawlerJoltSlopeGoldenTrace.PrintsTheSlopeMeasurementsUnderLegacy", "[GoldenTrace]")
-{
-    const SlopeMeasurements measured = measureTheSlope<SlopeScenarioUnderLegacy>();
-    printSlopeMeasurements(measured, " law=legacy");
-    const goldenTrace::Trace live = goldenTraceScene::runScenario<SlopeScenarioUnderLegacy>();
-    const goldenTrace::CompareResult against = goldenTrace::compareExact(recordedSlopeGolden(), live);
-    std::printf("[GoldenTrace.legacyAgainstTheRecording] scenario=slope samples=%zu values=%zu mismatchingValues=%zu "
-                "samplesPassedBeforeFirstMismatch=%u first=%s\n",
-        against.comparedSamples, live.values.size(), against.mismatchingValues, against.ticksPassedBeforeFirstMismatch,
-        against.firstMismatch.empty() ? "none" : against.firstMismatch.c_str());
-    REQUIRE(measured.slopeTicks > 0u);
-    CHECK(against.schemaProblem == "");
 }
 
 TEST_CASE("BrawlerJoltSlopeGoldenTrace.SwingsFollowTheGround", "[GoldenTrace]")

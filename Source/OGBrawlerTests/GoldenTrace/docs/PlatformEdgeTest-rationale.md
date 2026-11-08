@@ -1,10 +1,19 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- lint-external-ref: PlatformEdge.KnockbacksAcrossTheImportedPlatformRims -- a RETIRED Catch2 case -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records what it measured (the Legacy run) -->
+<!-- lint-external-ref: supportLawName -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: SupportLaw::Legacy -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: SupportLaw::V2 -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: gSupportLaw -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: SupportLawScope -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: EdgeScenario::configureStaticData -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: lawTag -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
 # PlatformEdgeTest — rationale
 
 Source: `PlatformEdgeTest.cpp`, with its data in `QuarterCylinderPlatform.inl`. This file has no guards document: nothing in
 either file needs a `⛔` tag. The harness is described in `GoldenTraceScene-rationale.md`.
 
-`PlatformEdge.KnockbacksAcrossTheImportedPlatformRims` (`[GoldenTrace]`, no golden) is the measuring rig of the
+`PlatformEdge.KnockbacksAcrossTheImportedPlatformRimsUnderV2` (`[GoldenTrace]`, no golden; until og-ground-aligned-attacks
+task 37 also `PlatformEdge.KnockbacksAcrossTheImportedPlatformRims`, the Legacy law's run, §8) is the measuring rig of the
 ground-aligned attacks initiative's task 23. It knocks a brawler across the rims of the dev level's 30° slope platform
 with real melee swings, records every tick of the target's movement, and prints what changed its vertical speed. It
 asserts only that its own instruments agree with the movement law (§5). It is a baseline: tasks 14b and 24 re-run it and
@@ -96,8 +105,9 @@ compare its printed lines (§7).
 - **The mirror.** `mirrorIntegrate` recomputes the step's velocity from those inputs with the movement's own helpers
   (the `GroundSupport` from `estimateSupport`, then `writesKnockbackVelocity`, `classifySupport`, `buildTangentFrame`, `decomposeVelocity`,
   `moveTowards`, `computeDesiredVelocityUV_ContinuousAccelBrake`) and the servo expression of `integrate`. Since
-  og-ground-aligned-attacks task 34 a V2 run takes `writesKnockbackVelocityV2` and `classifySupportV2` in place of the
-  first two, and its hit-tick channels are `currentUV` on every hit tick, as in `integrate`. Since
+  og-ground-aligned-attacks task 34 a V2 run took the support law v2's write and classification in place of the
+  first two, with the hit-tick channels `currentUV` on every hit tick, as in `integrate`; since task 37 those are the
+  only ones, under the two names above. Since
   og-ground-aligned-attacks task 35 a V2 run also applies the redirect into the face (`redirectsIntoFace`, then
   `v −= n · dot(v, n)`) after its classification and before its frame, as `integrate` does, and records the redirect's
   vertical change as `redirectDy` (0 on a tick it does not fire). Since
@@ -126,13 +136,15 @@ compare its printed lines (§7).
 - Every placement at least 1 m from a rim was reached.
 - On every tick except the teleport tick:
   - the mirror's velocity equals the stepped velocity to 1e-4 m/s, relative above 1 m/s (`mirrorMismatches`);
-  - the stepped support equals the mirror's `classifySupport` support, which is walkable-and-not-detached under the
-    Legacy law (`supportMismatches`; until task 32 the rig computed that expression itself);
+  - the stepped support equals the mirror's `classifySupport` support (`supportMismatches`; until task 32 the rig
+    computed the Legacy law's walkable-and-not-detached expression itself);
   - the recomputed push-out equals the recorded one (`pushOutMismatches`).
   These three are what make the printed attribution trustworthy. On 2026-11-02 they held on 88,356 ticks of 444 runs,
   after task 30 on 88,953 ticks of 447 runs, and after task 20 on 78,605 ticks of 395 runs.
-- Since og-ground-aligned-attacks task 31, the Legacy law's support counters (§8; Legacy shipped until task 36): 249 flips, 17 rim hangs and 435 lip
-  ticks over the 266 placements. They are checked only when every site runs and `supportLawName` is `legacy`.
+- Since og-ground-aligned-attacks task 37, the one law's support counters (§8): 214 flips, 17 rim hangs and 308 lip
+  ticks over the 266 placements, checked when every site runs. From task 31 to task 36 the pins were the Legacy law's
+  (249, 17 and 435, while `supportLawName` was `legacy`); task 37 moved them to the law that ships, the outcome counts
+  the rig keeps.
 - Since og-ground-aligned-attacks task 34's rework, under V2 only: every reached placement at d = −0.15 on a tip or
   tip-corner site (the six sites whose names start with `tip`, 16 placements) has a run-line `servo` of at most
   `kEventThreshold`, and when every site runs there are exactly 16 of them. These are the targets hanging past a tip,
@@ -298,7 +310,12 @@ pre-task capture that could be compared (its other 32 were garbled by interleave
   with OG_SUPPORT_LAW_RUNS=1. One totals line always prints after the decomposition line:
   `[SupportLaw.scorecard] law=… rig=platformEdge runs=… flips=… lifts=… downPulls=… rimHangs=… lipTicks=…`, where
   `runs` counts the reached placements (266), not the attempts of the summary line (395).
-- **The law** (since og-ground-aligned-attacks task 33). The case runs twice in one binary:
+- **One law since og-ground-aligned-attacks task 37.** The case runs once,
+  `PlatformEdge.KnockbacksAcrossTheImportedPlatformRimsUnderV2`, under the movement's one law. The law switch, the
+  scope and the scenario hook below are deleted, and every line keeps its ` law=v2` label, now a literal in each
+  format, so each line still compares byte for byte with the two-law record: all of them equal task 36's. The Legacy
+  lines and the Legacy pins are history; the initiative workspace's impl/support_law_baseline.md keeps the numbers.
+- **The law** (og-ground-aligned-attacks tasks 33 to 36). The case ran twice in one binary:
   `PlatformEdge.KnockbacksAcrossTheImportedPlatformRims` under `SupportLaw::Legacy` and
   `PlatformEdge.KnockbacksAcrossTheImportedPlatformRimsUnderV2` under `SupportLaw::V2`. Each sets `gSupportLaw` through a
   `SupportLawScope`, and `EdgeScenario::configureStaticData` writes it into the movement StaticData before the scene
@@ -312,7 +329,8 @@ pre-task capture that could be compared (its other 32 were garbled by interleave
     of the chosen runs.
   - ⚠ The scorecard line's `lipTicks` is the geometric counter above (a walkable GJK normal over an unwalkable exact
     face), under both laws; it is not V2's `Lip` kind, which the estimate line counts.
-  - The pins (flips 249, rimHangs 17, lipTicks 435) are checked under Legacy only.
+  - The pins (flips 249, rimHangs 17, lipTicks 435) were checked under Legacy only. Since task 37 they are the one
+    law's, 214, 17 and 308 (§5).
   - Since task 32 the mirror's ground and classification are the production `estimateSupport` and `classifySupport`,
     and since task 33 its frame is that classification's (§4). So the mirror follows either law, and
     `mirrorMismatches=0` and `supportMismatches=0` hold under both (measured in task 33). The rest of the mirror (the

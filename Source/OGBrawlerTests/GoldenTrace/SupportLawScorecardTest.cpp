@@ -77,23 +77,6 @@ inline constexpr glm::vec3 kFirstKnockback{ 1.f, 0.f, 0.f };
 inline constexpr glm::vec3 kFirstAttackerParking{ -25.f, 0.f, -25.f };
 inline constexpr uint32_t kFirstAttackerLeavesTicks = 2u;
 
-inline brawlerMovementSimulation::SupportLaw gSupportLaw = brawlerMovementSimulation::SupportLaw::Legacy;
-
-const char* supportLawName(const brawlerMovementSimulation::StaticData& sd)
-{
-    return sd.supportLaw == brawlerMovementSimulation::SupportLaw::V2 ? "v2" : "legacy";
-}
-
-const char* lawTag() { return gSupportLaw == brawlerMovementSimulation::SupportLaw::V2 ? " law=v2" : ""; }
-
-struct SupportLawScope
-{
-    explicit SupportLawScope(brawlerMovementSimulation::SupportLaw law) { gSupportLaw = law; }
-    ~SupportLawScope() { gSupportLaw = brawlerMovementSimulation::SupportLaw::Legacy; }
-    SupportLawScope(const SupportLawScope&) = delete;
-    SupportLawScope& operator=(const SupportLawScope&) = delete;
-};
-
 bool printsRuns()
 {
     return goldenTraceScene::environmentValue("OG_SUPPORT_LAW_RUNS").value_or("") == "1";
@@ -167,7 +150,6 @@ struct RigScenario
     static bool isSampleTick(uint32_t) { return false; }
     static StaticWorldDescription statics() { return world == World::Flat ? flatStatics() : goldenTraceSlopeScenario::slopeStatics(); }
     static simulatableBrawler::StaticData staticData(float gravityScale) { return scorecardStaticData(gravityScale); }
-    static void configureStaticData(simulatableBrawler::StaticData& staticData) { staticData.m_movementStaticData.supportLaw = gSupportLaw; }
     static simulatableBrawler::PlayerInput inputAt(unsigned int id, uint32_t tick)
     {
         for (const InputRow& row : script)
@@ -214,7 +196,6 @@ struct RigRun
     float slideEndSpeed = 0.f;
     float gravityStep = 0.f;
     float decelStep = 0.f;
-    const char* law = "";
 };
 
 glm::vec3 velocityEnteringTheRedirect(const brawlerMovementSimulation::State& pre, const brawlerMovementSimulation::StaticData& sd,
@@ -234,7 +215,7 @@ glm::vec3 velocityEnteringTheRedirect(const brawlerMovementSimulation::State& pr
                 velocity -= glm::dot(velocity, contactNormal) * contactNormal;
         }
     }
-    if (writesKnockbackVelocityV2(inbound, committed))
+    if (writesKnockbackVelocity(inbound, committed))
         velocity = inbound.hitDirectionWorld * inbound.knockbackSpeed;
     return velocity;
 }
@@ -251,7 +232,6 @@ RigRun runRig(World world, const std::vector<RigActor>& actors, const std::vecto
     run.slideEndSpeed = kSlideEndFraction * scene.staticData.m_hitReactions[0].knockbackSpeed;
     run.gravityStep = sd.gravity * RigScenario::kDtSeconds;
     run.decelStep = sd.launchDecel * RigScenario::kDtSeconds;
-    run.law = supportLawName(sd);
     for (uint32_t tick = 1u; tick <= kRunTicks; ++tick)
     {
         const SimulatableBrawler& before = scene.storage.template get<SimulatableBrawler>(kTarget);
@@ -474,8 +454,8 @@ std::optional<MeleeChoice> meleeAttempt(const MeleeSetup& setup, const MeleeCand
     if (printsRuns())
     {
         const std::optional<std::size_t> anyHit = firstHitIndex(choice.run, setup.measureFromTick, std::nullopt);
-        std::printf("[SupportLaw.attempt]%s at=(%.2f,%.2f,%.2f) heading=(%.3f,%.3f) radius=%.1f sign=%+.0f side=%s shift=%+.2f swing=%u hit=%u "
-                    "inRange=%d dirCos=%.4f firstHit=%u firstReaction=%u\n", lawTag(),
+        std::printf("[SupportLaw.attempt] law=v2 at=(%.2f,%.2f,%.2f) heading=(%.3f,%.3f) radius=%.1f sign=%+.0f side=%s shift=%+.2f swing=%u hit=%u "
+                    "inRange=%d dirCos=%.4f firstHit=%u firstReaction=%u\n",
             double(setup.targetAt.x), double(setup.targetAt.y), double(setup.targetAt.z), double(setup.heading.x), double(setup.heading.z),
             double(radius), double(sign), side == Swing::Right ? "R" : "L", double(candidate.shift), swingTick, hitTick, inRange ? 1 : 0,
             double(choice.directionCos), anyHit.has_value() ? choice.run.rows[*anyHit].tick : 0u,
@@ -547,7 +527,6 @@ struct FlatRun
 
 struct FlatTotals
 {
-    const char* law = "";
     uint32_t runs = 0u;
     uint32_t flips = 0u;
     uint32_t flickerRuns = 0u;
@@ -585,15 +564,15 @@ FlatRun measureFlat(FlatState state, float headingDeg, const MeleeChoice& choice
 
 void printFlatRun(const FlatRun& r, const RigRun& run)
 {
-    std::printf("[SupportLaw.flat.run] law=%s state=%s dir=%.0f hit=%u delay=%u dirCos=%.4f hitClr=%.5f preHitVy=%.3e exit=%u flips=%u "
+    std::printf("[SupportLaw.flat.run] law=v2 state=%s dir=%.0f hit=%u delay=%u dirCos=%.4f hitClr=%.5f preHitVy=%.3e exit=%u flips=%u "
                 "unsupported=%u apexM=%.4f slideM=%.4f slideEndTicks=%u\n",
-        run.law, flatStateName(r.state), double(r.headingDeg), r.hitTick, r.delayTicks, double(r.directionCos), double(r.hitClearance),
+        flatStateName(r.state), double(r.headingDeg), r.hitTick, r.delayTicks, double(r.directionCos), double(r.hitClearance),
         double(r.preHitVy), r.exitTick, r.flips, r.unsupported, double(r.apexM), double(r.slideM), r.slideEndTicks);
     for (const TickRow& row : run.rows)
     {
         if (row.tick + 2u < r.hitTick || row.tick > r.exitTick + 2u)
             continue;
-        std::printf("[SupportLaw.flat.tick]%s state=%s dir=%.0f t=%u rel=%d sup=%s clr=%.5f vy=%.5f |v|=%.4f flinch=%d hit=%d\n", lawTag(),
+        std::printf("[SupportLaw.flat.tick] law=v2 state=%s dir=%.0f t=%u rel=%d sup=%s clr=%.5f vy=%.5f |v|=%.4f flinch=%d hit=%d\n",
             flatStateName(r.state), double(r.headingDeg), row.tick, int(row.tick) - int(r.hitTick), supportName(row.support),
             double(row.clearance), double(row.velocity.y), double(glm::length(row.velocity)), row.hitFlinch ? 1 : 0, row.hit ? 1 : 0);
     }
@@ -661,10 +640,9 @@ FlatTotals runFlatRig()
             CHECK(choice.has_value());
             if (!choice.has_value())
             {
-                std::printf("[SupportLaw.flat.unreachable]%s state=%s dir=%.0f\n", lawTag(), flatStateName(state), double(headingDeg));
+                std::printf("[SupportLaw.flat.unreachable] law=v2 state=%s dir=%.0f\n", flatStateName(state), double(headingDeg));
                 continue;
             }
-            totals.law = choice->run.law;
             sourceMismatches += choice->run.supportSourceMismatches;
             results.push_back(measureFlat(state, headingDeg, *choice, referenceTick));
             if (printRuns)
@@ -690,9 +668,9 @@ FlatTotals runFlatRig()
             part.unsupported += r.unsupported;
             part.slideEndTicks += r.slideEndTicks;
         }
-        std::printf("[SupportLaw.flat.state] law=%s state=%s runs=%u flips=%u flickerRuns=%u unsupported=%u apexMaxM=%.4f slideMinM=%.4f "
+        std::printf("[SupportLaw.flat.state] law=v2 state=%s runs=%u flips=%u flickerRuns=%u unsupported=%u apexMaxM=%.4f slideMinM=%.4f "
                     "slideMaxM=%.4f slideEndTicks=%u\n",
-            totals.law, flatStateName(state), part.runs, part.flips, part.flickerRuns, part.unsupported, double(part.apexMaxM),
+            flatStateName(state), part.runs, part.flips, part.flickerRuns, part.unsupported, double(part.apexMaxM),
             double(part.slideMinM), double(part.slideMaxM), part.slideEndTicks);
         if (!any)
             continue;
@@ -711,7 +689,7 @@ FlatTotals runFlatRig()
         totals.apexSumM += r.apexM;
         totals.slideSumM += r.slideM;
     }
-    std::printf("[SupportLaw.scorecard] law=%s rig=flat runs=%u flips=%u apexMaxM=%.4f slideEndTicks=%u\n", totals.law, totals.runs,
+    std::printf("[SupportLaw.scorecard] law=v2 rig=flat runs=%u flips=%u apexMaxM=%.4f slideEndTicks=%u\n", totals.runs,
         totals.flips, double(totals.apexMaxM), totals.slideEndTicks);
     CHECK(sourceMismatches == 0u);
     return totals;
@@ -791,7 +769,6 @@ struct CreaseRun
 
 struct CreaseTotals
 {
-    const char* law = "";
     uint32_t runs = 0u;
     uint32_t crossed = 0u;
     uint32_t flips = 0u;
@@ -884,18 +861,18 @@ CreaseRun measureCrease(const Crossing& crossing, CreaseKind kind, float distanc
 
 void printCreaseRun(const CreaseRun& r, const RigRun& run)
 {
-    std::printf("[SupportLaw.crease.run] law=%s crossing=%s kind=%s d=%.1f obl=%+.0f start=%u dirCos=%.4f speed=%.2f windowEnd=%u crossed=%d "
+    std::printf("[SupportLaw.crease.run] law=v2 crossing=%s kind=%s d=%.1f obl=%+.0f start=%u dirCos=%.4f speed=%.2f windowEnd=%u crossed=%d "
                 "cross=%u unsupported=%u flips=%u apexM=%.4f hop=%d offWorld=%d speedBefore=%.4f inPlaneAfter=%.4f vyDepart=%.4f "
                 "vSinTheta=%.4f slideEndTicks=%u\n",
-        run.law, r.crossing->name, creaseKindName(r.kind), double(r.distance), double(r.obliqueDeg), r.startTick, double(r.directionCos),
+        r.crossing->name, creaseKindName(r.kind), double(r.distance), double(r.obliqueDeg), r.startTick, double(r.directionCos),
         double(r.knockbackSpeed), r.windowEndTick, r.crossed ? 1 : 0, r.crossTick, r.unsupportedAfter, r.flipsAfter, double(r.apexM),
         r.hop ? 1 : 0, r.offWorld ? 1 : 0, double(r.speedBefore), double(r.inPlaneAfter), double(r.vyDepart), double(r.vSinTheta),
         r.slideEndTicks);
-    if (gSupportLaw == brawlerMovementSimulation::SupportLaw::V2 && r.crossing->convex && r.committedCrossing)
+    if (r.crossing->convex && r.committedCrossing)
         std::printf("[SupportLaw.crease.departure] law=v2 crossing=%s kind=%s d=%.1f obl=%+.0f cross=%u depart=%u ballisticErrMps=%.4f\n",
             r.crossing->name, creaseKindName(r.kind), double(r.distance), double(r.obliqueDeg), r.crossTick, r.departTick,
             double(r.ballisticErrMps));
-    if (gSupportLaw == brawlerMovementSimulation::SupportLaw::V2 && !r.crossing->convex && r.committedCrossing)
+    if (!r.crossing->convex && r.committedCrossing)
         std::printf("[SupportLaw.crease.redirect] law=v2 crossing=%s kind=%s d=%.1f obl=%+.0f cross=%u redirect=%u speedIn=%.4f thetaDeg=%.4f "
                     "expectedMps=%.4f inPlaneMps=%.4f errMps=%.6f minProbeClearanceM=%.5f unsupported=%u\n",
             r.crossing->name, creaseKindName(r.kind), double(r.distance), double(r.obliqueDeg), r.crossTick, r.redirectTick,
@@ -906,8 +883,8 @@ void printCreaseRun(const CreaseRun& r, const RigRun& run)
     {
         if (row.tick + 2u < r.startTick || row.tick > last)
             continue;
-        std::printf("[SupportLaw.crease.tick]%s crossing=%s kind=%s d=%.1f obl=%+.0f t=%u rel=%d z=%.4f y=%.4f sup=%s clr=%.5f vy=%.5f "
-                    "|v|=%.4f flinch=%d hit=%d\n", lawTag(),
+        std::printf("[SupportLaw.crease.tick] law=v2 crossing=%s kind=%s d=%.1f obl=%+.0f t=%u rel=%d z=%.4f y=%.4f sup=%s clr=%.5f vy=%.5f "
+                    "|v|=%.4f flinch=%d hit=%d\n",
             r.crossing->name, creaseKindName(r.kind), double(r.distance), double(r.obliqueDeg), row.tick, int(row.tick) - int(r.startTick),
             double(row.position.z), double(row.position.y), supportName(row.support), double(row.clearance), double(row.velocity.y),
             double(glm::length(row.velocity)), row.hitFlinch ? 1 : 0, row.hit ? 1 : 0);
@@ -1036,11 +1013,10 @@ CreaseTotals runCreaseRig()
                 CHECK(choice.has_value());
                 if (!choice.has_value())
                 {
-                    std::printf("[SupportLaw.crease.unreachable]%s crossing=%s kind=melee d=%.1f obl=%+.0f\n", lawTag(), crossing.name, double(distance),
+                    std::printf("[SupportLaw.crease.unreachable] law=v2 crossing=%s kind=melee d=%.1f obl=%+.0f\n", crossing.name, double(distance),
                         double(oblique));
                     continue;
                 }
-                totals.law = choice->run.law;
                 sourceMismatches += choice->run.supportSourceMismatches;
                 results.push_back(measureCrease(crossing, CreaseKind::Melee, distance, oblique, choice->run, choice->hitIndex,
                     lockoutEndIndex(choice->run, choice->hitIndex), choice->directionCos));
@@ -1064,7 +1040,7 @@ CreaseTotals runCreaseRig()
         }
         else
         {
-            std::printf("[SupportLaw.crease.unreachable]%s crossing=%s kind=projectile d=%.1f obl=+0\n", lawTag(), crossing.name, double(kProjectileDistance));
+            std::printf("[SupportLaw.crease.unreachable] law=v2 crossing=%s kind=projectile d=%.1f obl=+0\n", crossing.name, double(kProjectileDistance));
         }
 
         const glm::vec3 walkAt = creaseStart(crossing, kCreaseWalkStartM);
@@ -1110,9 +1086,9 @@ CreaseTotals runCreaseRig()
             }
         }
         totals.convexVyErrMaxMps = std::max(totals.convexVyErrMaxMps, worstDepartureErr);
-        std::printf("[SupportLaw.crease.crossing] law=%s crossing=%s convex=%d runs=%u crossed=%u hops=%u unsupported=%u flips=%u apexMaxM=%.4f "
+        std::printf("[SupportLaw.crease.crossing] law=v2 crossing=%s convex=%d runs=%u crossed=%u hops=%u unsupported=%u flips=%u apexMaxM=%.4f "
                     "offWorld=%u inPlaneMinMps=%.4f inPlaneMaxMps=%.4f convexVyErrMaxMps=%.4f slideEndTicks=%u\n",
-            totals.law, crossing.name, crossing.convex ? 1 : 0, part.runs, part.crossed, part.hops, part.unsupported, part.flips,
+            crossing.name, crossing.convex ? 1 : 0, part.runs, part.crossed, part.hops, part.unsupported, part.flips,
             double(part.apexMaxM), part.offWorld, double(part.inPlaneMinMps), double(part.inPlaneMaxMps), double(worstDepartureErr),
             part.slideEndTicks);
         totals.runs += part.runs;
@@ -1129,11 +1105,10 @@ CreaseTotals runCreaseRig()
         totals.inPlaneMaxMps = anyRun ? std::max(totals.inPlaneMaxMps, part.inPlaneMaxMps) : part.inPlaneMaxMps;
         anyRun = true;
     }
-    std::printf("[SupportLaw.scorecard] law=%s rig=crease runs=%u flips=%u hops=%u apexMaxM=%.4f slideEndTicks=%u\n", totals.law, totals.runs,
+    std::printf("[SupportLaw.scorecard] law=v2 rig=crease runs=%u flips=%u hops=%u apexMaxM=%.4f slideEndTicks=%u\n", totals.runs,
         totals.flips, totals.hops, double(totals.apexMaxM), totals.slideEndTicks);
     CHECK(sourceMismatches == 0u);
-    if (gSupportLaw == brawlerMovementSimulation::SupportLaw::V2)
-        checkV2Crease(results);
+    checkV2Crease(results);
     return totals;
 }
 
@@ -1142,28 +1117,14 @@ void flatKnockbacks()
     const FlatTotals totals = runFlatRig();
     CHECK(totals.runs == 3u * kFlatDirections);
     if (printsRuns())
-        std::printf("[SupportLaw.pin]%s rig=flat flips=%u flickerRuns=%u unsupported=%u slideEndTicks=%u apexMaxM=%.4f apexSumM=%.4f slideMinM=%.4f "
-                    "slideMaxM=%.4f slideSumM=%.4f\n", lawTag(),
+        std::printf("[SupportLaw.pin] law=v2 rig=flat flips=%u flickerRuns=%u unsupported=%u slideEndTicks=%u apexMaxM=%.4f apexSumM=%.4f slideMinM=%.4f "
+                    "slideMaxM=%.4f slideSumM=%.4f\n",
             totals.flips, totals.flickerRuns, totals.unsupported, totals.slideEndTicks, double(totals.apexMaxM), double(totals.apexSumM),
             double(totals.slideMinM), double(totals.slideMaxM), double(totals.slideSumM));
-    if (std::string(totals.law) == "v2")
-    {
-        checkPin("flat", "flips", totals.flips, 0u);
-        checkPin("flat", "flickerRuns", totals.flickerRuns, 0u);
-        checkPin("flat", "unsupported", totals.unsupported, 0u);
-        checkPin("flat", "slideEndTicks", totals.slideEndTicks, 0u);
-    }
-    if (std::string(totals.law) != "legacy")
-        return;
-    checkPin("flat", "flips", totals.flips, 1803u);
-    checkPin("flat", "flickerRuns", totals.flickerRuns, 60u);
-    checkPin("flat", "unsupported", totals.unsupported, 900u);
-    checkPin("flat", "slideEndTicks", totals.slideEndTicks, 120u);
-    checkPin("flat", "apexMaxM", totals.apexMaxM, 0.f);
-    checkPin("flat", "apexSumM", totals.apexSumM, -0.0214f);
-    checkPin("flat", "slideMinM", totals.slideMinM, 5.1658f);
-    checkPin("flat", "slideMaxM", totals.slideMaxM, 5.1658f);
-    checkPin("flat", "slideSumM", totals.slideSumM, 309.9488f);
+    checkPin("flat", "flips", totals.flips, 0u);
+    checkPin("flat", "flickerRuns", totals.flickerRuns, 0u);
+    checkPin("flat", "unsupported", totals.unsupported, 0u);
+    checkPin("flat", "slideEndTicks", totals.slideEndTicks, 0u);
 }
 
 void creaseCrossings()
@@ -1171,49 +1132,20 @@ void creaseCrossings()
     const CreaseTotals totals = runCreaseRig();
     CHECK(totals.runs == uint32_t(kCrossings.size() * (kCreaseDistances.size() * kCreaseObliqueDeg.size() + 2u)));
     if (printsRuns())
-        std::printf("[SupportLaw.pin]%s rig=crease crossed=%u flips=%u hops=%u unsupported=%u slideEndTicks=%u offWorld=%u apexMaxM=%.4f apexSumM=%.4f "
-                    "inPlaneMinMps=%.4f inPlaneMaxMps=%.4f inPlaneSumMps=%.4f convexVyErrMaxMps=%.4f convexVyErrSumMps=%.4f\n", lawTag(),
+        std::printf("[SupportLaw.pin] law=v2 rig=crease crossed=%u flips=%u hops=%u unsupported=%u slideEndTicks=%u offWorld=%u apexMaxM=%.4f apexSumM=%.4f "
+                    "inPlaneMinMps=%.4f inPlaneMaxMps=%.4f inPlaneSumMps=%.4f convexVyErrMaxMps=%.4f convexVyErrSumMps=%.4f\n",
             totals.crossed, totals.flips, totals.hops, totals.unsupported, totals.slideEndTicks, totals.offWorld, double(totals.apexMaxM),
             double(totals.apexSumM), double(totals.inPlaneMinMps), double(totals.inPlaneMaxMps), double(totals.inPlaneSumMps),
             double(totals.convexVyErrMaxMps), double(totals.convexVyErrSumMps));
-    if (std::string(totals.law) != "legacy")
-        return;
-    checkPin("crease", "crossed", totals.crossed, 50u);
-    checkPin("crease", "flips", totals.flips, 79u);
-    checkPin("crease", "hops", totals.hops, 40u);
-    checkPin("crease", "unsupported", totals.unsupported, 792u);
-    checkPin("crease", "slideEndTicks", totals.slideEndTicks, 35u);
-    checkPin("crease", "offWorld", totals.offWorld, 0u);
-    checkPin("crease", "apexMaxM", totals.apexMaxM, 5.0532f);
-    checkPin("crease", "apexSumM", totals.apexSumM, 72.6148f);
-    checkPin("crease", "inPlaneMinMps", totals.inPlaneMinMps, 0.5326f);
-    checkPin("crease", "inPlaneMaxMps", totals.inPlaneMaxMps, 20.8478f);
-    checkPin("crease", "inPlaneSumMps", totals.inPlaneSumMps, 592.9659f);
-    checkPin("crease", "convexVyErrMaxMps", totals.convexVyErrMaxMps, 9.5914f);
-    checkPin("crease", "convexVyErrSumMps", totals.convexVyErrSumMps, 88.2606f);
-}
-
-TEST_CASE("SupportLawScorecard.FlatKnockbacks", "[GoldenTrace]")
-{
-    const SupportLawScope law(brawlerMovementSimulation::SupportLaw::Legacy);
-    flatKnockbacks();
-}
-
-TEST_CASE("SupportLawScorecard.CreaseCrossings", "[GoldenTrace]")
-{
-    const SupportLawScope law(brawlerMovementSimulation::SupportLaw::Legacy);
-    creaseCrossings();
 }
 
 TEST_CASE("SupportLawScorecard.FlatKnockbacksUnderV2", "[GoldenTrace]")
 {
-    const SupportLawScope law(brawlerMovementSimulation::SupportLaw::V2);
     flatKnockbacks();
 }
 
 TEST_CASE("SupportLawScorecard.CreaseCrossingsUnderV2", "[GoldenTrace]")
 {
-    const SupportLawScope law(brawlerMovementSimulation::SupportLaw::V2);
     creaseCrossings();
 }
 

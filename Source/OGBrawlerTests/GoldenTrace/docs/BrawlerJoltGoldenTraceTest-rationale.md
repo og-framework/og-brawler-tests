@@ -1,4 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- lint-external-ref: PrintsTheCoverageUnderLegacy -- a RETIRED Catch2 case -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the table row records it -->
+<!-- lint-external-ref: FlatScenarioUnderLegacy -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: legacyAgainstTheRecording -- a RETIRED print tag -- its only printer went with the Legacy print case in og-ground-aligned-attacks task 37 -->
 # BrawlerJoltGoldenTraceTest — rationale
 
 Source: `BrawlerJoltGoldenTraceTest.cpp`. This file has no guards document: nothing in it needs a `⛔`
@@ -28,7 +31,7 @@ The move changed no recorded value: the two `.inl` files are byte-unchanged and 
 | `ScriptCoversEveryTickOnce` | `[GoldenTrace]` | every character has exactly one input row on every tick |
 | `MatchesTheRecordedTrace` | `[GoldenTrace]` | runs the scenario and compares it with the committed golden, in the mode named by `OG_GOLDEN_MODE`: `exact` (the default) or `bounds`; any other value fails the case |
 | `ScenarioCoversEveryScriptedMechanic` | `[GoldenTrace]` | counts, from the live trace in the legacy frame, every mechanic the scenario must reach, and requires each |
-| `PrintsTheCoverageUnderLegacy` | `[GoldenTrace]` | runs `FlatScenarioUnderLegacy` (the flat scenario with the movement's support law set to Legacy by its `configureStaticData`), prints its `[GoldenTrace.coverage] legacy …` line and one `[GoldenTrace.legacyAgainstTheRecording] scenario=flat …` line (the exact compare with the recording, which does not fail the case), and requires only that the schemas match. Task 35 wrote it as the V2 print (PrintsTheCoverageUnderV2), while Legacy was the default; task 36 made it the Legacy print, and task 37 deletes it |
+| `PrintsTheCoverageUnderLegacy` | `[GoldenTrace]` | runs `FlatScenarioUnderLegacy` (the flat scenario with the movement's support law set to Legacy by its `configureStaticData`), prints its `[GoldenTrace.coverage] legacy …` line and one `[GoldenTrace.legacyAgainstTheRecording] scenario=flat …` line (the exact compare with the recording, which does not fail the case), and requires only that the schemas match. Task 35 wrote it as the V2 print (PrintsTheCoverageUnderV2), while Legacy was the default; task 36 made it the Legacy print, and task 37 deleted it with the Legacy law |
 | `Record` | `[.GoldenRecord]` | hidden: records the golden and the envelope into the folder named by `OG_GOLDEN_OUT` |
 
 The coverage count reads the trace in the legacy (canonical) frame, whose values the recorder has already

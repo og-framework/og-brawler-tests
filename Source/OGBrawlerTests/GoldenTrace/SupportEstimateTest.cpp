@@ -140,7 +140,6 @@ struct EstimateScenario
     static constexpr std::array<goldenTraceScene::SpawnPoint, 1u> kSpawnTable = { goldenTraceScene::SpawnPoint{ 0u, kParking } };
 
     static inline World world = World::Platform;
-    static inline movement::SupportLaw law = movement::SupportLaw::V2;
 
     static bool isSampleTick(uint32_t) { return false; }
     static StaticWorldDescription statics()
@@ -154,7 +153,6 @@ struct EstimateScenario
         return description;
     }
     static simulatableBrawler::StaticData staticData(float gravityScale) { return goldenTraceScenario::scenarioStaticData(gravityScale); }
-    static void configureStaticData(simulatableBrawler::StaticData& staticData) { staticData.m_movementStaticData.supportLaw = law; }
     static simulatableBrawler::PlayerInput inputAt(unsigned int, uint32_t) { return simulatableBrawler::getZeroPlayerInput(); }
     static std::span<const goldenTraceScene::Character> characters() { return kCharacterTable; }
     static std::span<const goldenTraceScene::SpawnPoint> spawnTable() { return kSpawnTable; }
@@ -186,10 +184,9 @@ struct CountingQuery
 
 struct WorldSelection
 {
-    WorldSelection(World world, movement::SupportLaw law)
+    explicit WorldSelection(World world)
     {
         EstimateScenario::world = world;
-        EstimateScenario::law = law;
     }
 };
 
@@ -213,8 +210,8 @@ struct Fixture
     const movement::StaticData& sd;
     CountingQuery query;
 
-    explicit Fixture(World world, movement::SupportLaw law = movement::SupportLaw::V2)
-        : selection(world, law)
+    explicit Fixture(World world)
+        : selection(world)
         , scene(std::nullopt, 1.f)
         , brawler(scene.storage.template get<SimulatableBrawler>(EstimateScenario::kCharacterTable[0].id))
         , bindings(brawler.getPhysicsComposite().template get<movement::PhysicsDeclaration>().bindings)
@@ -334,23 +331,17 @@ void printSample(const char* tag, const char* name, const Sample& s)
 
 } // namespace supportEstimateTests
 
-TEST_CASE("SupportEstimate.LegacyRegistersOneQueryVolumeAndV2Two", "[GoldenTrace]")
+TEST_CASE("SupportEstimate.RegistersTheGroundProbeAndTheCentreProbe", "[GoldenTrace]")
 {
     using namespace supportEstimateTests;
 
-    for (const movement::SupportLaw law : { movement::SupportLaw::Legacy, movement::SupportLaw::V2 })
-    {
-        Fixture fixture(World::Platform, law);
-        INFO("law " << int(law));
-        REQUIRE(fixture.sd.supportLaw == law);
-        REQUIRE(fixture.bindings.queryVolumeIds.size() == (law == movement::SupportLaw::V2 ? 2u : 1u));
-        const PlatformFrame frame = platformFrame();
-        const glm::vec3 atRim = fixture.bodyOverPlane(frame.surface(kTopRim), frame.normal, frame.surface(kTopRim), fixture.sd.rideHeight);
-        const Sample sample = fixture.at(atRim);
-        REQUIRE(sample.ground.probe.hit.blocked);
-        REQUIRE(sample.sweeps == (law == movement::SupportLaw::V2 && sample.edge ? 2u : 1u));
-    }
-    EstimateScenario::law = movement::SupportLaw::V2;
+    Fixture fixture(World::Platform);
+    REQUIRE(fixture.bindings.queryVolumeIds.size() == 2u);
+    const PlatformFrame frame = platformFrame();
+    const glm::vec3 atRim = fixture.bodyOverPlane(frame.surface(kTopRim), frame.normal, frame.surface(kTopRim), fixture.sd.rideHeight);
+    const Sample sample = fixture.at(atRim);
+    REQUIRE(sample.ground.probe.hit.blocked);
+    REQUIRE(sample.sweeps == (sample.edge ? 2u : 1u));
 }
 
 TEST_CASE("SupportEstimate.FaceInteriorIsTheExactFaceWithNoCentreSweep", "[GoldenTrace]")

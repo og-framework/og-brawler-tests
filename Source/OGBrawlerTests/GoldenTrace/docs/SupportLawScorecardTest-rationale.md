@@ -1,16 +1,30 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- lint-external-ref: SupportLawScorecard.FlatKnockbacks -- a RETIRED Catch2 case -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records what it measured -->
+<!-- lint-external-ref: SupportLawScorecard.CreaseCrossings -- a RETIRED Catch2 case -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records what it measured -->
+<!-- lint-external-ref: supportLawName -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: supportLaw -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: SupportLaw::V2 -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: gSupportLaw -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: SupportLawScope -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: RigScenario::configureStaticData -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: lawTag -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: classifySupportV2 -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
 # SupportLawScorecardTest — rationale
 
 Source: `SupportLawScorecardTest.cpp`. This file has no guards document: nothing in it needs a `⛔` tag. The harness is
 described in `GoldenTraceScene-rationale.md`, the slope statics in `GoldenTraceSlopeScenario-rationale.md`. The third
 scorecard rig, the platform edge, lives in `PlatformEdgeTest.cpp` (`PlatformEdgeTest-rationale.md` §8).
 
-`SupportLawScorecard.FlatKnockbacks` and `SupportLawScorecard.CreaseCrossings` (`[GoldenTrace]`, no golden) are two of
+`SupportLawScorecard.FlatKnockbacksUnderV2` and `SupportLawScorecard.CreaseCrossingsUnderV2` (`[GoldenTrace]`, no golden;
+until og-ground-aligned-attacks task 37 also `SupportLawScorecard.FlatKnockbacks` and `SupportLawScorecard.CreaseCrossings`,
+the Legacy law's runs) are two of
 the three measuring rigs of the ground-aligned attacks initiative's task 31: the scorecard the support law v2 is gated
 on (the initiative's design for the support law, §9). They knock a brawler back, or walk it, with real Jolt geometry
 and the production path, and count what its support classification does. Each rig prints one totals line,
-`[SupportLaw.scorecard] law=… rig=…`, and pins those totals for the Legacy law, which shipped until the initiative's task 36 (§6). Tasks 33 to 35 run the same rigs
-under the support law v2 and compare.
+`[SupportLaw.scorecard] law=… rig=…`. Until the initiative's task 37 it pinned those totals for the Legacy law (§6),
+and tasks 33 to 35 ran the same rigs under the support law v2 and compared. **Since task 37 the rigs run the one law
+the movement has, the support law v2, with its own checks (§6.1, §6.2).** The Legacy columns of the scorecard are
+history: the initiative workspace's impl/support_law_baseline.md keeps their numbers.
 
 ## 1. The scene and the law
 
@@ -23,7 +37,10 @@ under the support law v2 and compare.
   horizontal position.
 - **Static data** is `scorecardStaticData`, which is `goldenTraceScenario::scenarioStaticData`: the shipped movement,
   attack and reaction tables (melee knockback 20 m/s, `launchDecel` 40, so the knockback lockout is 0.5 s).
-- **The law is read from the scene's movement StaticData only.** `supportLawName` returns `v2` when that
+- **One law since og-ground-aligned-attacks task 37.** `supportLawName`, `gSupportLaw`, `SupportLawScope` and
+  `RigScenario::configureStaticData` are deleted; every line keeps its `law=v2` label as a literal in its format. The
+  rest of this bullet is tasks 33 to 36's record.
+- **The law was read from the scene's movement StaticData only.** `supportLawName` returned `v2` when that
   StaticData's `supportLaw` is `SupportLaw::V2`, else `legacy`. Since og-ground-aligned-attacks task 33 each rig runs
   under both laws in one binary: `SupportLawScorecard.FlatKnockbacks` and `SupportLawScorecard.CreaseCrossings` under
   Legacy, `SupportLawScorecard.FlatKnockbacksUnderV2` and `SupportLawScorecard.CreaseCrossingsUnderV2` under V2. Each
@@ -150,13 +167,18 @@ under the support law v2 and compare.
 - **Every line of a V2 case says so** (since task 33). A line whose format has a law field prints law=v2; every other
   line gets ` law=v2` right after its bracket tag (`lawTag`), which is empty under Legacy. So the Legacy lines are
   byte-identical to the tree before task 33, and dropping every line that contains law=v2 leaves exactly the Legacy
-  output. The platform-edge rig follows the same rule (`PlatformEdgeTest-rationale.md` §8).
+  output. The platform-edge rig follows the same rule (`PlatformEdgeTest-rationale.md` §8). Since task 37 the label is
+  a literal in every format and every line is the one law's: the 7,292 lines of the three rigs equal task 36's `law=v2`
+  lines byte for byte.
 
 ## 6. What it asserts
 
 - Every placement is reached: 60 flat runs, and 56 crease runs (4 × (12 + 2)).
 - The support cross-check of §2: 0 mismatches.
-- **The Legacy law's totals are pinned** (`checkPin`, only while `supportLawName` is `legacy`; floats to 5e-4,
+- **Retired with the Legacy law (task 37):** the Legacy cases and these pins are deleted, and the pins below are the
+  record of what they held; the numbers are also in impl/support_law_baseline.md. The rigs' checks are §6.1's and
+  §6.2's, which since task 37 run unconditionally.
+- **The Legacy law's totals were pinned** (`checkPin`, only while `supportLawName` was `legacy`; floats to 5e-4,
   `kPinTolerance`). The pins are what make every counter seen to fail (§7), and they make the rigs part of the
   bit-identity check of a task that must not change the law (tasks 32 and 33). A task that changes the Legacy law on
   purpose re-measures and re-pins them, and explains each change. Task 36 made V2 the shipped law without changing
@@ -171,8 +193,8 @@ under the support law v2 and compare.
 ### 6.1 The V2 checks (og-ground-aligned-attacks task 34)
 
 Since task 34 the V2 cases check V2's own results:
-- **flat:** flips, flickerRuns, Unsupported and slide-end ticks are all 0 (`checkPin`, while `supportLawName` is
-  `v2`). Under Legacy the same counters are 1803, 60, 900 and 120.
+- **flat:** flips, flickerRuns, Unsupported and slide-end ticks are all 0 (`checkPin`; until task 37 only while
+  `supportLawName` was `v2`). Under Legacy the same counters were 1803, 60, 900 and 120.
 - **crease** (`checkV2Crease`), over the committed convex crossings: the runs of slopeToPlateau and plateauToSlope by
   a melee or projectile hit whose crossing tick comes before the lockout ends (`committedCrossing`). Two slow
   slopeToPlateau runs cross on the tick the lockout ends; they are walkers by then, and follow the crease.
@@ -186,7 +208,7 @@ Since task 34 the V2 cases check V2's own results:
   `[SupportLaw.crease.departure] law=v2 crossing=… kind=… d=… obl=… cross=… depart=… ballisticErrMps=…` after its
   run line. The case always prints one totals line,
   `[SupportLaw.crease.departures] law=v2 convexDepartures=… worstBallisticErrMps=… gravityStepMps=… concaveHops=…`.
-- **Seen failing** (task 34, each a poison of `classifySupportV2` in og-brawler, built and run under the lock, then
+- **Seen failing** (task 34, each a poison of `classifySupportV2` in og-brawler, `classifySupport` since task 37, built and run under the lock, then
   restored byte for byte):
   - the launch row deciding Unsupported at `dot(d, n) >= 0`, so a horizontal hit on flat ground launches: flat flips
     `120 == 0`, flickerRuns `60 == 0`, Unsupported `60 == 0`;

@@ -1,12 +1,16 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- lint-external-ref: SupportLaw::V2 -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: EstimateScenario::law -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: EstimateScenario::configureStaticData -- a RETIRED token -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records its history -->
+<!-- lint-external-ref: SupportEstimate.LegacyRegistersOneQueryVolumeAndV2Two -- a RETIRED Catch2 case -- og-ground-aligned-attacks task 37 deleted it with the Legacy support law; the prose records what it measured (restated as RegistersTheGroundProbeAndTheCentreProbe) -->
 # SupportEstimateTest — rationale
 
 Source: `SupportEstimateTest.cpp`. This file has no guards document: nothing in it needs a `⛔` tag. The harness is
 described in `GoldenTraceScene-rationale.md`, and the estimate it measures in og-brawler's
 `BrawlerMovementSimulation-rationale.md` §33.
 
-The six cases (`[GoldenTrace]`, no golden) call `brawlerMovementSimulation::estimateSupport` under `SupportLaw::V2` on
-Jolt, at scripted positions, with no simulation step. They are the acceptance cases of og-ground-aligned-attacks
+The six cases (`[GoldenTrace]`, no golden) call `brawlerMovementSimulation::estimateSupport` (the support law v2's
+estimate, the movement's only one since og-ground-aligned-attacks task 37) on Jolt, at scripted positions, with no simulation step. They are the acceptance cases of og-ground-aligned-attacks
 task 33: the V2 estimate's kind and normal on real Jolt geometry. Each prints one or more lines with its measurements.
 
 ## 1. The scene and the probe
@@ -19,9 +23,10 @@ task 33: the V2 estimate's kind and normal on real Jolt geometry. Each prints on
   - `World::FlatSlab`: one 10 m × 0.5 m × 10 m box with its top at y = 0; the rim is its +X wall at x = 5.
   - `World::Slope`: the slope golden's statics (`goldenTraceSlopeScenario::slopeStatics`); the concave pair is the
     landing (top y = 2) and the 30° face at the lower crease, z = 10.392304.
-- **The law** is `EstimateScenario::law`, `SupportLaw::V2` unless a case says otherwise, written into the movement
-  StaticData by `EstimateScenario::configureStaticData` before the character registers (`GoldenTraceScene-rationale.md`
-  §1). So the character's bindings carry the ground probe at index 0 and, under V2, the centre probe at index 1.
+- **One law.** The character's bindings carry the ground probe at index 0 and the centre probe at index 1. Until
+  og-ground-aligned-attacks task 37 the law was `EstimateScenario::law`, `SupportLaw::V2` unless a case said otherwise,
+  written into the movement StaticData by `EstimateScenario::configureStaticData` before the character registered
+  (`GoldenTraceScene-rationale.md` §1); task 37 deleted both with the Legacy law.
 - **`Fixture::at`** builds a movement `State` at a body position and calls `estimateSupport` through `CountingQuery`, a
   wrapper on the scene's `JoltSpatialQueryAdapter` that counts every sweep and the centre probe's sweeps (task 10's
   `CountingQuery` pattern), and keeps the centre's last hit. A sample also records whether the capsule's contact was an
@@ -59,9 +64,10 @@ task 33: the V2 estimate's kind and normal on real Jolt geometry. Each prints on
    planes. The first sample whose capsule contact lies on the rising face (the impact point on its plane, at least 1 mm
    past the crease line) and every later one is `Face` with the rising face's normal; every sample is `Face`.
 
-**`SupportEstimate.LegacyRegistersOneQueryVolumeAndV2Two`** builds the platform scene under each law: Legacy registers
-one query volume and V2 two, and at the top rim a Legacy estimate makes one sweep, a V2 estimate one or two (two only
-on an edge contact).
+**`SupportEstimate.RegistersTheGroundProbeAndTheCentreProbe`** builds the platform scene: the character registers two
+query volumes, and at the top rim the estimate makes one sweep or two (two only on an edge contact). Until
+og-ground-aligned-attacks task 37 it was `SupportEstimate.LegacyRegistersOneQueryVolumeAndV2Two`, which built the scene
+under each law and also required one volume and one sweep under Legacy; task 37 kept its V2 half.
 
 ## 3. Measured (task 33)
 
