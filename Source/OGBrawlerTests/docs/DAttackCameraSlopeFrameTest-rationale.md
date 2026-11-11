@@ -72,7 +72,8 @@ slope pitch limits at the hard limits, 1° and 89°.
   every frame, and the camera is exactly world up and 60° after `ceil(angle / (90 × dt))` frames, at most one frame
   later (measured: exactly that count everywhere, 7 to 94 frames). `worldView` then returns the state verbatim, and 60
   more frames keep it there. A rate of 0, or a negative one, holds the camera still: the camera before task 21. The
-  target up is a 12° face: the frame up returns to world up whatever the target, and below 15° the yaw does not turn.
+  target up is a 12° face: the frame up returns to world up whatever the target, and below 15° the yaw does not turn
+  up a slope. The case sets no ground (`groundSupported` stays false), so since task 21f it has no iso-yaw goal either.
   Until task 21c (2026-11-04) the target was the 30° face; there the look-mode-off camera now turns to face up the
   slope, pinned by `DAttackCameraSlopeYawTest.cpp`.
 

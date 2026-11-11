@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 namespace stickRoutingTest
 {
@@ -25,6 +26,7 @@ using dInput::stickRouting::StickSources;
 using dInput::stickRouting::routeSticks;
 
 constexpr float kMoveDeadzone = 0.15f;
+constexpr float kBackStopMaxMagnitude = dAttackMachineSimulation::kDefaultBackStopMaxMagnitude;
 
 const StickSources kSources{ { 0.2f, -0.1f }, { 0.3f, 0.4f }, { -0.5f, 0.25f } };
 
@@ -62,7 +64,7 @@ TEST_CASE("StickRouting: row 1 - schemes 0/1/2 without legacy swap: move = clamp
 	{
 		for (const bool feedsAim : { false, true })
 		{
-			const LogicalSticks out = routeSticks(kSources, scheme, false, feedsAim, kMoveDeadzone);
+			const LogicalSticks out = routeSticks(kSources, scheme, false, feedsAim, kMoveDeadzone, kBackStopMaxMagnitude);
 			CHECK(bitIdentical(out.move, kSources.moveKeys + kSources.leftStick));
 			CHECK(bitIdentical(out.aim, kSources.rightStick));
 		}
@@ -77,7 +79,7 @@ TEST_CASE("StickRouting: row 2 - schemes 0/1/2 with legacy swap: move = right, a
 	{
 		for (const bool feedsAim : { false, true })
 		{
-			const LogicalSticks out = routeSticks(kSources, scheme, true, feedsAim, kMoveDeadzone);
+			const LogicalSticks out = routeSticks(kSources, scheme, true, feedsAim, kMoveDeadzone, kBackStopMaxMagnitude);
 			CHECK(bitIdentical(out.move, kSources.rightStick));
 			CHECK(bitIdentical(out.aim, kSources.moveKeys + kSources.leftStick));
 		}
@@ -92,7 +94,7 @@ TEST_CASE("StickRouting: row 3 - scheme 3 with an active right stick: move = cla
 		for (const bool feedsAim : { false, true })
 		{
 			const LogicalSticks out =
-				routeSticks(kSources, MovementScheme::AimRelativeSwapped, legacySwap, feedsAim, kMoveDeadzone);
+				routeSticks(kSources, MovementScheme::AimRelativeSwapped, legacySwap, feedsAim, kMoveDeadzone, kBackStopMaxMagnitude);
 			CHECK(bitIdentical(out.move, kSources.moveKeys + kSources.rightStick));
 			CHECK(bitIdentical(out.aim, kSources.leftStick));
 		}
@@ -107,13 +109,13 @@ TEST_CASE("StickRouting: row 3 - scheme 3 with feedsAim off keeps row 3 even wit
 	for (const bool legacySwap : { false, true })
 	{
 		const LogicalSticks out =
-			routeSticks(sources, MovementScheme::AimRelativeSwapped, legacySwap, false, kMoveDeadzone);
+			routeSticks(sources, MovementScheme::AimRelativeSwapped, legacySwap, false, kMoveDeadzone, kBackStopMaxMagnitude);
 		CHECK(bitIdentical(out.move, sources.moveKeys + sources.rightStick));
 		CHECK(bitIdentical(out.aim, sources.leftStick));
 	}
 
 	sources.rightStick = { 0.f, 0.f };
-	const LogicalSticks zero = routeSticks(sources, MovementScheme::AimRelativeSwapped, false, false, kMoveDeadzone);
+	const LogicalSticks zero = routeSticks(sources, MovementScheme::AimRelativeSwapped, false, false, kMoveDeadzone, kBackStopMaxMagnitude);
 	CHECK(bitIdentical(zero.move, sources.moveKeys));
 	CHECK(bitIdentical(zero.aim, sources.leftStick));
 }
@@ -128,7 +130,7 @@ TEST_CASE("StickRouting: row 4 - scheme 3 with a neutral right stick and feedsAi
 		for (const bool legacySwap : { false, true })
 		{
 			const LogicalSticks out =
-				routeSticks(sources, MovementScheme::AimRelativeSwapped, legacySwap, true, kMoveDeadzone);
+				routeSticks(sources, MovementScheme::AimRelativeSwapped, legacySwap, true, kMoveDeadzone, kBackStopMaxMagnitude);
 			CHECK(bitIdentical(out.move, sources.moveKeys + sources.leftStick));
 			CHECK(bitIdentical(out.aim, sources.rightStick));
 		}
@@ -143,7 +145,7 @@ TEST_CASE("StickRouting: row 3 / row 4 boundary sits at length(rightStick) == mo
 	const auto routedAsRow4 = [&](const glm::vec2 right)
 	{
 		sources.rightStick = right;
-		const LogicalSticks out = routeSticks(sources, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone);
+		const LogicalSticks out = routeSticks(sources, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone, kBackStopMaxMagnitude);
 		const bool row4 = bitIdentical(out.aim, sources.rightStick)
 		               && bitIdentical(out.move, sources.moveKeys + sources.leftStick);
 		const bool row3 = bitIdentical(out.aim, sources.leftStick)
@@ -173,9 +175,9 @@ TEST_CASE("StickRouting: scheme 3 with a neutral right stick is bit-identical to
 			{
 				const StickSources sources{ k, left, right };
 				const LogicalSticks scheme1 =
-					routeSticks(sources, MovementScheme::AimRelative, false, true, kMoveDeadzone);
+					routeSticks(sources, MovementScheme::AimRelative, false, true, kMoveDeadzone, kBackStopMaxMagnitude);
 				const LogicalSticks scheme3 =
-					routeSticks(sources, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone);
+					routeSticks(sources, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone, kBackStopMaxMagnitude);
 				CHECK(bitIdentical(scheme1, scheme3));
 			}
 }
@@ -193,16 +195,16 @@ TEST_CASE("StickRouting: clampUnit clamps a summed length above 1 to 1 and leave
 	CHECK(bitIdentical(clampUnit({ 0.f, 0.f }), glm::vec2{ 0.f, 0.f }));
 
 	const StickSources summed{ { 1.f, 0.f }, { 1.f, 0.f }, { 1.f, 0.f } };
-	const LogicalSticks row1 = routeSticks(summed, MovementScheme::AimRelative, false, true, kMoveDeadzone);
+	const LogicalSticks row1 = routeSticks(summed, MovementScheme::AimRelative, false, true, kMoveDeadzone, kBackStopMaxMagnitude);
 	CHECK(bitIdentical(row1.move, glm::vec2{ 1.f, 0.f }));
-	const LogicalSticks row2 = routeSticks(summed, MovementScheme::AimRelative, true, true, kMoveDeadzone);
+	const LogicalSticks row2 = routeSticks(summed, MovementScheme::AimRelative, true, true, kMoveDeadzone, kBackStopMaxMagnitude);
 	CHECK(bitIdentical(row2.aim, glm::vec2{ 1.f, 0.f }));
-	const LogicalSticks row3 = routeSticks(summed, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone);
+	const LogicalSticks row3 = routeSticks(summed, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone, kBackStopMaxMagnitude);
 	CHECK(bitIdentical(row3.move, glm::vec2{ 1.f, 0.f }));
 	CHECK(bitIdentical(row3.aim, glm::vec2{ 1.f, 0.f }));
 
 	const StickSources diagonal{ { 0.f, 1.f }, { 1.f, 0.f }, { 0.f, 0.f } };
-	const LogicalSticks row4 = routeSticks(diagonal, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone);
+	const LogicalSticks row4 = routeSticks(diagonal, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone, kBackStopMaxMagnitude);
 	CHECK(glm::length(row4.move) == Catch::Approx(1.f).margin(1e-6));
 	CHECK(row4.move.x == Catch::Approx(row4.move.y).margin(1e-7));
 }
@@ -530,6 +532,234 @@ TEST_CASE("StickRouting: moving the mouse beside a drifting pad clears the gamep
 		CAPTURE(frame);
 		CHECK(latch.lastInputWasGamepad == (frame < 4));
 	}
+}
+
+glm::vec2 backStick(float magnitude, float degreesOffBack)
+{
+	const float radians = glm::radians(degreesOffBack);
+	return glm::vec2(magnitude * std::sin(radians), magnitude * std::cos(radians));
+}
+
+const glm::vec2 kAimLeft(0.3f, 0.4f);
+
+LogicalSticks routeRight(const glm::vec2& right, MovementScheme scheme, bool legacySwap, bool feedsAim,
+	float backStopMaxMagnitude = kBackStopMaxMagnitude)
+{
+	return routeSticks(StickSources{ glm::vec2(0.f, 0.f), kAimLeft, right }, scheme, legacySwap, feedsAim, kMoveDeadzone,
+		backStopMaxMagnitude);
+}
+
+TEST_CASE("StickRouting: the back-stop tests use the shipped g_backStopMaxMagnitude",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	CHECK(dAttackMachineSimulation::g_backStopMaxMagnitude.load() == kBackStopMaxMagnitude);
+}
+
+TEST_CASE("StickRouting: scheme 3 with the right stick moving stops a light pull within the back-shortcut window",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	REQUIRE(glm::radians(20.f) < kBackShortcutStep.angleTolerance);
+	REQUIRE(glm::radians(25.f) > kBackShortcutStep.angleTolerance);
+	for (const bool legacySwap : { false, true })
+	{
+		for (const bool feedsAim : { false, true })
+		{
+			for (const auto& [magnitude, degrees] :
+				{ std::pair{ 0.3f, 0.f }, std::pair{ 0.3f, 20.f }, std::pair{ 0.3f, -20.f }, std::pair{ 0.4f, 0.f } })
+			{
+				CAPTURE(legacySwap, feedsAim, magnitude, degrees);
+				const LogicalSticks out =
+					routeRight(backStick(magnitude, degrees), MovementScheme::AimRelativeSwapped, legacySwap, feedsAim);
+				CHECK(bitIdentical(out.move, glm::vec2(0.f, 0.f)));
+				CHECK(bitIdentical(out.aim, kAimLeft));
+			}
+		}
+	}
+}
+
+TEST_CASE("StickRouting: scheme 3 routes a pull outside the back-shortcut window, at or above the stop magnitude, or in the deadzone unchanged",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	const float overDeadzone = std::nextafter(kMoveDeadzone, 1.f);
+	const glm::vec2 atStop(0.f, kBackStopMaxMagnitude);
+	REQUIRE(glm::length(atStop) == kBackStopMaxMagnitude);
+	for (const bool legacySwap : { false, true })
+	{
+		for (const bool feedsAim : { false, true })
+		{
+			for (const glm::vec2 right : { backStick(0.3f, 25.f), backStick(0.3f, -25.f), atStop, backStick(0.8f, 0.f),
+					backStick(1.f, 0.f), backStick(0.3f, 90.f), backStick(0.3f, 180.f) })
+			{
+				CAPTURE(legacySwap, feedsAim, right.x, right.y);
+				const LogicalSticks out = routeRight(right, MovementScheme::AimRelativeSwapped, legacySwap, feedsAim);
+				CHECK(bitIdentical(out.move, right));
+				CHECK(bitIdentical(out.aim, kAimLeft));
+			}
+
+			const glm::vec2 justOverDeadzone(0.f, overDeadzone);
+			REQUIRE(glm::length(justOverDeadzone) > kMoveDeadzone);
+			CHECK(bitIdentical(
+				routeRight(justOverDeadzone, MovementScheme::AimRelativeSwapped, legacySwap, feedsAim).move,
+				glm::vec2(0.f, 0.f)));
+			const glm::vec2 justUnderStop(0.f, std::nextafter(kBackStopMaxMagnitude, 0.f));
+			REQUIRE(glm::length(justUnderStop) < kBackStopMaxMagnitude);
+			CHECK(bitIdentical(
+				routeRight(justUnderStop, MovementScheme::AimRelativeSwapped, legacySwap, feedsAim).move,
+				glm::vec2(0.f, 0.f)));
+		}
+
+		for (const glm::vec2 inDeadzone : { glm::vec2(0.f, kMoveDeadzone), glm::vec2(0.f, 0.1f), glm::vec2(0.f, 0.f) })
+		{
+			CAPTURE(legacySwap, inDeadzone.x, inDeadzone.y);
+			const LogicalSticks mainBranch =
+				routeRight(inDeadzone, MovementScheme::AimRelativeSwapped, legacySwap, false);
+			CHECK(bitIdentical(mainBranch.move, inDeadzone));
+			CHECK(bitIdentical(mainBranch.aim, kAimLeft));
+			const LogicalSticks fallback = routeRight(inDeadzone, MovementScheme::AimRelativeSwapped, legacySwap, true);
+			CHECK(bitIdentical(fallback.move, kAimLeft));
+			CHECK(bitIdentical(fallback.aim, inDeadzone));
+		}
+	}
+}
+
+TEST_CASE("StickRouting: scheme 3's fallback branch routes a light back pull on the left stick unchanged",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	for (const float degrees : { 0.f, 20.f, -20.f })
+	{
+		const glm::vec2 lightBack = backStick(0.3f, degrees);
+		const StickSources sources{ glm::vec2(0.f, 0.f), lightBack, glm::vec2(0.f, 0.f) };
+		const LogicalSticks out = routeSticks(sources, MovementScheme::AimRelativeSwapped, false, true, kMoveDeadzone,
+			kBackStopMaxMagnitude);
+		CAPTURE(degrees);
+		CHECK(bitIdentical(out.move, lightBack));
+		CHECK(bitIdentical(out.aim, glm::vec2(0.f, 0.f)));
+	}
+}
+
+TEST_CASE("StickRouting: scheme 3 keys held back route at full deflection, unchanged",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	for (const bool feedsAim : { false, true })
+	{
+		const StickSources keysBack{ glm::vec2(0.f, 1.f), glm::vec2(0.f, 0.f), glm::vec2(0.f, 0.f) };
+		const LogicalSticks out = routeSticks(keysBack, MovementScheme::AimRelativeSwapped, false, feedsAim,
+			kMoveDeadzone, kBackStopMaxMagnitude);
+		CAPTURE(feedsAim);
+		CHECK(bitIdentical(out.move, glm::vec2(0.f, 1.f)));
+	}
+}
+
+TEST_CASE("StickRouting: a stop magnitude at or below the move deadzone disables the back stop",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	for (const float disabled : { 0.f, 0.1f, kMoveDeadzone })
+	{
+		for (const glm::vec2 right : { backStick(0.3f, 0.f), backStick(0.3f, 20.f),
+				glm::vec2(0.f, std::nextafter(kMoveDeadzone, 1.f)) })
+		{
+			for (const bool feedsAim : { false, true })
+			{
+				CAPTURE(disabled, right.x, right.y, feedsAim);
+				const LogicalSticks out = routeRight(right, MovementScheme::AimRelativeSwapped, false, feedsAim, disabled);
+				CHECK(bitIdentical(out.move, right));
+			}
+		}
+	}
+}
+
+TEST_CASE("StickRouting: schemes 0/1/2 route the stop-zone sticks bit for bit as before",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	const glm::vec2 keys(0.f, 0.f);
+	for (const MovementScheme scheme :
+		{ MovementScheme::CameraRelative, MovementScheme::AimRelative, MovementScheme::MoveRelativeAim })
+	{
+		for (const bool legacySwap : { false, true })
+		{
+			for (const bool feedsAim : { false, true })
+			{
+				for (const float degrees : { 0.f, 20.f, -20.f })
+				{
+					const glm::vec2 lightBack = backStick(0.3f, degrees);
+					for (const StickSources& sources : { StickSources{ keys, lightBack, kAimLeft },
+							 StickSources{ keys, kAimLeft, lightBack }, StickSources{ keys, lightBack, lightBack } })
+					{
+						CAPTURE(static_cast<uint32_t>(scheme), legacySwap, feedsAim, degrees);
+						const LogicalSticks out =
+							routeSticks(sources, scheme, legacySwap, feedsAim, kMoveDeadzone, kBackStopMaxMagnitude);
+						const glm::vec2 keysAndLeft = dInput::stickRouting::clampUnit(sources.moveKeys + sources.leftStick);
+						CHECK(bitIdentical(out.move, legacySwap ? sources.rightStick : keysAndLeft));
+						CHECK(bitIdentical(out.aim, legacySwap ? keysAndLeft : sources.rightStick));
+						for (const float other : { 0.f, 1.f })
+							CHECK(bitIdentical(out,
+								routeSticks(sources, scheme, legacySwap, feedsAim, kMoveDeadzone, other)));
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE("StickRouting: every stopped stick is the back-shortcut step through the aim-relative move, and +-25 degrees is not",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	using dInput::stickRouting::cameraRelativeDirection;
+	using dInput::stickRouting::inBackStopZone;
+	using inputSequence::stickMatchesStep;
+
+	const float epsilon = dAttackDirection::kMoveMagnitudeEpsilon;
+	const auto stickToWorld = [](const glm::vec2& stick, const glm::vec3& aim)
+	{ return cameraRelativeDirection(aim, simFrame::fromForwardRight(stick, 0.f)); };
+
+	int stoppedChecked = 0;
+	int sweepChecked = 0;
+	for (const float yawDeg : { 0.f, 37.f, 90.f, 180.f, -120.f })
+	{
+		const glm::vec3 aim = cameraForwardFromDegrees(0.f, yawDeg);
+		for (const glm::vec2 stopped : { backStick(0.3f, 0.f), backStick(0.3f, 20.f), backStick(0.3f, -20.f),
+				glm::vec2(0.f, std::nextafter(kMoveDeadzone, 1.f)), backStick(0.39f, 15.f), backStick(0.4f, 0.f) })
+		{
+			CAPTURE(yawDeg, stopped.x, stopped.y);
+			REQUIRE(bitIdentical(
+				routeRight(stopped, MovementScheme::AimRelativeSwapped, false, true).move, glm::vec2(0.f, 0.f)));
+			CHECK(stickMatchesStep(stickToWorld(stopped, aim), aim, kBackShortcutStep, epsilon));
+			++stoppedChecked;
+		}
+		for (const float degrees : { 25.f, -25.f })
+		{
+			CAPTURE(yawDeg, degrees);
+			CHECK_FALSE(stickMatchesStep(stickToWorld(backStick(0.3f, degrees), aim), aim, kBackShortcutStep, epsilon));
+		}
+		for (int degrees = -180; degrees < 180; ++degrees)
+		{
+			if (std::abs(std::abs(degrees) - 22.5f) < 1.f)
+				continue;
+			const glm::vec2 stick = backStick(0.3f, static_cast<float>(degrees));
+			CAPTURE(yawDeg, degrees);
+			CHECK(inBackStopZone(stick, kMoveDeadzone, kBackStopMaxMagnitude)
+				== stickMatchesStep(stickToWorld(stick, aim), aim, kBackShortcutStep, epsilon));
+			++sweepChecked;
+		}
+	}
+	CHECK(stoppedChecked == 5 * 6);
+	CHECK(sweepChecked == 5 * 356);
+}
+
+TEST_CASE("StickRouting: SetVariable sets g_backStopMaxMagnitude, clamped to [0, 1]",
+	"[SimulatableBrawler][StickRouting][BackStop]")
+{
+	const float saved = dAttackMachineSimulation::g_backStopMaxMagnitude.load();
+	CHECK(dAttackMachineSimulation::SetVariable("BackStopMaxMagnitude", "0.3"));
+	CHECK(dAttackMachineSimulation::g_backStopMaxMagnitude.load() == 0.3f);
+	CHECK(dAttackMachineSimulation::SetVariable("BackStopMaxMagnitude", "5"));
+	CHECK(dAttackMachineSimulation::g_backStopMaxMagnitude.load() == 1.f);
+	CHECK(dAttackMachineSimulation::SetVariable("BackStopMaxMagnitude", "0"));
+	CHECK(dAttackMachineSimulation::g_backStopMaxMagnitude.load() == 0.f);
+	CHECK_FALSE(dAttackMachineSimulation::SetVariable("BackStopMaxMagnitude", "banana"));
+	CHECK(dAttackMachineSimulation::g_backStopMaxMagnitude.load() == 0.f);
+	CHECK(dAttackMachineSimulation::refusedVariableReason("BackStopMaxMagnitude") == nullptr);
+	dAttackMachineSimulation::g_backStopMaxMagnitude = saved;
 }
 
 } // namespace stickRoutingTest

@@ -14,11 +14,14 @@ task 21d (2026-11-04, the user's G7 twitch report) the turn starts only once the
 for og.cam.slopeYawDwellSec (0.2 s by default). Since task 21e (2026-11-04, the user's G7 re-check) the turn aims at
 the heading the dwell started on, not at each tick's, and eases: it speeds up from rest at og.cam.slopeYawAccelDegPerSec2
 (360°/s²), caps at og.cam.slopeYawDegPerSec and slows over the last of the gap with the og.cam.slopeYawEaseSec (0.3 s)
-time constant, taking the goal exactly within 0.01°. The reasoning is in og-brawler's `DAttackCamera-rationale.md` §20.
-The Unreal host's part (the console variables) is in the game module, which this target cannot compile.
+time constant, taking the goal exactly within 0.01°. Since task 21f (2026-11-11, the user's request) supported ground
+under 15° turns the camera the same way to the shared iso camera's yaw, and the air and ground past 30.1° still hold
+it. The reasoning is in og-brawler's `DAttackCamera-rationale.md` §20.
+The Unreal host's part (the console variables, and filling the ground and the iso yaw) is in the game module, which
+this target cannot compile.
 
 Tags: `[DAttack]` puts every case in the `[@og]` whitelist; `[CameraSlopeYaw]` selects them on their own,
-`[CameraSlopeDwell]` selects task 21d's six and `[CameraSlopeEase]` task 21e's five.
+`[CameraSlopeDwell]` selects task 21d's six, `[CameraSlopeEase]` task 21e's five and `[CameraIsoYaw]` task 21f's seven.
 
 ## 2. The frames the cases use
 
@@ -132,6 +135,45 @@ above 64°/s); every step
 * `DAttackCamera.SlopeEaseNegativeOrNaNSettingsAreZero`: an ease or an acceleration of −1 or NaN, alone or both, gives
   the yaw and speed bits of the same setting at 0 on every frame for 5 s from the six start gaps, and arrives.
 
+**Task 21c's, 21d's and 21e's 16 cases run unchanged** since task 21f. Their inputs set only the first five fields
+(`lookOff` and the look-mode inputs), so `groundSupported` is false and no frame has the near-flat goal: the "flat
+ground" of those cases is ground the camera is not told it stands on, which holds the yaw as before. Task 21f's seven
+cases (`[CameraIsoYaw]`) run at the defaults (dwell 0.2 s, ease 0.3 s, acceleration 360°/s², `REQUIRE`d in the flat
+case) at the four rates. `lookOffOnGround(up, supported, isoYaw)` is `lookOff` of `cameraTargetUp(up, supported)`
+with the three new fields set, as the host fills them, and `turnToGoal` runs one input until the yaw holds the goal's
+bits, then 600 more frames, counting steps against the start gap's sign, gap sign changes (overshoots), the largest
+state speed and, over the 600 frames, yaw changes and non-zero speeds.
+
+* `DAttackCamera.IsoYawInputsDefaultToTwentyOneE`: a default input's ground is world up, unsupported, iso yaw 0, and a
+  five-value positional input and `lookOff`'s input have no goal.
+* `DAttackCamera.IsoYawFlatGroundTurnsToTheIsoYaw`: flat ground, a 0.67° and a 1.9° face, and two 10° faces (rising
+  toward 0° and 137°), supported, at iso yaws 0° and 45°, from the 8 start offsets of the first 21c case. The first
+  turning frame is `dwellFrameAt(fps)`; the yaw arrives at the wrapped iso yaw's bits with speed 0, with no step
+  against the shorter arc and no overshoot; the first step's speed is at most `min(90, gap / 0.3, 360 × dt)` (eased);
+  the state speed never exceeds 90; the 600 held frames keep the goal's bits with speed 0, and the pitch is 60°.
+* `DAttackCamera.IsoYawSeededCameraIsAlreadyAtTheGoal`: `seedFromUERotation(−60, ueYawDeg)` for og.iso.yaw 0, 45, −135,
+  90, 180, −180, 33.3 and 370, on supported flat ground with `isoYawDeg = yawDegFromUEYawDegrees(ueYawDeg)`: the goal is
+  the seed's yaw bits, and 600 frames keep them with speed 0 while the dwell runs past 0.2 s.
+* `DAttackCamera.IsoYawSlopeBandIsTwentyOneEs`: 16 grounds at iso yaws 0°, 45° and 90°. Flat ground, the 1-ULP-short
+  up, 12°, 14.9° and 14.998° (outside the threshold's tolerance) have the iso goal; 14.9995° (inside it), 15°, 20°, 30°
+  and 30.09° turn up the slope, with `lookOffYawGoal`'s goal the up-slope heading's bits; 30.11°, 45°, 60° and three
+  unsupported grounds have none. For the slope band, 6 s from the 8 start offsets at each rate give the same yaw,
+  pitch, frame up, hold-off, dwell and speed bits on every frame as the same input with the new fields unset: task
+  21e's camera, whatever the iso yaw.
+* `DAttackCamera.IsoYawHoldsUnsupportedAndOnSteepGround`: unsupported flat ground and supported 45°, 30.11° and 60°
+  faces, at both iso yaws, from yaw 100.7°: 600 frames keep the yaw's bits, the speed and the dwell stay 0, and the
+  pitch returns to 60°.
+* `DAttackCamera.IsoYawCreaseKeepsOrRestartsTheAnchor`: the three 30° faces rising along Unreal +X (the built one and
+  the two G3 normals), iso yaw 0. Arrived on flat ground, and separately arrived on the slope, the camera then crosses
+  slope / flat in 1 s runs twice, then alternates them every tick for 1 s: the yaw keeps the arrival's bits, the
+  speed stays 0, the dwell grows on every frame (never restarts) and keeps the arrival's heading. With iso yaw 90°, a
+  camera arrived on flat ground at 90° that steps onto the slope restarts the dwell on its first slope frame (`dt` on
+  the up-slope heading), keeps the yaw's bits with speed 0 for `dwellFrameAt(fps) − 1` frames, and on frame
+  `dwellFrameAt(fps)` steps toward the slope's heading at no more than 360 × dt.
+* `DAttackCamera.IsoYawLookModeOnIsUnchanged`: from a dwell part-way through on flat ground at iso yaw 45°, look mode
+  with a still mouse keeps the yaw's bits for 600 frames and sets the dwell to 0, and a 0.2-unit mouse turn gives the
+  same state bits on every frame as the same input with the new fields unset.
+
 ## 4. Seen failing
 
 The task's poison, the goal's sign reversed (`atan2(u.y, u.x)`, the camera turning to face down the slope), built and
@@ -216,4 +258,39 @@ restored (md5 identical) and rebuilt, after which all 16 pass:
     30 deg rising along Unreal +X, start -91.9 deg off: turning seconds at 30/60/
     144/240 fps 3.1 / 3.16667 / 3.19444 / 3.20417, worst pair excess over one
     frame + 2 % 0.00675 s
+  ```
+
+Task 21f's poisons, each a byte replacement in `DAttackCamera.h`, built and run (`[CameraSlopeYaw]`) under the UBT lock
+on 2026-11-11 from a copy, then restored (md5 identical) and rebuilt, after which all 23 pass. Task 21e's quoted line
+numbers above are unchanged: task 21f only appended to the file.
+
+* **no near-flat goal** (task 21e's behaviour: the `turnsToIsoYaw` branch deleted from `lookOffYawGoal`):
+  `test cases: 23 | 18 passed | 5 failed`, `assertions: 10181 | 8873 passed | 1308 failed`. The flat case fails on
+  every ground, iso yaw, rate and start (320 times on each of four lines):
+
+  ```
+  DAttackCameraSlopeYawTest.cpp(1228): FAILED:
+    CHECK( run.firstTurnFrame == dwellFrameAt(fps) )
+  with expansion:
+    -1 == 6
+  with message:
+    flat ground (0 deg), iso yaw 0, fps 30, start 10.1 deg off: first turning
+    frame -1 (dwell frame 6), arrival frame -1, first step 0 deg/s (bound 12),
+    wrong-way steps 0, overshoots 0, held yaw changes 600, final yaw 10.1
+  ```
+
+  and the seed, band, crease and look-mode cases fail where they need the goal. The 16 task 21c–21e cases and the hold
+  case pass.
+* **the near-flat test reads the target up** (`turnsToIsoYaw(input.targetUp, ...)`, which is world up past 30.1°):
+  `test cases: 23 | 21 passed | 2 failed`, `assertions: 10593 | 10512 passed | 81 failed`. The 30.11°, 45° and 60° faces
+  get the iso goal; the band case fails `CHECK( goal.turns == (band.expected != kHolds) )` with `true == false` on them, and
+  the hold case:
+
+  ```
+  DAttackCameraSlopeYawTest.cpp(1355): FAILED:
+    CHECK( yawChangesFrom(states, start.yawDeg) == 0 )
+  with expansion:
+    595 (0x253) == 0
+  with message:
+    45 deg face, supported, iso yaw 0, fps 30: final yaw 0, final dwell 20 s
   ```

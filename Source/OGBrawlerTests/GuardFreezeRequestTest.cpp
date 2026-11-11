@@ -5,6 +5,7 @@
 
 #include "OGBrawler/DAttackMachineSimulationRuntimeTweakables.h"
 #include "OGBrawler/InputMapping/StickRouting.h"
+#include "glm/trigonometric.hpp"
 
 #include <cmath>
 #include <vector>
@@ -17,6 +18,7 @@ using dInput::stickRouting::guardFreezeRequested;
 using dInput::stickRouting::routeSticks;
 
 constexpr float kMoveDeadzone = 0.15f;
+constexpr float kBackStopMaxMagnitude = dAttackMachineSimulation::kDefaultBackStopMaxMagnitude;
 
 const glm::vec2 kNone{ 0.f, 0.f };
 const glm::vec2 kKeysUp{ 0.f, -1.f };
@@ -34,12 +36,12 @@ const MovementScheme kNonSwappedSchemes[] = { MovementScheme::CameraRelative, Mo
 bool freeze(const StickSources& sources, MovementScheme scheme, bool legacySwap = false, bool feedsAim = true,
 	bool holdGuard = true)
 {
-	return guardFreezeRequested(holdGuard, sources, scheme, legacySwap, feedsAim, kMoveDeadzone);
+	return guardFreezeRequested(holdGuard, sources, scheme, legacySwap, feedsAim, kMoveDeadzone, kBackStopMaxMagnitude);
 }
 
 float actualMoveLength(const StickSources& sources, MovementScheme scheme, bool legacySwap, bool feedsAim)
 {
-	return glm::length(routeSticks(sources, scheme, legacySwap, feedsAim, kMoveDeadzone).move);
+	return glm::length(routeSticks(sources, scheme, legacySwap, feedsAim, kMoveDeadzone, kBackStopMaxMagnitude).move);
 }
 
 TEST_CASE("GuardFreeze: scheme 3 - left only roots, right only / both / keys move",
@@ -154,12 +156,12 @@ TEST_CASE("GuardFreeze: counterexample (a) - scheme 3, right neutral, keys and l
 {
 	const MovementScheme s3 = MovementScheme::AimRelativeSwapped;
 	const StickSources cancelling{ kKeysUp, -kKeysUp, kNone };
-	REQUIRE(glm::length(routeSticks(cancelling, s3, false, false, kMoveDeadzone).move) >= kMoveDeadzone);
+	REQUIRE(glm::length(routeSticks(cancelling, s3, false, false, kMoveDeadzone, kBackStopMaxMagnitude).move) >= kMoveDeadzone);
 	REQUIRE(actualMoveLength(cancelling, s3, false, true) == 0.f);
 	CHECK(freeze(cancelling, s3, false, true));
 
 	const StickSources cancellingWithDrift{ kKeysUp, -kKeysUp, kRightDrift };
-	REQUIRE(glm::length(routeSticks(cancellingWithDrift, s3, false, false, kMoveDeadzone).move) >= kMoveDeadzone);
+	REQUIRE(glm::length(routeSticks(cancellingWithDrift, s3, false, false, kMoveDeadzone, kBackStopMaxMagnitude).move) >= kMoveDeadzone);
 	REQUIRE(actualMoveLength(cancellingWithDrift, s3, false, true) < kMoveDeadzone);
 	CHECK(freeze(cancellingWithDrift, s3, false, true));
 }
@@ -169,7 +171,7 @@ TEST_CASE("GuardFreeze: counterexample (b) - scheme 3, right stick exactly at th
 {
 	const MovementScheme s3 = MovementScheme::AimRelativeSwapped;
 	const StickSources atDeadzone{ kNone, kNone, { 0.f, kMoveDeadzone } };
-	REQUIRE(glm::length(routeSticks(atDeadzone, s3, false, false, kMoveDeadzone).move) == kMoveDeadzone);
+	REQUIRE(glm::length(routeSticks(atDeadzone, s3, false, false, kMoveDeadzone, kBackStopMaxMagnitude).move) == kMoveDeadzone);
 	REQUIRE(actualMoveLength(atDeadzone, s3, false, true) == 0.f);
 	CHECK(freeze(atDeadzone, s3, false, true));
 }
@@ -232,6 +234,36 @@ TEST_CASE("GuardFreeze: invariant - guard held and not frozen implies the routed
 	CHECK(notFrozen > 0);
 	CHECK(frozenOnlyByActualMove > 0);
 	CHECK(frozenOnlyByOwnMove > 0);
+}
+
+TEST_CASE("GuardFreeze: scheme 3 - guard plus a back-stop stick roots; a firm or off-window back pull walks",
+	"[SimulatableBrawler][GuardFreeze][BackStop]")
+{
+	const MovementScheme s3 = MovementScheme::AimRelativeSwapped;
+	const auto back = [](float magnitude, float degrees)
+	{
+		const float radians = glm::radians(degrees);
+		return glm::vec2(magnitude * std::sin(radians), magnitude * std::cos(radians));
+	};
+	for (const bool feedsAim : { true, false })
+	{
+		for (const glm::vec2& left : { kNone, kLeftFull, kLeftDrift })
+		{
+			INFO("feedsAim " << feedsAim << " L (" << left.x << "," << left.y << ")");
+			for (const glm::vec2& stoppedStick : { back(0.3f, 0.f), back(0.3f, 20.f), back(0.3f, -20.f), back(0.4f, 0.f) })
+			{
+				const StickSources stopped{ kNone, left, stoppedStick };
+				CHECK(actualMoveLength(stopped, s3, false, feedsAim) == 0.f);
+				CHECK(freeze(stopped, s3, false, feedsAim));
+				CHECK_FALSE(guardFreezeRequested(true, stopped, s3, false, feedsAim, kMoveDeadzone, 0.f));
+			}
+			CHECK_FALSE(freeze({ kNone, left, back(kBackStopMaxMagnitude, 0.f) }, s3, false, feedsAim));
+			CHECK_FALSE(freeze({ kNone, left, back(0.8f, 0.f) }, s3, false, feedsAim));
+			CHECK_FALSE(freeze({ kNone, left, back(0.3f, 25.f) }, s3, false, feedsAim));
+			CHECK_FALSE(freeze({ kNone, left, back(0.3f, -25.f) }, s3, false, feedsAim));
+			CHECK_FALSE(freeze({ kNone, left, back(0.3f, 0.f) }, s3, false, feedsAim, false));
+		}
+	}
 }
 
 } // namespace guardFreezeRequestTest

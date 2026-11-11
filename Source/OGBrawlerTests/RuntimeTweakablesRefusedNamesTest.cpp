@@ -52,6 +52,7 @@ namespace
         "MovementScheme",
         "MoveStickDeadzone",
         "AimStickDeadzone",
+        "BackStopMaxMagnitude",
         "SwapMoveAndAimSticks",
         "GamepadMoveStickFeedsAim",
         "MovementAndAimModeTest",   // deprecated-but-live: warns and still applies

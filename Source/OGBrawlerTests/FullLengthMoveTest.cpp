@@ -17,6 +17,7 @@ using dInput::stickRouting::StickSources;
 using dInput::stickRouting::routeSticks;
 
 constexpr float kMoveDeadzone = 0.15f;
+constexpr float kBackStopMaxMagnitude = dAttackMachineSimulation::kDefaultBackStopMaxMagnitude;
 
 enum class MoveStick
 {
@@ -62,7 +63,7 @@ StickSources onMoveStick(const RoutingCase& routingCase, const glm::vec2& stick)
 glm::vec2 routedMove(const RoutingCase& routingCase, const glm::vec2& stick)
 {
 	return routeSticks(onMoveStick(routingCase, stick), routingCase.scheme, routingCase.legacySwap,
-		routingCase.feedsAim, kMoveDeadzone)
+		routingCase.feedsAim, kMoveDeadzone, kBackStopMaxMagnitude)
 		.move;
 }
 

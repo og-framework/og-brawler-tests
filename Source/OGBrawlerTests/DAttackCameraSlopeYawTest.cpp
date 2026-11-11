@@ -1086,4 +1086,396 @@ TEST_CASE("DAttackCamera.SlopeEaseNegativeOrNaNSettingsAreZero", "[DAttack][Came
     }
 }
 
+namespace dAttackCameraSlopeYawTest
+{
+constexpr float kIsoYawsDeg[] = { 0.f, 45.f };
+
+OrbitCameraInput lookOffOnGround(const glm::vec3& groundUp, bool supported, float isoYawDeg)
+{
+    OrbitCameraInput input = lookOff(dAttackCameraBehaviour::cameraTargetUp(groundUp, supported));
+    input.groundUp = groundUp;
+    input.groundSupported = supported;
+    input.isoYawDeg = isoYawDeg;
+    return input;
+}
+
+float isoGoalOf(float isoYawDeg)
+{
+    return dAttackCameraBehaviour::wrapYawDeg(isoYawDeg);
+}
+
+struct GoalRun
+{
+    int firstTurnFrame = -1;
+    int arrivalFrame = -1;
+    int wrongWaySteps = 0;
+    int overshoots = 0;
+    double startGapDeg = 0.0;
+    double firstStepRateDegPerSec = 0.0;
+    float worstStateRateDegPerSec = 0.f;
+    int heldYawChanges = 0;
+    int heldNonZeroRates = 0;
+    OrbitCameraState arrived;
+};
+
+GoalRun turnToGoal(int fps, const OrbitCameraInput& input, float goalDeg, OrbitCameraState state,
+    const OrbitCameraSettings& settings)
+{
+    const float dt = dtAt(fps);
+    GoalRun run;
+    run.startGapDeg = signedYawGapDeg(goalDeg, state.yawDeg);
+    for (int frame = 1; frame <= kMaxFrames && run.arrivalFrame < 0; ++frame)
+    {
+        const OrbitCameraState next = dAttackCameraBehaviour::integrate(dt, input, settings, state);
+        const double stepDeg = signedYawGapDeg(next.yawDeg, state.yawDeg);
+        const double gapDeg = signedYawGapDeg(goalDeg, next.yawDeg);
+        if (stepDeg != 0.0)
+        {
+            if (run.firstTurnFrame < 0)
+            {
+                run.firstTurnFrame = frame;
+                run.firstStepRateDegPerSec = std::fabs(stepDeg) / dt;
+            }
+            if ((stepDeg > 0.0) != (run.startGapDeg > 0.0))
+                ++run.wrongWaySteps;
+        }
+        if (gapDeg != 0.0 && (gapDeg > 0.0) != (run.startGapDeg > 0.0))
+            ++run.overshoots;
+        run.worstStateRateDegPerSec = std::max(run.worstStateRateDegPerSec, next.slopeYawRateDegPerSec);
+        state = next;
+        if (bitsOf(state.yawDeg) == bitsOf(goalDeg))
+            run.arrivalFrame = frame;
+    }
+    run.arrived = state;
+    for (int frame = 0; frame < kHoldFrames; ++frame)
+    {
+        state = dAttackCameraBehaviour::integrate(dt, input, settings, state);
+        run.heldYawChanges += (bitsOf(state.yawDeg) != bitsOf(goalDeg)) ? 1 : 0;
+        run.heldNonZeroRates += (bitsOf(state.slopeYawRateDegPerSec) != bitsOf(0.f)) ? 1 : 0;
+    }
+    return run;
+}
+
+std::vector<OrbitCameraState> runInputs(float dt, const std::vector<OrbitCameraInput>& inputs,
+    const OrbitCameraSettings& settings, OrbitCameraState state)
+{
+    std::vector<OrbitCameraState> states;
+    states.reserve(inputs.size());
+    for (const OrbitCameraInput& input : inputs)
+    {
+        state = dAttackCameraBehaviour::integrate(dt, input, settings, state);
+        states.push_back(state);
+    }
+    return states;
+}
+
+bool sameStateBits(const OrbitCameraState& a, const OrbitCameraState& b)
+{
+    return sameCameraBits(a, b) && bitsOf(a.slopeDwellSeconds) == bitsOf(b.slopeDwellSeconds)
+        && bitsOf(a.slopeDwellYawDeg) == bitsOf(b.slopeDwellYawDeg)
+        && bitsOf(a.slopeYawRateDegPerSec) == bitsOf(b.slopeYawRateDegPerSec);
+}
+} // namespace dAttackCameraSlopeYawTest
+
+TEST_CASE("DAttackCamera.IsoYawInputsDefaultToTwentyOneE", "[DAttack][CameraSlopeYaw][CameraIsoYaw]")
+{
+    const OrbitCameraInput defaults;
+    REQUIRE(bitsOf(defaults.groundUp.x) == bitsOf(0.f));
+    REQUIRE(bitsOf(defaults.groundUp.y) == bitsOf(0.f));
+    REQUIRE(bitsOf(defaults.groundUp.z) == bitsOf(1.f));
+    REQUIRE_FALSE(defaults.groundSupported);
+    REQUIRE(bitsOf(defaults.isoYawDeg) == bitsOf(0.f));
+    const OrbitCameraInput positional{ false, glm::vec2(0.f), glm::vec2(0.f), kIsoTargetDeg,
+        dAttackCameraBehaviour::kCameraUp };
+    REQUIRE_FALSE(positional.groundSupported);
+    CHECK_FALSE(dAttackCameraBehaviour::lookOffYawGoal(positional).turns);
+    CHECK_FALSE(dAttackCameraBehaviour::lookOffYawGoal(lookOff(dAttackCameraBehaviour::kCameraUp)).turns);
+}
+
+TEST_CASE("DAttackCamera.IsoYawFlatGroundTurnsToTheIsoYaw", "[DAttack][CameraSlopeYaw][CameraIsoYaw]")
+{
+    const OrbitCameraSettings defaults;
+    REQUIRE(defaults.slopeYawDwellSeconds == dAttackCameraBehaviour::kSlopeYawDwellSeconds);
+    REQUIRE(defaults.slopeYawEaseSeconds == dAttackCameraBehaviour::kSlopeYawEaseSeconds);
+    REQUIRE(defaults.slopeYawAccelDegPerSec2 == dAttackCameraBehaviour::kSlopeYawAccelDegPerSec2);
+    const Face grounds[] = {
+        { "flat ground (0 deg)", dAttackCameraBehaviour::kCameraUp },
+        { "0.67 deg face rising along Unreal +X", upTiltedToward(0.67, 0.0) },
+        { "1.9 deg face rising along Unreal +Y", upTiltedToward(1.9, 90.0) },
+        { "10 deg face rising along Unreal +X", upTiltedToward(10.0, 0.0) },
+        { "10 deg face rising toward 137 deg", upTiltedToward(10.0, 137.0) },
+    };
+    for (const Face& ground : grounds)
+        for (const float isoYawDeg : kIsoYawsDeg)
+            for (const int fps : kFps)
+                for (const float offsetDeg : kStartOffsetsDeg)
+                {
+                    const float goalDeg = isoGoalOf(isoYawDeg);
+                    const OrbitCameraInput off = lookOffOnGround(ground.up, true, isoYawDeg);
+                    const float startYawDeg = dAttackCameraBehaviour::wrapYawDeg(goalDeg + offsetDeg);
+                    const GoalRun run =
+                        turnToGoal(fps, off, goalDeg, stateAt(startYawDeg, kStartPitchDeg, off.targetUp), defaults);
+                    const double startDistanceDeg = std::fabs(run.startGapDeg);
+                    const double boundDegPerSec = std::min({ 90.0, startDistanceDeg / 0.3,
+                        static_cast<double>(dAttackCameraBehaviour::kSlopeYawAccelDegPerSec2) / fps });
+                    INFO(ground.name << ", iso yaw " << isoYawDeg << ", fps " << fps << ", start " << offsetDeg
+                                     << " deg off: first turning frame " << run.firstTurnFrame << " (dwell frame "
+                                     << dwellFrameAt(fps) << "), arrival frame " << run.arrivalFrame
+                                     << ", first step " << run.firstStepRateDegPerSec << " deg/s (bound "
+                                     << boundDegPerSec << "), wrong-way steps " << run.wrongWaySteps
+                                     << ", overshoots " << run.overshoots << ", held yaw changes "
+                                     << run.heldYawChanges << ", final yaw " << run.arrived.yawDeg);
+                    CHECK(run.firstTurnFrame == dwellFrameAt(fps));
+                    CHECK(run.arrivalFrame > run.firstTurnFrame);
+                    CHECK(bitsOf(run.arrived.yawDeg) == bitsOf(goalDeg));
+                    CHECK(bitsOf(run.arrived.slopeYawRateDegPerSec) == bitsOf(0.f));
+                    CHECK(run.wrongWaySteps == 0);
+                    CHECK(run.overshoots == 0);
+                    CHECK(run.firstStepRateDegPerSec <= boundDegPerSec + kRateToleranceDegPerSec);
+                    CHECK(run.worstStateRateDegPerSec <= dAttackCameraBehaviour::kSlopeYawDegPerSec);
+                    CHECK(run.heldYawChanges == 0);
+                    CHECK(run.heldNonZeroRates == 0);
+                    CHECK(bitsOf(run.arrived.pitchDeg) == bitsOf(kIsoTargetDeg));
+                }
+}
+
+TEST_CASE("DAttackCamera.IsoYawSeededCameraIsAlreadyAtTheGoal", "[DAttack][CameraSlopeYaw][CameraIsoYaw]")
+{
+    const OrbitCameraSettings defaults;
+    constexpr float kUEIsoPitchDeg = -60.f;
+    const float ueIsoYawsDeg[] = { 0.f, 45.f, -135.f, 90.f, 180.f, -180.f, 33.3f, 370.f };
+    for (const int fps : kFps)
+        for (const float ueYawDeg : ueIsoYawsDeg)
+        {
+            const OrbitCameraState seeded = dAttackCameraBehaviour::seedFromUERotation(kUEIsoPitchDeg, ueYawDeg, defaults);
+            const OrbitCameraInput off = lookOffOnGround(
+                dAttackCameraBehaviour::kCameraUp, true, dAttackCameraBehaviour::yawDegFromUEYawDegrees(ueYawDeg));
+            const dAttackCameraBehaviour::LookOffYawGoal goal = dAttackCameraBehaviour::lookOffYawGoal(off);
+            REQUIRE(goal.turns);
+            REQUIRE(bitsOf(goal.yawDeg) == bitsOf(seeded.yawDeg));
+            const std::vector<OrbitCameraState> states =
+                runInputs(dtAt(fps), std::vector<OrbitCameraInput>(static_cast<std::size_t>(kHoldFrames), off),
+                    defaults, seeded);
+            INFO("fps " << fps << ", og.iso.yaw " << ueYawDeg << ": seeded yaw " << seeded.yawDeg << ", final dwell "
+                        << states.back().slopeDwellSeconds << " s");
+            CHECK(yawChangesFrom(states, seeded.yawDeg) == 0);
+            CHECK(countNonZeroRates(states) == 0);
+            CHECK(states.back().slopeDwellSeconds > defaults.slopeYawDwellSeconds);
+        }
+}
+
+TEST_CASE("DAttackCamera.IsoYawSlopeBandIsTwentyOneEs", "[DAttack][CameraSlopeYaw][CameraIsoYaw]")
+{
+    const OrbitCameraSettings defaults;
+    struct Band
+    {
+        const char* name;
+        glm::vec3 up;
+        bool supported;
+        int expected;
+    };
+    constexpr int kHolds = 0;
+    constexpr int kTurnsToIso = 1;
+    constexpr int kTurnsUpSlope = 2;
+    const Band bands[] = {
+        { "flat ground", dAttackCameraBehaviour::kCameraUp, true, kTurnsToIso },
+        { "flat ground, 1-ULP-short up", glm::vec3(0.f, 0.f, 0.99999994f), true, kTurnsToIso },
+        { "12 deg face", upTiltedToward(12.0, 0.0), true, kTurnsToIso },
+        { "14.9 deg face", upTiltedToward(14.9, 0.0), true, kTurnsToIso },
+        { "14.998 deg face (outside the threshold's tolerance)", upTiltedToward(14.998, 0.0), true, kTurnsToIso },
+        { "14.9995 deg face (inside the threshold's tolerance)", upTiltedToward(14.9995, 0.0), true, kTurnsUpSlope },
+        { "15 deg face", upTiltedToward(15.0, 0.0), true, kTurnsUpSlope },
+        { "20 deg face", upTiltedToward(20.0, 90.0), true, kTurnsUpSlope },
+        { "30 deg face", upTiltedToward(30.0, 0.0), true, kTurnsUpSlope },
+        { "30.09 deg face", upTiltedToward(30.09, 0.0), true, kTurnsUpSlope },
+        { "30.11 deg face", upTiltedToward(30.11, 0.0), true, kHolds },
+        { "45 deg face", upTiltedToward(45.0, 0.0), true, kHolds },
+        { "60 deg face", upTiltedToward(60.0, 0.0), true, kHolds },
+        { "flat ground, unsupported", dAttackCameraBehaviour::kCameraUp, false, kHolds },
+        { "10 deg face, unsupported", upTiltedToward(10.0, 0.0), false, kHolds },
+        { "30 deg face, unsupported", upTiltedToward(30.0, 0.0), false, kHolds },
+    };
+    for (const Band& band : bands)
+        for (const float isoYawDeg : { 0.f, 45.f, 90.f })
+        {
+            const OrbitCameraInput withGround = lookOffOnGround(band.up, band.supported, isoYawDeg);
+            const dAttackCameraBehaviour::LookOffYawGoal goal = dAttackCameraBehaviour::lookOffYawGoal(withGround);
+            INFO(band.name << ", iso yaw " << isoYawDeg << ": goal " << (goal.turns ? "turns to " : "holds at ")
+                           << goal.yawDeg);
+            CHECK(dAttackCameraBehaviour::turnsUpSlope(withGround.targetUp) == (band.expected == kTurnsUpSlope));
+            CHECK(goal.turns == (band.expected != kHolds));
+            if (band.expected == kTurnsToIso)
+                CHECK(bitsOf(goal.yawDeg) == bitsOf(isoGoalOf(isoYawDeg)));
+            if (band.expected != kTurnsUpSlope)
+                continue;
+            CHECK(bitsOf(goal.yawDeg) == bitsOf(goalOf(withGround.targetUp)));
+            const OrbitCameraInput withoutGround = lookOff(withGround.targetUp);
+            for (const int fps : kFps)
+                for (const float offsetDeg : kStartOffsetsDeg)
+                {
+                    const OrbitCameraState start = stateAt(
+                        dAttackCameraBehaviour::wrapYawDeg(goal.yawDeg + offsetDeg), kStartPitchDeg, withGround.targetUp);
+                    const std::size_t frames = static_cast<std::size_t>(6 * fps);
+                    const std::vector<OrbitCameraState> shipped =
+                        runInputs(dtAt(fps), std::vector<OrbitCameraInput>(frames, withGround), defaults, start);
+                    const std::vector<OrbitCameraState> twentyOneE =
+                        runInputs(dtAt(fps), std::vector<OrbitCameraInput>(frames, withoutGround), defaults, start);
+                    int mismatches = 0;
+                    for (std::size_t frame = 0; frame < frames; ++frame)
+                        mismatches += sameStateBits(shipped[frame], twentyOneE[frame]) ? 0 : 1;
+                    INFO("fps " << fps << ", start " << offsetDeg << " deg off: frames differing from 21e's input "
+                                << mismatches << ", final yaw " << shipped.back().yawDeg);
+                    CHECK(mismatches == 0);
+                    CHECK(bitsOf(shipped.back().yawDeg) == bitsOf(goal.yawDeg));
+                }
+        }
+}
+
+TEST_CASE("DAttackCamera.IsoYawHoldsUnsupportedAndOnSteepGround", "[DAttack][CameraSlopeYaw][CameraIsoYaw]")
+{
+    const OrbitCameraSettings defaults;
+    const Face holds[] = {
+        { "flat ground, unsupported", dAttackCameraBehaviour::kCameraUp },
+        { "45 deg face", upTiltedToward(45.0, 0.0) },
+        { "30.11 deg face", upTiltedToward(30.11, 90.0) },
+        { "60 deg face", upTiltedToward(60.0, 0.0) },
+    };
+    for (const Face& ground : holds)
+        for (const float isoYawDeg : kIsoYawsDeg)
+            for (const int fps : kFps)
+            {
+                const bool supported = ground.up.z < 0.99f;
+                const OrbitCameraInput off = lookOffOnGround(ground.up, supported, isoYawDeg);
+                const OrbitCameraState start = stateAt(100.7f, kStartPitchDeg, dAttackCameraBehaviour::kCameraUp);
+                const std::vector<OrbitCameraState> states = runInputs(
+                    dtAt(fps), std::vector<OrbitCameraInput>(static_cast<std::size_t>(kHoldFrames), off), defaults, start);
+                INFO(ground.name << (supported ? ", supported" : "") << ", iso yaw " << isoYawDeg << ", fps " << fps
+                                 << ": final yaw " << states.back().yawDeg << ", final dwell "
+                                 << states.back().slopeDwellSeconds << " s");
+                CHECK(yawChangesFrom(states, start.yawDeg) == 0);
+                CHECK(countNonZeroRates(states) == 0);
+                CHECK(bitsOf(states.back().slopeDwellSeconds) == bitsOf(0.f));
+                CHECK(bitsOf(states.back().pitchDeg) == bitsOf(kIsoTargetDeg));
+            }
+}
+
+TEST_CASE("DAttackCamera.IsoYawCreaseKeepsOrRestartsTheAnchor", "[DAttack][CameraSlopeYaw][CameraIsoYaw]")
+{
+    const OrbitCameraSettings defaults;
+    const Face plusXFaces[] = { kThirtyDegreeFaces[0], kThirtyDegreeFaces[3], kThirtyDegreeFaces[4] };
+    for (const Face& face : plusXFaces)
+        for (const int fps : kFps)
+        {
+            const float dt = dtAt(fps);
+            const OrbitCameraInput flat = lookOffOnGround(dAttackCameraBehaviour::kCameraUp, true, 0.f);
+            const OrbitCameraInput slope = lookOffOnGround(face.up, true, 0.f);
+            const float slopeGoalDeg = goalOf(slope.targetUp);
+            REQUIRE(std::fabs(slopeGoalDeg) < 1e-4f);
+
+            const std::vector<OrbitCameraInput> crossings[] = {
+                std::vector<OrbitCameraInput>(static_cast<std::size_t>(fps), slope),
+                std::vector<OrbitCameraInput>(static_cast<std::size_t>(fps), flat),
+            };
+            struct Leg
+            {
+                const char* name;
+                const OrbitCameraInput& arriveOn;
+                float goalDeg;
+            };
+            const Leg legs[] = { { "arrived on flat ground", flat, isoGoalOf(0.f) },
+                { "arrived on the slope", slope, slopeGoalDeg } };
+            for (const Leg& leg : legs)
+            {
+                const GoalRun arrival =
+                    turnToGoal(fps, leg.arriveOn, leg.goalDeg, stateAt(64.9f, kStartPitchDeg, leg.arriveOn.targetUp), defaults);
+                REQUIRE(bitsOf(arrival.arrived.yawDeg) == bitsOf(leg.goalDeg));
+                std::vector<OrbitCameraInput> path;
+                for (int lap = 0; lap < 2; ++lap)
+                    for (const std::vector<OrbitCameraInput>& crossing : crossings)
+                        path.insert(path.end(), crossing.begin(), crossing.end());
+                for (int frame = 0; frame < fps; ++frame)
+                    path.push_back((frame % 2 == 0) ? slope : flat);
+                const std::vector<OrbitCameraState> states = runInputs(dt, path, defaults, arrival.arrived);
+                int restarts = 0;
+                float previousDwell = arrival.arrived.slopeDwellSeconds;
+                for (const OrbitCameraState& state : states)
+                {
+                    restarts += (state.slopeDwellSeconds > previousDwell) ? 0 : 1;
+                    previousDwell = state.slopeDwellSeconds;
+                }
+                INFO(face.name << ", iso yaw 0, fps " << fps << ", " << leg.name << " (yaw " << leg.goalDeg
+                               << "), then slope / flat in 1 s runs and every tick: yaw changes "
+                               << yawChangesFrom(states, leg.goalDeg) << ", dwell restarts " << restarts);
+                CHECK(yawChangesFrom(states, leg.goalDeg) == 0);
+                CHECK(countNonZeroRates(states) == 0);
+                CHECK(restarts == 0);
+                CHECK(bitsOf(states.back().slopeDwellYawDeg) == bitsOf(leg.goalDeg));
+            }
+
+            const OrbitCameraInput flatAtNinety = lookOffOnGround(dAttackCameraBehaviour::kCameraUp, true, 90.f);
+            const OrbitCameraInput slopeAtNinety = lookOffOnGround(face.up, true, 90.f);
+            const GoalRun onFlat = turnToGoal(
+                fps, flatAtNinety, isoGoalOf(90.f), stateAt(-20.2f, kStartPitchDeg, flatAtNinety.targetUp), defaults);
+            REQUIRE(bitsOf(onFlat.arrived.yawDeg) == bitsOf(isoGoalOf(90.f)));
+            const std::vector<OrbitCameraState> states = runInputs(
+                dt, std::vector<OrbitCameraInput>(static_cast<std::size_t>(dwellFrameAt(fps)), slopeAtNinety), defaults,
+                onFlat.arrived);
+            const std::vector<OrbitCameraState> beforeTheDwell(states.begin(), states.end() - 1);
+            INFO(face.name << ", iso yaw 90, fps " << fps << ": first slope frame's dwell " << states.front().slopeDwellSeconds
+                           << " s on heading " << states.front().slopeDwellYawDeg << ", yaw changes before the dwell "
+                           << yawChangesFrom(beforeTheDwell, isoGoalOf(90.f)) << ", yaw on frame " << dwellFrameAt(fps)
+                           << " " << states.back().yawDeg);
+            CHECK(bitsOf(states.front().slopeDwellSeconds) == bitsOf(dt));
+            CHECK(bitsOf(states.front().slopeDwellYawDeg) == bitsOf(slopeGoalDeg));
+            CHECK(yawChangesFrom(beforeTheDwell, isoGoalOf(90.f)) == 0);
+            CHECK(countNonZeroRates(beforeTheDwell) == 0);
+            CHECK(bitsOf(states.back().yawDeg) != bitsOf(isoGoalOf(90.f)));
+            CHECK(signedYawGapDeg(states.back().yawDeg, 90.0) < 0.0);
+            CHECK(states.back().slopeYawRateDegPerSec
+                <= dAttackCameraBehaviour::kSlopeYawAccelDegPerSec2 * dt * (1.f + 1e-6f));
+        }
+}
+
+TEST_CASE("DAttackCamera.IsoYawLookModeOnIsUnchanged", "[DAttack][CameraSlopeYaw][CameraIsoYaw]")
+{
+    const OrbitCameraSettings defaults;
+    for (const int fps : kFps)
+    {
+        const float dt = dtAt(fps);
+        const OrbitCameraInput flatOff = lookOffOnGround(dAttackCameraBehaviour::kCameraUp, true, 45.f);
+        const OrbitCameraState midDwell = run(dt, dwellFrameAt(fps) - 1, flatOff, defaults, stateAt(-91.9f, 40.f,
+            dAttackCameraBehaviour::kCameraUp));
+        REQUIRE(midDwell.slopeDwellSeconds > 0.f);
+        REQUIRE(bitsOf(midDwell.yawDeg) == bitsOf(-91.9f));
+
+        OrbitCameraInput turning = flatOff;
+        turning.lookHeld = true;
+        turning.mouseUnits = glm::vec2(0.2f, 0.f);
+        turning.stick = glm::vec2(0.f);
+        OrbitCameraInput turningWithoutGround = turning;
+        turningWithoutGround.groundUp = dAttackCameraBehaviour::kCameraUp;
+        turningWithoutGround.groundSupported = false;
+        turningWithoutGround.isoYawDeg = 0.f;
+        OrbitCameraInput still = turning;
+        still.mouseUnits = glm::vec2(0.f);
+
+        const std::vector<OrbitCameraState> held =
+            runInputs(dt, std::vector<OrbitCameraInput>(static_cast<std::size_t>(kHoldFrames), still), defaults, midDwell);
+        const std::vector<OrbitCameraState> shipped = runInputs(
+            dt, std::vector<OrbitCameraInput>(static_cast<std::size_t>(kHoldFrames), turning), defaults, midDwell);
+        const std::vector<OrbitCameraState> twentyOneE = runInputs(dt,
+            std::vector<OrbitCameraInput>(static_cast<std::size_t>(kHoldFrames), turningWithoutGround), defaults, midDwell);
+        int mismatches = 0;
+        for (std::size_t frame = 0; frame < shipped.size(); ++frame)
+            mismatches += sameStateBits(shipped[frame], twentyOneE[frame]) ? 0 : 1;
+        INFO("fps " << fps << ": still look-mode yaw changes " << yawChangesFrom(held, midDwell.yawDeg)
+                    << ", turning frames differing from 21e's input " << mismatches);
+        CHECK(yawChangesFrom(held, midDwell.yawDeg) == 0);
+        CHECK(bitsOf(held.front().slopeDwellSeconds) == bitsOf(0.f));
+        CHECK(mismatches == 0);
+        CHECK(bitsOf(shipped.front().slopeDwellSeconds) == bitsOf(0.f));
+        CHECK(bitsOf(shipped.back().yawDeg) != bitsOf(midDwell.yawDeg));
+    }
+}
+
 #endif // WITH_LOW_LEVEL_TESTS
