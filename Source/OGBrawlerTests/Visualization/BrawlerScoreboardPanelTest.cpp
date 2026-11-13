@@ -226,9 +226,10 @@ TEST_CASE("Scoreboard.ARowIsFivePlainFieldsAndZeroIsARealScore",
 	CHECK(fresh.ticksUntilRespawn == 0u);
 
 	// ⛔ THE DEFAULT SWATCH IS WHITE, AND IT IS NOT AN ARBITRARY PLACEHOLDER.
-	// `AOGBrawlerUECharacter::BrawlerColor` itself defaults to `FLinearColor::White`, so a
-	// brawler that has not been possessed yet -- or whose colour has not replicated in yet
-	// -- draws the swatch its MESH is actually wearing in that window. Board and world
+	// `AOGBrawlerUECharacter::GetBrawlerColor()` returns `FLinearColor::White` while the
+	// sim id is `SimCharacterId::None`, so a brawler whose id has not been assigned -- or
+	// has not replicated in yet -- draws the swatch its MESH is actually wearing in that
+	// window. Board and world
 	// agree even before the palette has spoken.
 	CHECK(near(fresh.swatch.r, 1.f));
 	CHECK(near(fresh.swatch.g, 1.f));

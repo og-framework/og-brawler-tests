@@ -177,7 +177,7 @@ struct GroundTick
 template <typename SceneT>
 GroundTick groundOf(SceneT& scene, unsigned int id, CountingQuery& shipped)
 {
-    const SimulatableBrawler& brawler = scene.storage.get<SimulatableBrawler>(id);
+    const SimulatableBrawler& brawler = scene.storage.template get<SimulatableBrawler>(id);
     const auto& movement = brawler.getAllState().getState().get<brawlerMovementSimulation::State>();
     const auto& bindings = brawler.getPhysicsComposite().get<brawlerMovementSimulation::PhysicsDeclaration>().bindings;
     const brawlerMovementSimulation::StaticData& sd = scene.staticData.m_movementStaticData;
@@ -222,7 +222,7 @@ template <typename SceneT>
 CharacterTick sampleOf(const SceneT& scene, unsigned int id, uint32_t tick)
 {
     const goldenTraceScene::DetectionLog& log = scene.detections.at(id);
-    const SimulatableBrawler& brawler = scene.storage.get<SimulatableBrawler>(id);
+    const SimulatableBrawler& brawler = scene.storage.template get<SimulatableBrawler>(id);
     const auto& state = brawler.getAllState().getState();
     const auto& derived = brawler.getAllState().getDerivedState();
     const auto& movement = state.get<brawlerMovementSimulation::State>();

@@ -208,10 +208,10 @@ TEST_CASE("DAttack.SimulatableBrawler.FirstResimStep", "[DAttack][SimulatableBra
 //
 // WHY THIS IS AN *ABSOLUTE* ASSERTION AND NOT A DELTA. The composite is written
 // into FSimulationStateSyncBuffer, whose capacity is a FIXED
-// `kBufferBytes = 384` (UE-sim/SyncedSimulationStateBuffer.h:213). Overflowing it
+// `kBufferBytes = 384` (UE-sim/SyncedSimulationStateBuffer.h:218). Overflowing it
 // is **a runtime out-of-bounds check, not a compile error** — the buffer's
 // writeToBuffer logs "FSimulationStateSyncBuffer write OOB: ... (raise
-// kBufferBytes)" (same file, :243) and the correction is dropped. A delta-only
+// kBufferBytes)" (same file, :260) and the correction is dropped. A delta-only
 // assertion cannot see that boundary: every individual step can be small and
 // legal while the running total walks off the end. So this case pins the
 // absolute number and, separately, the headroom against the capacity.
@@ -253,7 +253,7 @@ template <typename... Ts> struct FCompositeWireSize<SimulationComposite<Ts...>>
 // all false), which is the property that lets the whole brawler suite run without
 // the editor. A copy is therefore the only way to fence the capacity from here —
 // and a copy that is checked every run beats a capacity nobody checks at all.
-// If UE-sim/SyncedSimulationStateBuffer.h:213 changes, change this line.
+// If UE-sim/SyncedSimulationStateBuffer.h:218 changes, change this line.
 static constexpr std::uint32_t kStateSyncBufferBytes = 384u;
 
 TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBrawler]")

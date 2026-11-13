@@ -348,7 +348,7 @@ TEST_CASE("DAttack.SimulationNetSync.SendLocalInputNoProviderIsNoOp", "[DAttack]
     netSync.registerAuthorityOwner<SimulatableBrawler>(1u, authorityOwner, inputResolution);
 
     // Must not throw. (Stage 1, Task 9: now takes currentTick + redundancyDepth.)
-    netSync.sendLocalInputToAuthorityAll(0u, 5u);
+    netSync.sendLocalInputToAuthorityAll(0u, 5u, /*redundancyFrames=*/0);
 
     REQUIRE(true);
 
@@ -450,7 +450,7 @@ TEST_CASE("DAttack.SimulationNetSync.OutboundQueueCarriesUndelayedCapture",
     }
 
     // Depth 5 so the whole run is offered to the send path in one call.
-    netSync.sendLocalInputToAuthorityAll(kLastTick, 5u);
+    netSync.sendLocalInputToAuthorityAll(kLastTick, 5u, /*redundancyFrames=*/0);
 
     REQUIRE_FALSE(predictionOwner.sentSlots.empty());
     for (const auto& slot : predictionOwner.sentSlots)

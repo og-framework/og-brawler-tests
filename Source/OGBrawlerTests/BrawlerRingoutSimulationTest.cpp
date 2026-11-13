@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 #if WITH_LOW_LEVEL_TESTS
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 // [ringout task 7] The resim rig at the bottom of this file needs a byte buffer it can poison
@@ -1179,13 +1180,11 @@ struct FCorrectionProbeBuffer
 // [ringout task 7] `SimulationComparisonGlm.h` declares epsilon overloads of `isSimilarToField`
 // for `glm::vec3` / `vec2` / `quat`, but `fieldwiseIsSimilarTo` calls that name DEPENDENTLY from
 // inside `SimulationSerialization.h`, and under `/permissive-` (which this target compiles with)
-// neither ordinary lookup at the definition point nor ADL — the overloads sit in the GLOBAL
-// namespace while the arguments live in `glm` — can reach them. MEASURED on this target: a 1e-5
-// difference in one `glm::vec3` component, well inside `kDefaultSimilarityEpsilon` = 1e-4, makes
-// `fieldwiseIsSimilarTo` return FALSE, while a direct non-dependent call to `isSimilarToField`
-// on the same pair returns TRUE. So `isSimilarTo` is currently an EXACT float comparison for
-// every vector field. Reported to the lead, NOT fixed here (og-simulation, another submodule,
-// and far outside a ring-out test task).
+// neither ordinary lookup at the definition point nor ADL could reach them while they sat in the
+// GLOBAL namespace. MEASURED then on this target: a 1e-5 difference in one `glm::vec3` component,
+// well inside `kDefaultSimilarityEpsilon` = 1e-4, made `fieldwiseIsSimilarTo` return FALSE. Since
+// og-input-latency task 2e the overloads are in `namespace glm`, ADL finds them, and a vector field
+// compares with the epsilon. The byte comparison below does not depend on either.
 //
 // POISON, NOT ZERO. A field the codec never writes would otherwise read back as a legitimate
 // zero, and the round trip would pass on a hole.
@@ -1779,6 +1778,158 @@ TEST_CASE("Ringout.Resim.TheResimTestsCostTheCompositeNothing", "[BrawlerRingout
     // would not say this — it fails to compile for an unspecialized type, and would be
     // indistinguishable from a real declared 0 B anyway (task 2, finding 7).
     STATIC_REQUIRE_FALSE(Serializable<ringout::DerivedState>);
+}
+
+// ============================================================================================
+// [og-input-latency task 2d, 2026-11-11] START REJECTION AND THE RESPAWN SLOT CHOICE.
+//
+// The seed drops a player start at or below the kill plane plus kSpawnPointKillPlaneMargin, and a
+// respawn whose slot is occupied moves to the lowest free one. Rationale: §5e and §11d of
+// BrawlerRingoutSimulation-rationale.md.
+// ============================================================================================
+
+namespace spawnrejection
+{
+
+using spawnpoints::Placements;
+
+inline glm::vec3 atHeight(float forward, float height)
+{
+    return simFrame::withHeight(glm::vec3(forward, 0.f, forward * 0.5f), height);
+}
+
+inline float rejectionHeight() { return ringout::StaticData{}.killPlaneHeight + ringout::kSpawnPointKillPlaneMargin; }
+
+} // namespace spawnrejection
+
+TEST_CASE("Ringout.SpawnPoints.AStartAtOrBelowTheKillPlanePlusTheMarginIsRejected", "[BrawlerRingout]")
+{
+    using namespace spawnpoints;
+    using namespace spawnrejection;
+
+    const float killPlaneHeight = ringout::StaticData{}.killPlaneHeight;
+    REQUIRE(rejectionHeight() == -4.f);
+
+    // The two heights task 2c measured on ThirdPersonMap, a start exactly at the rejection height,
+    // and one a single float step above it.
+    const ringout::LevelSpawnPoint below55{ "Below55", atHeight(1.f, -55.66f) };
+    const ringout::LevelSpawnPoint below141{ "Below141", atHeight(2.f, -141.03f) };
+    const ringout::LevelSpawnPoint atMargin{ "AtMargin", atHeight(3.f, rejectionHeight()) };
+    const ringout::LevelSpawnPoint justAbove{
+        "JustAbove", atHeight(4.f, std::nextafter(rejectionHeight(), 0.f)) };
+
+    const Placements level{ chas(), below141, alpha(), atMargin, justAbove, below55, bravo() };
+    const ringout::LevelSpawnSeed seed = ringout::seedFromLevelPlacements(level, authored(), killPlaneHeight);
+
+    REQUIRE(seed.rejected.size() == 3u);
+    REQUIRE(seed.rejected[0].name == "AtMargin");
+    REQUIRE(seed.rejected[1].name == "Below141");
+    REQUIRE(seed.rejected[2].name == "Below55");
+
+    REQUIRE(seed.levelSlotCount == 4u);
+    REQUIRE(seed.spawnPoints[0] == alpha().position);
+    REQUIRE(seed.spawnPoints[1] == bravo().position);
+    REQUIRE(seed.spawnPoints[2] == chas().position);
+    REQUIRE(seed.spawnPoints[3] == justAbove.position);
+    for (uint32_t slot = 4u; slot < ringout::kMaxSpawnPoints; ++slot)
+        REQUIRE(seed.spawnPoints[slot] == authored()[slot]);
+
+    for (const glm::vec3& point : seed.spawnPoints)
+        REQUIRE(simFrame::height(point) > rejectionHeight());
+
+    // The control: the merge alone, without the filter, does seed the below-plane starts.
+    const auto unfiltered = ringout::spawnPointsFromLevelPlacements(level, authored());
+    bool unfilteredHasABelowPlaneSlot = false;
+    for (const glm::vec3& point : unfiltered)
+        unfilteredHasABelowPlaneSlot = unfilteredHasABelowPlaneSlot || simFrame::height(point) < killPlaneHeight;
+    REQUIRE(unfilteredHasABelowPlaneSlot);
+}
+
+TEST_CASE("Ringout.SpawnPoints.WithEveryStartAboveThePlaneTheSeedIsTodaysMerge", "[BrawlerRingout]")
+{
+    using namespace spawnpoints;
+
+    for (const glm::vec3& point : authored())
+        REQUIRE(ringout::spawnPointClearsKillPlane(point, ringout::StaticData{}.killPlaneHeight));
+
+    const Placements all = tenInNameOrder();
+    for (size_t count = 0u; count <= all.size(); ++count)
+    {
+        INFO("player starts present: " << count);
+        const Placements present(all.begin(), all.begin() + static_cast<std::ptrdiff_t>(count));
+        const ringout::LevelSpawnSeed seed =
+            ringout::seedFromLevelPlacements(present, authored(), ringout::StaticData{}.killPlaneHeight);
+        REQUIRE(seed.rejected.empty());
+        REQUIRE(seed.levelSlotCount == std::min<uint32_t>(static_cast<uint32_t>(count), ringout::kMaxSpawnPoints));
+        REQUIRE(seed.spawnPoints == ringout::spawnPointsFromLevelPlacements(present, authored()));
+    }
+}
+
+TEST_CASE("Ringout.RespawnSlot.AllButOneSlotOccupiedPicksTheFreeOne", "[BrawlerRingout]")
+{
+    const auto table = spawnpoints::authored();
+
+    for (uint32_t freeSlot = 0u; freeSlot < ringout::kMaxSpawnPoints; ++freeSlot)
+    {
+        std::vector<glm::vec3> occupants;
+        for (uint32_t slot = 0u; slot < ringout::kMaxSpawnPoints; ++slot)
+        {
+            if (slot != freeSlot)
+                occupants.push_back(table[slot] + simFrame::withHeight(glm::vec3(0.f), -0.45f));
+        }
+
+        for (uint32_t current = 0u; current < ringout::kMaxSpawnPoints; ++current)
+        {
+            INFO("free slot " << freeSlot << ", current slot " << current);
+            REQUIRE(ringout::chooseRespawnSlot(current, table, occupants) == freeSlot);
+        }
+    }
+}
+
+TEST_CASE("Ringout.RespawnSlot.AFullTableKeepsTodaysChoice", "[BrawlerRingout]")
+{
+    const auto table = spawnpoints::authored();
+    const std::vector<glm::vec3> occupants(table.begin(), table.end());
+
+    for (uint32_t current = 0u; current < ringout::kMaxSpawnPoints; ++current)
+        REQUIRE(ringout::chooseRespawnSlot(current, table, occupants) == current);
+
+    REQUIRE(ringout::chooseRespawnSlot(ringout::SpawnSlotAllocator::kNoFreeSlot, table, occupants)
+            == ringout::SpawnSlotAllocator::kNoFreeSlot);
+}
+
+TEST_CASE("Ringout.RespawnSlot.AFreeOwnSlotIsKeptEvenWhenALowerOneIsFree", "[BrawlerRingout]")
+{
+    const auto table = spawnpoints::authored();
+    const std::vector<glm::vec3> occupants{ table[1], table[2] };
+
+    REQUIRE(ringout::chooseRespawnSlot(5u, table, occupants) == 5u);
+    REQUIRE(ringout::chooseRespawnSlot(0u, table, occupants) == 0u);
+    REQUIRE(ringout::chooseRespawnSlot(1u, table, occupants) == 0u);
+    REQUIRE(ringout::chooseRespawnSlot(2u, table, occupants) == 0u);
+
+    // An out-of-range slot stays out of range: it is the over-capacity join's placeless respawn.
+    REQUIRE(ringout::chooseRespawnSlot(ringout::SpawnSlotAllocator::kNoFreeSlot, table, {})
+            == ringout::SpawnSlotAllocator::kNoFreeSlot);
+}
+
+TEST_CASE("Ringout.RespawnSlot.OccupiedMeansALiveBodyStrictlyInsideTheRadius", "[BrawlerRingout]")
+{
+    const glm::vec3 point(3.f, 2.f, -7.f);
+    const float r = ringout::kSpawnPointOccupiedRadius;
+    REQUIRE(r == 1.f);
+    REQUIRE(r > 2.f * simulatableBrawler::StaticData{}.m_movementStaticData.capsuleRadius);
+
+    const std::vector<glm::vec3> touching{ point + glm::vec3(0.84f, 0.f, 0.f) };
+    const std::vector<glm::vec3> justInside{ point + glm::vec3(0.f, 0.f, 0.999f) };
+    const std::vector<glm::vec3> atTheRadius{ point + glm::vec3(r, 0.f, 0.f) };
+    const std::vector<glm::vec3> above{ point + simFrame::withHeight(glm::vec3(0.f), 0.5f) };
+
+    REQUIRE(ringout::spawnPointIsOccupied(point, touching));
+    REQUIRE(ringout::spawnPointIsOccupied(point, justInside));
+    REQUIRE(ringout::spawnPointIsOccupied(point, above));
+    REQUIRE_FALSE(ringout::spawnPointIsOccupied(point, atTheRadius));
+    REQUIRE_FALSE(ringout::spawnPointIsOccupied(point, {}));
 }
 
 } // namespace ringouttests

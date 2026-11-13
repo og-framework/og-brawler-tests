@@ -57,13 +57,15 @@ tick and no swing.
   compare them bit for bit with the cached ones (`directChecks`, `directMismatches`, which must be 0).
 - **`icFlips` uses the correction comparator's own semantics.** A pair flips when, for any of the 36 aims, the radial
   initial conditions fail `fieldwiseIsSimilarTo` or the `spawnDir` fails `leafIsSimilarToAsFieldwiseDoes`. These are
-  the comparator's fold and its exported leaf (`SimulationSerialization.h`), so the test sees what a correction sees: the
-  float angle within `kDefaultSimilarityEpsilon`, but a `glm::vec3` field (the rotation axis, `spawnDir`) compared
-  exactly, because the fold's dependent call never reaches the epsilon overloads in `SimulationComparisonGlm.h`.
-  `spawnPos` is left out: it carries the position error itself.
+  the comparator's fold and its exported leaf (`SimulationSerialization.h`), so the test sees what a correction sees.
+  Since og-input-latency task 2e that is the float angle and the `glm::vec3` fields (the rotation axis, `spawnDir`)
+  alike within `kDefaultSimilarityEpsilon`. Before it, the `glm::vec3` fields compared exactly, because the fold's
+  dependent call never reached the epsilon overloads in `SimulationComparisonGlm.h` (§8). `spawnPos` is left out: it
+  carries the position error itself.
 - **The epsilon reading, for comparison.** `icFlipsDirectEpsilon` counts the same pairs with direct calls to
-  `isSimilarToField`, which do reach the `glm::vec3` epsilon overload. The gap between the two counts is what the
-  exact vector compare costs; on the GJK interior at δ = 1e-6 it is 268 against 2.
+  `isSimilarToField`, which always reached the `glm::vec3` epsilon overload. Until task 2e the gap between the two
+  counts was what the exact vector compare cost (on the GJK interior at δ = 1e-6, 268 against 2). Since task 2e the two
+  counts are equal on every row (§8).
 
 ## 4. The lines and the checks
 
@@ -132,3 +134,16 @@ rationale, §33 and §36). The checks of §4 did not move. Against §6:
   centre probe where Legacy fell back to world up. The edge band at the convex crease is −1 to 0 cm (−23 to 0 cm at
   task 5b), and the band of differing normals is empty.
 - **Face normal, interior** and **the GJK normal**, interior and creases: unchanged.
+
+## 8. Since og-input-latency task 2e (glm fields compare with the epsilon)
+
+Task 2e moved the glm overloads of `isSimilarToField` into `namespace glm`, where the fold's dependent call finds them by
+ADL (og-simulation's `SimulationComparisonGlm-rationale.md` §3). Measured on the task 2e tree, `OGBrawlerTests "[@og]"`:
+- **`icFlips` equals `icFlipsDirectEpsilon` on every row.** Before, every pair whose normal differed flipped: §6's GJK
+  interior `icFlips` (268 at δ = 1e-6, 291 at 1e-4) equal today's `normalDiffers` at those δ.
+- **GJK normal, interior:** `icFlips` 2, 12, 164 and 166 of 21894 pairs at δ = 1e-6, 1e-5, 5e-5 and 1e-4 (§6 measured
+  268 to 291). `normalDiffers` is unchanged: 268, 231, 239 and 291.
+- **GJK normal, creases:** `icFlips` 56, 44, 56 and 82 of 2412 pairs (`normalDiffers` 123, 92, 87 and 133).
+- **Face normal:** unchanged, 0 differing normals and 0 flips in both regions at every δ.
+- **The control still flips every pair** (21894 of 21894): its 1e-3 rad tilt moves the vector components by more than
+  the epsilon. So the counter still sees a flip, and the §4 assertions held.

@@ -2447,7 +2447,7 @@ TEST_CASE("BrawlerMovement.ContactImpulseNeverEntersVelocity", "[BrawlerMovement
 
     constexpr glm::vec3 kSolverVelocityA(0.f, 0.f, 0.f);
     constexpr glm::vec3 kSolverVelocityB = glm::vec3(9.99f, 5.55f, 7.77f);
-    constexpr glm::vec3 kPushOut = glm::vec3(0.f, 0.f, -0.03f);
+    static constexpr glm::vec3 kPushOut = glm::vec3(0.f, 0.f, -0.03f);
 
     auto runTwoTicks = [](glm::vec3 solverVelocity, glm::vec3 extraPosition)
     {

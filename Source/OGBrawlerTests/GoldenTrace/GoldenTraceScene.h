@@ -24,6 +24,7 @@
 
 #include "OGBrawler/BrawlerHitDetectionSystem.h"
 #include "OGBrawler/BrawlerHitRoutingSystem.h"
+#include "OGBrawler/BrawlerRingoutRespawnSystem.h"
 #include "OGBrawler/BrawlerRingoutScoreSystem.h"
 #include "OGBrawler/BrawlerRingoutSimulation.h"
 #include "OGBrawler/CollisionCategoryConstants.h"
@@ -91,7 +92,7 @@ using Executor = SimulationIntegrationExecutor<simulatableBrawler::StaticData, J
     SimulatableBrawler>;
 using HitDetection = brawlerHitDetection::System<JoltPhysicsBodyAdapter, JoltSpatialQueryAdapter>;
 using SystemsExec = SimulationSystemsExecutor<SimulatableList<SimulatableBrawler>, simulatableBrawler::StaticData, HitDetection,
-    brawlerHitRouting::System, brawlerRingout::ScoreSystem>;
+    brawlerHitRouting::System, brawlerRingout::ScoreSystem, brawlerRingout::RespawnSlotSystem>;
 
 static_assert(brawlerHitDetection::firesBefore<SystemsExec, HitDetection, brawlerHitRouting::System>,
     "The golden harness fires the hit detector before hit routing, as the game's composition does (BrawlerCompositionUImpl)");
@@ -154,7 +155,8 @@ struct Scene
         , staticBodies(joltTickWorldHost::buildStatics(world, queryableStatics, physicsOnlyStatics, &logJoltProblems))
         , bodies(world)
         , query(world, &logJoltProblems, JoltSpatialQueryConfig{ kMappedCategories })
-        , systems(std::piecewise_construct, HitDetection(bodies, query), brawlerHitRouting::System{}, brawlerRingout::ScoreSystem{})
+        , systems(std::piecewise_construct, HitDetection(bodies, query), brawlerHitRouting::System{}, brawlerRingout::ScoreSystem{},
+              brawlerRingout::RespawnSlotSystem{})
         , executor(storage, staticData, bodies, query)
     {
         if constexpr (requires { ScenarioT::configureStaticData(staticData); })
