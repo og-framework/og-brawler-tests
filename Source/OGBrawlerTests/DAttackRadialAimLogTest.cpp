@@ -277,7 +277,12 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheSwingPlaneUp",
             INFO("heading: " << heading << "  line: " << line);
             glm::vec3 up(0.f);
             REQUIRE(parseUp(line, up));
-            CHECK(up == simFrame::kUp);
+            // [og-input-latency task 20] Within one float ULP of kUp, not bit-equal. glm::rotate's yy entry is
+            // cos + (1 - cos) * axis.y * axis.y, which IEEE rounding leaves one ULP below 1 at heading pi/2
+            // (up.y = 0.99999994). The bit-equality checked before held because /fp:fast reassociated it to 1.
+            CHECK(up.x == 0.f);
+            CHECK(up.z == 0.f);
+            CHECK(glm::abs(up.y - 1.f) <= 0x1p-23f);
         }
     }
 
@@ -318,9 +323,9 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheSwingPlaneUp",
 // toolchain stops producing a non-finite angle there, cause (B) has changed shape and
 // this case must go RED and say so, rather than quietly testing a synthetic NaN.
 //
-// The sources are `volatile` on purpose. This target compiles /fp:fast (read the per-TU
-// `.obj.rsp`, do not infer it), under which MSVC is licensed to assume no NaN exists and
-// may fold a constant-sourced comparison away.
+// The sources are `volatile` on purpose. This target compiled /fp:fast until og-input-latency
+// task 20 (read the per-TU `.obj.rsp`, do not infer it), under which MSVC is licensed to assume
+// no NaN exists and may fold a constant-sourced comparison away. It compiles /fp:precise since.
 //
 // ⭐ ONLY THE ANGLE CARRIES THE SIGNAL, AND THAT IS A MEASUREMENT. Upstream picks the aim
 // axis through `glm::abs(glm::abs(aimDot) - 1.f) < 0.0001f`, a comparison against NaN --
@@ -329,6 +334,9 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheSwingPlaneUp",
 // `aimFallbackAxis` branch and its AXIS renders as a clean cardinal (0.000,-1.000,0.000) -- it is
 // indistinguishable from the innocent cause (A). The `aimAngle` field is the ONLY place
 // the nan surfaces, which is why the runbook must read that field first.
+// [og-input-latency task 20] Since /fp:precise the predicate is FALSE for a NaN aimDot (IEEE-754),
+// the axis takes the cross-product branch, and the AXIS renders as nan too. The angle is still
+// the field to read first; the axis now agrees with it.
 // ===========================================================================
 
 TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
@@ -348,13 +356,14 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
 
     REQUIRE(std::isnan(degenerateAngle));   // premise: cause (B) still produces a NaN aim
 
-    // The upstream axis branch, replayed. MEASURED on this toolchain, 2026-09-19:
-    // aimEqualsForward is TRUE for a NaN aimDot. IEEE-754 says every comparison against
-    // NaN is false, so this pins a /fp:fast FACT, not a spelling -- and it goes RED the
-    // day the flag changes, which is exactly the day the axis field below changes shape.
+    // The upstream axis branch, replayed. MEASURED on this toolchain, 2026-09-19, under /fp:fast:
+    // aimEqualsForward was TRUE for a NaN aimDot. [og-input-latency task 20] The flag changed:
+    // this target compiles /fp:precise, and the predicate is FALSE, as IEEE-754 says every
+    // comparison against NaN is. This still pins the toolchain FACT, not a spelling: it goes RED
+    // the day the flag changes back, which is the day the axis field below changes shape again.
     const bool aimEqualsForward = glm::abs(glm::abs(aimDot) - 1.f) < 0.0001f;
     INFO("aimEqualsForward: " << aimEqualsForward);
-    CHECK(aimEqualsForward);
+    CHECK_FALSE(aimEqualsForward);
     const glm::vec3 degenerateAxis = aimEqualsForward
         ? aimFallbackAxis
         : glm::normalize(glm::cross(defaultForward, degenerateAim));
@@ -368,7 +377,12 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogKeepsANonFiniteAimAsNan",
     // ⭐ WHAT THE RUNBOOK'S READER MUST NOT BE FOOLED BY. Because the branch above is
     // taken, the AXIS of a degenerate aim renders as a clean cardinal (0,0,1) -- it looks
     // exactly like the innocent cause (A). Only the ANGLE carries the nan.
-    CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kAimFallbackAxis))) != std::string::npos);
+    // [og-input-latency task 20] Under /fp:precise the branch above is NOT taken, so the axis is the
+    // normalized cross product with a NaN vector: it renders as nan, not as the fallback cardinal.
+    CHECK(withUnsignedZeros(line).find(withUnsignedZeros(axisText(kAimFallbackAxis))) == std::string::npos);
+    const bool axisIsNan = line.find("axis=(nan") != std::string::npos
+                        || line.find("axis=(-nan") != std::string::npos;
+    CHECK(axisIsNan);
 
     // The angle field itself must carry the nan. MSVC renders the indefinite NaN that
     // `0 * inf` produces as "-nan(ind)"; a quiet NaN as "nan". Both begin "nan" after the

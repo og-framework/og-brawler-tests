@@ -971,7 +971,7 @@ void knockbacksAcrossTheRims()
             CHECK(lipHitPlacements == 16u);
         if (onlySite.empty())
         {
-            CHECK(estimateLifts <= 1u);
+            CHECK(estimateLifts <= 2u);
             CHECK(estimateDownPulls == 0u);
         }
         for (const Event& e : events)
@@ -980,7 +980,7 @@ void knockbacksAcrossTheRims()
                 continue;
             INFO("estimate lift " << e.site << " d " << e.distance << " oblique " << e.obliqueDeg << " anomaly " << e.estimateAnomaly
                  << " servo " << e.estimateServo << " redirect " << e.estimateRedirect);
-            CHECK(std::string(e.site) == "tipCornerPlus");
+            CHECK((std::string(e.site) == "tipCornerPlus" || std::string(e.site) == "tipCornerMinus"));
             CHECK(e.distance == kDistances.back());
             CHECK(e.obliqueDeg == 0.f);
             CHECK(e.estimateRedirect == 0.f);
@@ -990,7 +990,7 @@ void knockbacksAcrossTheRims()
     {
         CHECK(supportFlips == 214u);
         CHECK(rimHangs == 17u);
-        CHECK(lipTicks == 308u);
+        CHECK(lipTicks == 310u);
     }
 
     CHECK(mirroredTicks > 0u);

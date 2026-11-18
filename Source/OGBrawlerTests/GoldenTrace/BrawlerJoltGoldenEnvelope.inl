@@ -11,7 +11,7 @@ inline constexpr goldenTrace::EnvelopeHeader kEnvelopeHeader{
     /*runs*/ 8u,
     /*axisFrame*/ 1u,
     /*unitsPerMetre*/ 0x1p+0f,
-    /*sourceCommit*/ "og-brawler-unreal 871b2a4; og-simulation d485fb6; og-simulation-jolt bd72c3c; og-brawler 2638b39; og-brawler-tests 8c46c34 + og-ground-aligned-attacks tasks 20-36 (uncommitted)" };
+    /*sourceCommit*/ "og-brawler-unreal 48ddd3c; og-simulation 75375ed; og-simulation-jolt d5cc7a4; og-brawler b95810e; og-brawler-tests 6ffb1ef + og-input-latency task 20 (FPSemantics = Precise) and the working tree's other uncommitted work" };
 
 inline constexpr goldenTrace::NudgeRecord kEnvelopeNudges[] = {
     { 1u, 0u, 1 },

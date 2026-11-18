@@ -91,8 +91,8 @@ fails: a 1-ULP change, a zero against a denormal, a NaN with a different payload
 mode for a change that must leave the trace bit-identical in the same frame and unit. The test refuses exact
 mode when the golden's frame codes differ from the build's.
 
-Why zeros are the exception: the UE build compiles with `/fp:fast`, which lets the optimiser rewrite arithmetic
-whose result is an exact zero, so the sign of that zero can depend on how the surrounding code was
+Why zeros are the exception: the UE build compiled with `/fp:fast` until og-input-latency task 20 (the sim modules
+compile `/fp:precise` since), and `/fp:fast` lets the optimiser rewrite arithmetic whose result is an exact zero, so the sign of that zero can depend on how the surrounding code was
 optimised rather than on the source. A measured case: one aim axis's zero sign changed with an unrelated
 header edit and no other value changed. Failing on it would make exact mode fail on edits whose only effect
 is a zero's sign; ignoring it silently would hide where it happens. So exact mode counts it instead.

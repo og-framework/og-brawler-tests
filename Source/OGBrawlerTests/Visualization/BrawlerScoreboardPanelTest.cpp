@@ -506,6 +506,10 @@ TEST_CASE("Scoreboard.EveryConsoleValueIsClampedToItsStatedRangeAndNoneOfThemRej
 // THIS CASE PINS THE TOOLCHAIN FACT ITSELF, so it goes RED the day that flag changes --
 // which is exactly the day the next reader needs to be told that the negation has become
 // load-bearing again, and that the probe will bite from then on.
+//
+// [og-input-latency task 20] THAT DAY CAME: the sim modules and this target compile
+// `/fp:precise` (UBT FPSemantics = Precise). `n < 0.25f` is now FALSE for a NaN, as IEEE-754
+// says, so the negated spelling is load-bearing and the case below pins the IEEE result.
 // ---------------------------------------------------------------------------
 TEST_CASE("Scoreboard.TheNaNClampIsCorrectHereForAReasonTheToolchainSupplies",
           "[CharacterViz][BrawlerRingoutScoreboard]")
@@ -530,7 +534,7 @@ TEST_CASE("Scoreboard.TheNaNClampIsCorrectHereForAReasonTheToolchainSupplies",
 	// the header's note at `clampScoreboardScale` has become load-bearing rather than
 	// precautionary.
 	const bool lessThanIsRewritten = (notANumber < kScoreboardMinScale);
-	CHECK(lessThanIsRewritten);
+	CHECK_FALSE(lessThanIsRewritten);   // [og-input-latency task 20] /fp:precise: IEEE, NaN < x is false
 
 	// Which is precisely why the shipped clamps are correct here whichever way they are
 	// read -- and why a red probe against the negation cannot bite on this build.

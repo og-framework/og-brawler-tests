@@ -142,7 +142,10 @@ compare its printed lines (§7).
   These three are what make the printed attribution trustworthy. On 2026-11-02 they held on 88,356 ticks of 444 runs,
   after task 30 on 88,953 ticks of 447 runs, and after task 20 on 78,605 ticks of 395 runs.
 - Since og-ground-aligned-attacks task 37, the one law's support counters (§8): 214 flips, 17 rim hangs and 308 lip
-  ticks over the 266 placements, checked when every site runs. From task 31 to task 36 the pins were the Legacy law's
+  ticks over the 266 placements, checked when every site runs. Since og-input-latency task 20 (the sim modules and the
+  test target compile `/fp:precise`) the lip ticks are 319, and since og-input-latency task 22 (`simTrig`, which moves the
+  rig's swings and so its hits by float steps; the walkable threshold `cosMaxSlope` kept its bits) 310; the flips, rim
+  hangs and placements did not move. From task 31 to task 36 the pins were the Legacy law's
   (249, 17 and 435, while `supportLawName` was `legacy`); task 37 moved them to the law that ships, the outcome counts
   the rig keeps.
 - Since og-ground-aligned-attacks task 34's rework, under V2 only: every reached placement at d = −0.15 on a tip or
@@ -156,7 +159,9 @@ compare its printed lines (§7).
   matching no site, `CHECK( lipHitPlacements == 16u )` failed, `0 == 16`.
 - Since og-ground-aligned-attacks task 35's rework 1, under V2 only, by the estimate reference (§8): when every site
   runs there is at most one estimate lift and no estimate down-pull. Every estimate lift, with any site filter, must be
-  tipCornerPlus at d = 4.9 m along the fall line (oblique 0°), with an `estimateRedirect` of 0. That one is the slide
+  tipCornerPlus at d = 4.9 m along the fall line (oblique 0°), with an `estimateRedirect` of 0. Since og-input-latency
+  task 22 there are two, and tipCornerMinus may be the site too: it lifts at d = 4.9 m, oblique 0°, redirect 0, by 2.457
+  m/s of servo, where it lifted by none before (its largest lift was 0.1633, one tick of gravity). That one is the slide
   onto the tip's `Lip`, +1.769 m/s, all of it the servo's damping; the redirect into the face does not act on a `Lip`
   (the movement's rationale §35).
   Seen failing: with the redirect's `Face` term deleted, `CHECK( e.estimateRedirect == 0.f )` failed, `1.67458f == 0.0f`
@@ -330,7 +335,7 @@ pre-task capture that could be compared (its other 32 were garbled by interleave
   - ⚠ The scorecard line's `lipTicks` is the geometric counter above (a walkable GJK normal over an unwalkable exact
     face), under both laws; it is not V2's `Lip` kind, which the estimate line counts.
   - The pins (flips 249, rimHangs 17, lipTicks 435) were checked under Legacy only. Since task 37 they are the one
-    law's, 214, 17 and 308 (§5).
+    law's, 214, 17 and 308 (§5), 214, 17 and 319 since og-input-latency task 20, and 214, 17 and 310 since its task 22.
   - Since task 32 the mirror's ground and classification are the production `estimateSupport` and `classifySupport`,
     and since task 33 its frame is that classification's (§4). So the mirror follows either law, and
     `mirrorMismatches=0` and `supportMismatches=0` hold under both (measured in task 33). The rest of the mirror (the

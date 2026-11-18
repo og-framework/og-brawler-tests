@@ -15,6 +15,7 @@
 
 #include "OGSimulation/SimulationFrame.h"
 #include "OGSimulation/SurfaceFrame.h"
+#include "OGSimulation/SimTrig.h"
 
 #include "GroundAlignedMachineRig.h"
 
@@ -86,7 +87,7 @@ namespace groundAlignedMachineTests
         constexpr glm::vec3 defaultForward = simFrame::kForward;
         constexpr glm::vec3 aimFallbackAxis = simFrame::withHeight(glm::vec3(0.f), -1.f);
         const float aimDot = glm::dot(aimDirection, defaultForward);
-        const float aimAngle = glm::acos(aimDot);
+        const float aimAngle = simTrig::acos(aimDot);
         const bool aimEqualsForward = glm::abs(glm::abs(aimDot) - 1.f) < 0.0001f;
         const glm::vec3 aimRotationAxis =
             aimEqualsForward ? aimFallbackAxis : glm::normalize(glm::cross(defaultForward, aimDirection));
@@ -96,13 +97,13 @@ namespace groundAlignedMachineTests
     TodaysSwingIC generalSwingIC(const TodaysSwingIC& turn, const glm::vec3& normal)
     {
         const surfaceFrame::AngleAxis frame = surfaceFrame::toAngleAxis(surfaceFrame::tiltMatrix(normal)
-            * glm::mat3(glm::rotate(glm::mat4(1.f), turn.angle, turn.axis)));
+            * glm::mat3(simTrig::rotate(glm::mat4(1.f), turn.angle, turn.axis)));
         return TodaysSwingIC{frame.angle, frame.axis};
     }
 
     glm::mat3 rotationOf(float angle, const glm::vec3& axis)
     {
-        return glm::mat3(glm::rotate(glm::mat4(1.f), angle, axis));
+        return glm::mat3(simTrig::rotate(glm::mat4(1.f), angle, axis));
     }
 
     struct TodaysLaunch
@@ -297,7 +298,7 @@ TEST_CASE("GroundAlignedMachine.FlatSampleReproducesTodaysInitialConditions", "[
         CHECK(swing.radialIC.initialAimRotationAxis == glm::vec3(0.f, 1.f, 0.f));
         CHECK(maxAbsDifference(rotationOf(swing.radialIC.initialAimAngle, swing.radialIC.initialAimRotationAxis),
                   rotationOf(today.angle, today.axis))
-            <= 1.e-7f);
+            <= 2.e-7f);
     }
 }
 

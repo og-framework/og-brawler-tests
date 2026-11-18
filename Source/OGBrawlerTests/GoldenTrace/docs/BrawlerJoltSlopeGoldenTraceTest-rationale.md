@@ -125,7 +125,29 @@ One line, `[GoldenTrace.slope]`, with these fields:
 
 ## 4. The recordings
 
-**Support law v2 (task 36), the current golden.** Task 36 made `SupportLaw::V2` the movement's default (og-brawler's
+**`simTrig` (og-input-latency task 22), the current golden.** The trigonometry of the simulation's state paths moved from
+the platform's maths library (`glm::acos`, `glm::rotate`, `std::atan2` and the rest) to og-simulation's `simTrig`
+(`OGSimulation/SimTrig.h`), which computes the same bits on every platform. Against task 20's recording it differs in
+3,068 of 109,011 float field-samples (2.81 %), none of them discrete and none signed-zero only, from tick 96
+(`A.body0.WeaponAxis.rotation`, A's first swing; F also from 96, B and G from 120, C from 300; D and E not at all).
+Eight differ by 1e-5 or more and four by 1e-4 or more, all of them G's capsule `linearVelocity` and its movement
+`velocity` at its landing: 2.86e-6 m/s on each of the ten ticks before the impact, 2.44e-4 m/s at tick 220, 1.2e-4 at
+221 and below 1e-6 from tick 225. It is the impact that amplified task 20's offset too.
+
+**`/fp:precise` (og-input-latency task 20).** The modules that compile simulation code moved from
+`/fp:fast` to `/fp:precise` (UnrealBuildTool's `FPSemantics = Precise`, so this test target too), and no source line
+changed. Against task 36's recording (the `/fp:fast` one) it differs in 9,404 of 109,011 float field-samples (8.63 %),
+none of them discrete and none signed-zero only, from tick 1. 1,505 differ by 1e-4 or more (in metres, m/s and radians:
+the recorded centimetres divided by 100), and all but two of them are the guard pose's `acos` at its pole: A's, B's and
+C's `body1.GuardAxis.rotation` differ by a constant 1.67e-4 in one component, which fits the aim's dot product landing
+one float step below 1 under `/fp:fast` (`acos(1 − 2⁻²⁴)` is a half-angle component of 1.7e-4) where `/fp:precise` gives
+1. The guard pose is recomputed every tick and its State has no serialized field. The other two are G's landing at tick
+220: G's capsule `linearVelocity` and its movement `velocity` differ by 1.08e-4 m/s there, from a constant 9.5e-7 m/s
+before the impact, and by less than 1e-6 from tick 224.
+The cause is the rewrites `/fp:fast` allows and `/fp:precise` forbids (reassociated sums, a multiply by a reciprocal for
+a division, a merged `sin` and `cos`); x64 MSVC emits no fused multiply-add in either mode.
+
+**Support law v2 (task 36).** Task 36 made `SupportLaw::V2` the movement's default (og-brawler's
 movement rationale, §36) and re-recorded. The new recording equals the V2 run task 35's print compared with the old
 one: against task 14b's recording it differs in 2,965 field-samples, the first at tick 121
 (`G.body5.CharacterCapsule.position`), none of them signed-zero only, and the Legacy print (§2.1) reads the same
@@ -237,7 +259,9 @@ maximum of 5.96e-8 (one float step of a chart direction in a nudged run) and no 
 the same counts, `goldenBytes=3929549 envelopeBytes=39171` and the same two maxima. Task 14b's printed the same counts,
 `goldenBytes=3927795 envelopeBytes=39163`, the same two maxima, and an envelope that differs from task 13b's only in its
 source string. Task 36's printed the same counts, `goldenBytes=3931012 envelopeBytes=39166`, the same two maxima
-(position 0.0041 cm, planar 5.96e-8) and no discrete divergence. A one-ULP edit of
+(position 0.0041 cm, planar 5.96e-8) and no discrete divergence. og-input-latency task 20's (`/fp:precise`) printed the
+same counts, `goldenBytes=3920482 envelopeBytes=39209`, the same two maxima and no discrete divergence. Task 22's
+(`simTrig`) printed the same counts, `goldenBytes=3920730 envelopeBytes=39287` and the same two maxima. A one-ULP edit of
 one recorded value fails exact mode at that value's first sample.
 
 Re-record when a change alters the slope behaviour on purpose or the recorded fields change. Never edit either file by

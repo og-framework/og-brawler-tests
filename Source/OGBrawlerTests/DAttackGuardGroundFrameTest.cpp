@@ -29,6 +29,7 @@
 #include "OGSimulation/SpatialQueryAdapter.h"
 #include "OGSimulation/SpatialQueryResult.h"
 #include "OGSimulation/SurfaceFrame.h"
+#include "OGSimulation/SimTrig.h"
 
 namespace guardGroundFrameTests
 {
@@ -130,11 +131,11 @@ namespace guardGroundFrameTests
         constexpr glm::vec3 aimFallbackAxis = simFrame::withHeight(glm::vec3(0.f), -1.f);
         const glm::vec3 aimDirection = (aimLen > 0.0001f) ? (rawAim / aimLen) : defaultForward;
         const float aimDot = glm::clamp(glm::dot(aimDirection, defaultForward), -1.f, 1.f);
-        const float aimAngle = glm::acos(aimDot);
+        const float aimAngle = simTrig::acos(aimDot);
         const bool aimEqualsForward = glm::abs(glm::abs(aimDot) - 1.f) < 0.0001f;
         const glm::vec3 aimRotationAxis =
             aimEqualsForward ? aimFallbackAxis : glm::normalize(glm::cross(defaultForward, aimDirection));
-        glm::mat4 transform = glm::rotate(glm::mat4(1.f), aimAngle, aimRotationAxis);
+        glm::mat4 transform = simTrig::rotate(glm::mat4(1.f), aimAngle, aimRotationAxis);
         transform[3] = glm::vec4(rootTranslation, 1.f);
         return transform;
     }

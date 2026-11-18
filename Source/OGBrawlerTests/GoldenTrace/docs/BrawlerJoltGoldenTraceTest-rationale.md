@@ -135,3 +135,20 @@ and the Legacy print now reads the same count against the new one. The live cove
   and 0.61 m/s down on 310) and A was Unsupported on 320; under V2 A keeps the full walk speed (1 m/s) over the
   edge and falls at gravity, Supported on every sample there.
 * **Crease ticks.** The flat scenario has no knockback across a crease.
+
+og-input-latency task 20 re-recorded it when the modules that compile simulation code moved from `/fp:fast` to
+`/fp:precise` (UnrealBuildTool's `FPSemantics = Precise`, so this test target too). No source line changed. The recorder
+printed `samples=361 fields=120 values=86640 goldenBytes=750033 envelopeBytes=26155 runs=8`, the same envelope position
+maximum as task 36's (5.0e-4 cm), task 36's coverage counts (`walkTicks=122`, `knockbackTicks=15`, `ledgeFallTicks=143`)
+and no discrete divergence. Against task 36's recording (the
+`/fp:fast` one) it differs in 1,958 of 20,938 float field-samples (9.35 %), none of them discrete and none signed-zero
+only, from tick 1 (`A.body0.WeaponAxis.rotation`, 1.2e-7 in one component). The largest difference is 1.36e-5 rad/s in
+`A.body0.WeaponAxis.angularVelocity` at tick 415, mid-swing; 3 field-samples differ by 1e-5 or more and none by 1e-4 (in
+metres, m/s and radians: the recorded centimetres divided by 100). The cause is the rewrites `/fp:fast` allows and
+`/fp:precise` forbids: reassociated sums, a multiply by a reciprocal for a division, one merged call for a `sin` and a
+`cos` of the same angle. Neither mode emits a fused multiply-add on x64 MSVC without `/arch:AVX2`, so this is not FMA
+contraction. The standalone CMake build of these tests with MSVC `/fp:precise`, and with clang-cl `/fp:precise
+-ffp-contract=off`, records this golden byte for byte except its source string.
+og-input-latency task 22 moved the simulation's trigonometry to og-simulation's `simTrig` and did not re-record it: its
+recording equals task 20's value for value (only the source string differs): on this scene the change reaches no recorded
+value (not traced call by call).
