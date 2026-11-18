@@ -48,8 +48,9 @@ namespace simPayloadBuffersBrawlerTest
             * (static_cast<std::uint32_t>(sizeof(std::uint32_t)) + inputRedundancyBundle::detail::slotInputSize<BrawlerInput>());
 
     static_assert(CorrectionStateSyncedBufferConcept<CorrectionStateBuffer, BrawlerState>,
-        "CorrectionStateBuffer must satisfy NetSync's correction buffer concept for the brawler state, as "
-        "FSimulationStateSyncBuffer does");
+        "CorrectionStateBuffer must satisfy NetSync's correction buffer concept for the brawler state: it is "
+        "SimNetChannel's SyncedCorrectionBufferType. Was 'as FSimulationStateSyncBuffer does' (deleted by "
+        "og-input-latency task P5-9)");
 
     static_assert(kCorrectionUsedBytes == 333u,
         "the brawler correction payload is 8 B of header plus the 325 B state composite. A change here is a state "

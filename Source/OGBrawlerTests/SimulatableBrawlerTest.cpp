@@ -207,11 +207,11 @@ TEST_CASE("DAttack.SimulatableBrawler.FirstResimStep", "[DAttack][SimulatableBra
 // ⭐ THE WIRE FOOTPRINT of the simulatableBrawler::State composite.
 //
 // WHY THIS IS AN *ABSOLUTE* ASSERTION AND NOT A DELTA. The composite is written
-// into FSimulationStateSyncBuffer, whose capacity is a FIXED
-// `kBufferBytes = 384` (UE-sim/SyncedSimulationStateBuffer.h:218). Overflowing it
-// is **a runtime out-of-bounds check, not a compile error** — the buffer's
-// writeToBuffer logs "FSimulationStateSyncBuffer write OOB: ... (raise
-// kBufferBytes)" (same file, :260) and the correction is dropped. A delta-only
+// into og-sim's CorrectionStateBuffer (Network/SimPayloadBuffers.h), FIXED `kBufferBytes
+// = 384`, whose write() static_asserts the header plus the composite against it. Until
+// og-input-latency task P5-9 it was FSimulationStateSyncBuffer (UE-sim/SyncedSimulationStateBuffer.h,
+// deleted by P5-9), where an overflow was **a runtime out-of-bounds check, not a compile error**:
+// writeToBuffer logged a write OOB and the correction was dropped. A delta-only
 // assertion cannot see that boundary: every individual step can be small and
 // legal while the running total walks off the end. So this case pins the
 // absolute number and, separately, the headroom against the capacity.
@@ -245,15 +245,15 @@ template <typename... Ts> struct FCompositeWireSize<SimulationComposite<Ts...>>
     static constexpr std::uint32_t value = compositeSyncSize<Ts...>();
 };
 
-// FSimulationStateSyncBuffer::kBufferBytes, hand-mirrored.
+// CorrectionStateBuffer::kBufferBytes (OGSimulation/Network/SimPayloadBuffers.h),
+// hand-mirrored. If it changes, change this line.
 //
-// ⚠ It cannot be included: that constant lives in UE code and this target is
-// engine-free BY CONFIGURATION (OGBrawlerTests.Target.cs sets
+// ⚠ The copy dates from the UE buffer. Until og-input-latency task P5-9 deleted it, the
+// capacity was FSimulationStateSyncBuffer::kBufferBytes, in UE code this target could
+// not include: it is engine-free BY CONFIGURATION (OGBrawlerTests.Target.cs sets
 // bCompileAgainstEngine / bCompileAgainstCoreUObject / bCompileAgainstApplicationCore
-// all false), which is the property that lets the whole brawler suite run without
-// the editor. A copy is therefore the only way to fence the capacity from here —
-// and a copy that is checked every run beats a capacity nobody checks at all.
-// If UE-sim/SyncedSimulationStateBuffer.h:218 changes, change this line.
+// all false). The og-sim constant is engine-free, so the copy is now a choice, not a
+// necessity.
 static constexpr std::uint32_t kStateSyncBufferBytes = 384u;
 
 TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBrawler]")
@@ -462,10 +462,10 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     static_assert(correctionStateBuffer::kHeaderBytes
                       + FCompositeWireSize<simulatableBrawler::State>::value
                   <= kStateSyncBufferBytes,
-        "The State composite no longer fits FSimulationStateSyncBuffer::kBufferBytes. "
-        "Raise kBufferBytes (UE-sim/SyncedSimulationStateBuffer.h) to the next 64-byte "
-        "multiple above the new footprint, and update the copy of it in this file. "
-        "Raising the capacity is wire-cheap: NetSerialize watermark-trims to usedBytes.");
+        "The State composite no longer fits CorrectionStateBuffer::kBufferBytes. Raise kBufferBytes "
+        "(og-sim OGSimulation/Network/SimPayloadBuffers.h) to the next 64-byte multiple above the new footprint, "
+        "and update the copy of it in this file. Raising the capacity is wire-cheap: the server sends payload(), "
+        "only usedBytes long. Was FSimulationStateSyncBuffer::kBufferBytes, deleted by og-input-latency task P5-9");
     REQUIRE(kBufferUsed <= kStateSyncBufferBytes);
 
     WARN("simulatableBrawler::State wire footprint: composite=" << kComposite
@@ -723,7 +723,7 @@ namespace movementResim
         return kProductionStaticData.m_movementStaticData.acceleration * kDt;
     }
 
-    // Byte-addressable stand-in for FSimulationStateSyncBuffer -- the same shape
+    // Byte-addressable stand-in for CorrectionStateBuffer -- the same shape
     // SyncedPlayerInputTest.cpp's ByteBuffer uses, and the shape
     // correctionStateBuffer's Buffer concept asks for.
     struct FCorrectionProbeBuffer

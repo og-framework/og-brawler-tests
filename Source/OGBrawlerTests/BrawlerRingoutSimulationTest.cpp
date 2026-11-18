@@ -437,7 +437,7 @@ TEST_CASE("Ringout.APendingTeleportSuppressesDeathDetection", "[BrawlerRingout]"
 TEST_CASE("Ringout.SpawnSlots.TwoRemoteClientsDoNotBothGetZero", "[BrawlerRingout]")
 {
     // ⛔ THIS IS THE CASE THE OBVIOUS ANSWER GETS WRONG, so it states the wrong answer first.
-    // `UEConnectionHandle::GetPlayerSlotForActor` is PER-WIRE: it returns which LOCAL PLAYER
+    // `GetPlayerSlotForActor` (UE-sim UESimNetHost.h since og-input-latency task P5-9) is PER-WIRE: it returns which LOCAL PLAYER
     // on ONE connection owns the actor — 0 for the primary pawn, 1..N only for couch-co-op
     // siblings on the SAME machine. Two players on two different machines are each the
     // primary pawn on their own wire, so it answers 0 for BOTH of them. Indexing the authored
@@ -1139,8 +1139,9 @@ static_assert(SpatialQueryAdapter<FRingoutMockQuery>,
 
 constexpr float kDt = 1.f / 60.f;
 
-// `FSimulationStateSyncBuffer::kBufferBytes`. Restated rather than included — the UE-side buffer
-// is not reachable from this target — and the composite's FIT inside it is fenced separately, in
+// `CorrectionStateBuffer::kBufferBytes` (og-sim). Restated rather than included, as it was for the
+// UE-side buffer this target could not reach (Was FSimulationStateSyncBuffer, deleted by
+// og-input-latency task P5-9); the composite's FIT inside it is fenced separately, in
 // `SimulatableBrawlerTest.cpp`. Nothing here depends on the capacity being tight; it only has to
 // be large enough that the codec's writes land inside the vector.
 constexpr std::uint32_t kStateSyncBufferBytes = 384u;
@@ -1154,7 +1155,7 @@ constexpr std::uint32_t kSpawnSlot = 2u;
 // inside a short replay window and the respawn (`respawnDelayTicks` later) inside a long one.
 constexpr float kStartMarginAbovePlane = 1.f;
 
-// Byte-addressable stand-in for `FSimulationStateSyncBuffer` — the shape
+// Byte-addressable stand-in for `CorrectionStateBuffer` — the shape
 // `correctionStateBuffer`'s `Buffer` concept asks for.
 struct FCorrectionProbeBuffer
 {

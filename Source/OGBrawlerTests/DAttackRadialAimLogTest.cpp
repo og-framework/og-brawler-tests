@@ -277,7 +277,7 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheSwingPlaneUp",
             INFO("heading: " << heading << "  line: " << line);
             glm::vec3 up(0.f);
             REQUIRE(parseUp(line, up));
-            // [og-input-latency task 20] Within one float ULP of kUp, not bit-equal. glm::rotate's yy entry is
+            // [og-input-latency task 20] Within one float ULP of kUp, not bit-equal. The rotation's yy entry is
             // cos + (1 - cos) * axis.y * axis.y, which IEEE rounding leaves one ULP below 1 at heading pi/2
             // (up.y = 0.99999994). The bit-equality checked before held because /fp:fast reassociated it to 1.
             CHECK(up.x == 0.f);
@@ -294,8 +294,8 @@ TEST_CASE("DAttackRadial.SetInitialConditionsLogCarriesTheSwingPlaneUp",
     glm::vec3 up(0.f);
     REQUIRE(parseUp(line, up));
     INFO("up: " << up.x << ", " << up.y << ", " << up.z << "  expected: " << expected.x << ", " << expected.y << ", " << expected.z);
-    // The header and this TU compile the rotation separately (/fp:fast), so they may round it a
-    // few ULPs apart: 6e-7 is about five float ULPs at 1.
+    // The header rotates with simTrig::rotate (og-input-latency task 22) and this TU with glm::rotate
+    // (libm sin and cos), so they may round it a few ULPs apart: 6e-7 is about five float ULPs at 1.
     CHECK(glm::abs(up.x - expected.x) <= 6e-7f);
     CHECK(glm::abs(up.y - expected.y) <= 6e-7f);
     CHECK(glm::abs(up.z - expected.z) <= 6e-7f);

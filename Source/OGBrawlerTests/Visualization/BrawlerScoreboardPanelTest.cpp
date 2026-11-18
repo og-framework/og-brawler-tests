@@ -493,11 +493,11 @@ TEST_CASE("Scoreboard.EveryConsoleValueIsClampedToItsStatedRangeAndNoneOfThemRej
 // ---------------------------------------------------------------------------
 // ⚠⚠ A FINDING, PINNED RATHER THAN ASSERTED AWAY. Task 6's red probe P7/P8 -- rewrite the
 // clamps' first test as the reflex `if (x < min) return min;` -- STAYED GREEN. The reason
-// is not that the test is vacuous; it is that THIS TARGET COMPILES `/fp:fast`, under which
-// the compiler may assume no NaN exists and rewrite `x < c` as `!(x >= c)`. Measured on
-// this tree on 2026-09-13 with a `volatile`-sourced NaN: `n < 0.25f` evaluates TRUE, which
-// IEEE-754 says it must not. So on THIS build both spellings land NaN on the minimum and
-// nothing can tell them apart.
+// was not that the test is vacuous; it was that THIS TARGET COMPILED `/fp:fast` (until
+// og-input-latency task 20), under which the compiler may assume no NaN exists and rewrite
+// `x < c` as `!(x >= c)`. Measured on this tree on 2026-09-13 with a `volatile`-sourced NaN:
+// `n < 0.25f` evaluated TRUE, which IEEE-754 says it must not. So on THAT build both
+// spellings landed NaN on the minimum and nothing could tell them apart.
 //
 // ⛔ THE NEGATION IS STILL THE RIGHT SPELLING -- it is a PORTABILITY guard. `/fp:fast` is a
 // per-module setting, so a module compiled `/fp:precise`, or a non-MSVC toolchain, restores
@@ -529,15 +529,15 @@ TEST_CASE("Scoreboard.TheNaNClampIsCorrectHereForAReasonTheToolchainSupplies",
 	CHECK_FALSE(notANumber > kScoreboardMaxScale);
 
 	// ⛔ THE `/fp:fast` HALF, AND THE WHOLE POINT OF THIS CASE. Under IEEE-754 `NaN < x` is
-	// FALSE. Here it is TRUE, because the compiler rewrote it as the negation. The day this
-	// line fails, the flag changed, the two clamp spellings stopped being equivalent, and
-	// the header's note at `clampScoreboardScale` has become load-bearing rather than
-	// precautionary.
+	// FALSE. Under `/fp:fast` (this target until og-input-latency task 20) it was TRUE,
+	// because the compiler rewrote it as the negation. Under `/fp:precise` it is FALSE, so the
+	// two clamp spellings are not equivalent and the header's note at `clampScoreboardScale`
+	// is load-bearing. The day this line fails, the target went back to `/fp:fast`.
 	const bool lessThanIsRewritten = (notANumber < kScoreboardMinScale);
 	CHECK_FALSE(lessThanIsRewritten);   // [og-input-latency task 20] /fp:precise: IEEE, NaN < x is false
 
-	// Which is precisely why the shipped clamps are correct here whichever way they are
-	// read -- and why a red probe against the negation cannot bite on this build.
+	// With `<` and `>` both false for a NaN, a non-negated clamp would pass the NaN through;
+	// the negated spelling is what lands it on the minimum here.
 	CHECK(clampScoreboardScale(notANumber) == kScoreboardMinScale);
 	CHECK(clampScoreboardBackgroundAlpha(notANumber) == kScoreboardMinBackgroundAlpha);
 

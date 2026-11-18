@@ -35,7 +35,7 @@
 // worst size, PLUS at least one correction state, must always fit one packet.
 //
 //   * N-1 rings, not N: the owning client is not sent its own character's ring
-//     (T39 moves it onto ASimulationInputRelay behind COND_SkipOwner; the owning
+//     (T39 moved it onto ASimulationInputRelay, deleted by og-input-latency task P5-9, behind COND_SkipOwner; the owning
 //     client provably never reads it — SimulationNetSync::registerPredictionOwner
 //     creates a RemoteInputCache only for provider-ABSENT ids).
 //   * ONE state, not K: the correction state is the SELF-HEALING payload — each
@@ -73,7 +73,7 @@ namespace
     //
     // This target cannot include engine headers, so each of these is a pinned
     // literal naming the engine symbol it mirrors — the pattern
-    // `FRelayedInputRing::static_assert(kMaxWireBytes == 1066, ...)` established.
+    // FRelayedInputRing's `static_assert(kMaxWireBytes == 1066, ...)` established (deleted by og-input-latency task P5-9; og-sim's RelayRingBuffer keeps the pin).
     // -----------------------------------------------------------------------
 
     // `UNetConnection::GetMaxSingleBunchSizeBits()` (NetConnection.h) =
@@ -111,8 +111,8 @@ namespace
     // PAYLOAD SIZES, COMPUTED — never typed in.
     // -----------------------------------------------------------------------
 
-    // The relay ring on the wire: the u16 length prefix written by
-    // `FRelayedInputRing::NetSerialize`, then the codec's own header
+    // The relay ring on the Iris wire: the u16 length prefix that
+    // `FRelayedInputRing::NetSerialize` wrote until og-input-latency task P5-9, then the codec's own header
     // ([version u8][entryCount u8]) and `entries` fixed-stride entries
     // ([captureTick u32][dA u8][input]).
     //
@@ -142,8 +142,8 @@ namespace
     constexpr std::uint32_t kRingEntryBytes =
         relayedInputRing::detail::entryStride<simulatableBrawler::PlayerInput>();
 
-    // The correction state on the wire: `FSimulationStateSyncBuffer::NetSerialize`
-    // writes [version u8][used u16] and then `used` payload bytes, where the
+    // The correction state on the Iris wire, as the deleted (og-input-latency task P5-9)
+    // `FSimulationStateSyncBuffer::NetSerialize` wrote it: [version u8][used u16] and then `used` payload bytes, where the
     // payload is the correction codec's [tick u32][appliedCaptureTick u32] header
     // followed by the whole `simulatableBrawler::State` composite. The fixed
     // kBufferBytes capacity does NOT ride the wire — the watermark trim means only
@@ -352,7 +352,7 @@ TEST_CASE("PacketBudget: all remote rings plus one correction state fit one pack
     // entirely off the wire (composite 324 -> 268 B, -56 B: a 4 B phantom timer and
     // a 52 B derivable body state). 279 = 1 (version) + 2 (used count) + 8
     // (correction header) + 268 (composite). The composite's own absolute size and
-    // its headroom against FSimulationStateSyncBuffer::kBufferBytes are fenced in
+    // its headroom against the correction buffer's kBufferBytes (FSimulationStateSyncBuffer's until og-input-latency task P5-9) are fenced in
     // SimulatableBrawlerTest.cpp's WireFootprint case.
     //
     // [movement-sim task 11, 2026-09-06] 279 -> 320 B. The movement sub-simulation stopped

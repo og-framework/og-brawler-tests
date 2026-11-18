@@ -92,11 +92,12 @@ struct MockStateSyncBuffer
 // [og-netcode-v2-input-relay T5] MockRelayedInputRing — the wire payload.
 //
 // A std::vector-backed byte buffer exposing the codec's BUFFER CONCEPT, i.e. the
-// same four methods FRelayedInputRing exposes over its TArray<uint8>. Tests
-// therefore drive the REAL RelayedInputRingCodec and the REAL
-// populateRemoteInputCache against it; only the UE replication half (NetSerialize
-// + OnRep) is stood in for, and OnRep is stood in for by calling the bound
-// callback directly, which is literally all OnRep_RelayedInputRing does.
+// same four methods og-sim's RelayRingBuffer (Network/SimPayloadBuffers.h) exposes over
+// its fixed array. Tests therefore drive the REAL RelayedInputRingCodec and the REAL
+// populateRemoteInputCache against it; only the transport half is stood in for, by
+// calling the bound callback directly, which is all SimNetChannel::storeRing does once
+// the bytes are assigned. (Was the UE replication half, NetSerialize + OnRep_RelayedInputRing,
+// deleted by og-input-latency task P5-9.)
 // ---------------------------------------------------------------------------
 
 struct MockRelayedInputRing
@@ -135,7 +136,7 @@ struct MockPredictionOwner
     // channel. [og-syncedInput-rework task 9] So is the client->server input buffer.
 
     // [T5] The relay ring + its arrival hook. `replicateRelayRing()` stands in for
-    // OnRep_RelayedInputRing, which does exactly this and nothing else.
+    // SimNetChannel::storeRing's callback call (OnRep_RelayedInputRing's until og-input-latency task P5-9).
     MockRelayedInputRing relayedInputRing;
     std::function<void(const MockRelayedInputRing&)> onRelayedInputReceived;
 
@@ -162,9 +163,9 @@ struct MockPredictionOwner
     void clearOnCorrectionStateReceivedCallback()
     { onCorrectionStateReceived = nullptr; }
 
-    // Stage 1 (Task 9): redundancy-bundle send path. The real owner builds an
-    // FInputRedundancyBundle from the queue and fires an unreliable RPC; the mock
-    // does not build a bundle (the wire type is UE-side and not under test here)
+    // Stage 1 (Task 9): redundancy-bundle send path. The real owner (SimNetChannel)
+    // builds an InputBundleBuffer from the queue and hands it to its transport; the mock
+    // does not build a bundle (the bundle bytes are SimNetChannelBrawlerTest.cpp's subject)
     // but it DOES record what the queue offered it.
     //
     // [T9 part 3] That recording is what makes the "the wire carries the
@@ -378,7 +379,8 @@ TEST_CASE("DAttack.SimulationNetSync.SendLocalInputNoProviderIsNoOp", "[DAttack]
 // would have caught. `OutboundQueueCarriesUndelayedCapture` is that guard.
 //
 // WHAT THEY DO NOT COVER. The game-thread -> physics-thread publication of the
-// delay (OnRep_ConnectionTier -> the std::atomic) is UE-side and unlinkable here;
+// delay (UESimulationSession::onConnectionTierReceived -> the std::atomic; OnRep_ConnectionTier
+// until og-input-latency task P5-9) is UE-side and unlinkable here;
 // these cases set the delay directly. As with the server-side integration suite,
 // a green run here fixes the OFFSET, not the thread timing.
 // ===========================================================================
@@ -877,7 +879,8 @@ TEST_CASE("DAttack.SimulationNetSync.RelayArrivalLossCounterChargesTheBurstNotTh
     REQUIRE(arrival.sampleCount() == 0u);       // the first arrival seeds, not samples
 
     // ⭐ A FLUSH ROUND. Captures 301, 302 and 303 are published in ONE replication,
-    // which is exactly what `ASimulationInputRelay::PreReplication` does. The
+    // which is exactly what SimNetServer::flushRelays does through RelayRingStager::flush
+    // (Was `ASimulationInputRelay::PreReplication`, deleted by og-input-latency task P5-9). The
     // watermark advances by 3 and NOTHING WAS LOST.
     for (uint32 capture = 301u; capture <= 303u; ++capture)
         relayWrite(remote.relayedInputRing, capture, 3u, static_cast<float>(capture), /*depth=*/3);

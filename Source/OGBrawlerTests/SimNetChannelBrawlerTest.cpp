@@ -46,7 +46,7 @@ namespace simNetChannelBrawlerTest
         }
     };
 
-    void buildRedundancyBundleIntoTestBuffer(const PendingInputQueue<BrawlerInput>& queue, std::uint32_t currentTick,
+    void buildBundleIntoTestBuffer(const PendingInputQueue<BrawlerInput>& queue, std::uint32_t currentTick,
         std::uint8_t redundancyDepth, TestBundleBuffer& outBundle)
     {
         outBundle.bytes.clear();
@@ -80,9 +80,11 @@ namespace simNetChannelBrawlerTest
     using BrawlerChannel = ogsimnet::SimNetChannel<SimulatableBrawler, RecordingChannelTransport>;
 
     static_assert(PredictionSyncedBufferOwnerConcept<BrawlerChannel, simulatableBrawler::State, BrawlerInput>,
-        "SimNetChannel must satisfy NetSync's prediction owner concept for the brawler, as the brawler component does");
+        "SimNetChannel must satisfy NetSync's prediction owner concept for the brawler: since og-input-latency task P5-7 "
+        "it is the brawler's owner (UESimNetChannel, SimulatableBrawlerOwnerTraits.h). Was 'as the brawler component does'");
     static_assert(AuthoritySyncedBufferOwnerConcept<BrawlerChannel, simulatableBrawler::State, BrawlerInput>,
-        "SimNetChannel must satisfy NetSync's authority owner concept for the brawler, as the brawler component does");
+        "SimNetChannel must satisfy NetSync's authority owner concept for the brawler: since og-input-latency task P5-7 "
+        "it is the brawler's owner (UESimNetChannel, SimulatableBrawlerOwnerTraits.h). Was 'as the brawler component does'");
 
     BrawlerInput inputFor(std::uint32_t tick)
     {
@@ -116,7 +118,7 @@ namespace simNetChannelBrawlerTest
                 REQUIRE(!sent.empty());
 
                 TestBundleBuffer reference;
-                buildRedundancyBundleIntoTestBuffer(queue, currentTick, static_cast<std::uint8_t>(depth), reference);
+                buildBundleIntoTestBuffer(queue, currentTick, static_cast<std::uint8_t>(depth), reference);
                 CHECK(sent.back() == reference.bytes);
             }
         }
