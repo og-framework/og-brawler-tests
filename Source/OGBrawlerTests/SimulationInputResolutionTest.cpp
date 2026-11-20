@@ -322,7 +322,8 @@ TEST_CASE("DAttack.SimulationNetSync.CacheSlotAdvances", "[DAttack][SimulationNe
 // WHAT THEY PIN. The provider branch now produces TWO different values from one
 // capture, and the split is the entire task:
 //   * the integrator + correction cache get the capture from `tick - delay`;
-//   * the outbound RPC queue gets the ORIGINAL capture at the CURRENT tick.
+//   * the outbound input queue (PendingInputQueue, which the input bundle is built
+//     from) gets the ORIGINAL capture at the CURRENT tick.
 // If the outbound half ever started carrying the delayed value, the server would
 // apply its own ServerInputDelayQueue delay ON TOP and the two ends would diverge
 // by exactly `delay` ticks — a silent, permanent mispredict that no existing test
@@ -909,8 +910,8 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingArrivalReachesTheStore",
 TEST_CASE("DAttack.SimulationNetSync.RemoteInputCachePopulatesAtBindWithoutALatch",
           "[DAttack][SimulationNetSync][InputRelay]")
 {
-    // THE BIND-ORDER HOLE: the ring replicated (and its OnRep fired into a null
-    // callback) BEFORE registration ran, and then the sender went quiet. Without
+    // THE BIND-ORDER HOLE: the ring arrived (and its store found no callback)
+    // BEFORE registration ran, and then the sender went quiet. Without
     // the bind-time populate the store would stay empty indefinitely.
     //
     // And note what is NOT needed to close it: no latch, no replay flag. Tier and
@@ -927,8 +928,9 @@ TEST_CASE("DAttack.SimulationNetSync.RemoteInputCachePopulatesAtBindWithoutALatc
     SimulationNetSync<SimulatableBrawler> netSync(storage, reconciliation, inputResolution);
     MockPredictionOwner remote;
 
-    // Arrival BEFORE registration: the callback is still null, so this OnRep is a
-    // no-op — exactly the production sequence.
+    // Arrival BEFORE registration: the callback is still null, so this arrival is a
+    // no-op — exactly the production sequence (SimNetChannel::storeRing calls no
+    // unset callback).
     relayWrite(remote.relayedInputRing, 80u, 6u, 80.f);
     remote.replicateRelayRing();
     REQUIRE(remote.onRelayedInputReceived == nullptr);
@@ -1079,7 +1081,7 @@ TEST_CASE("DAttack.SimulationNetSync.RelayRingVersionMismatchIsDroppedWholesale"
     // T5 is the FIRST reader of the ring's version byte. On a layout change an old
     // peer would otherwise read arbitrary bytes as capture ticks and insert them as
     // STORE KEYS — silent corruption with no crash. Driven here through the real
-    // OnRep path so the fence is proven where it actually runs.
+    // relay arrival callback so the fence is proven where it actually runs.
     SimulationObjectStorage<SimulatableBrawler> storage;
     storage.add<SimulatableBrawler>(58u, makeNetSyncTestCharacter());
 
@@ -1525,7 +1527,8 @@ TEST_CASE("DAttack.SimulationNetSync.ProviderSeesHistoryStrictlyBeforeTheCurrent
 //
 // EVERY CASE BELOW DRIVES THE REAL PATH end to end: the real collectInputAll +
 // allocateFrontierSlotsAll (item 94; was prepareSimulationStep alone through
-// item 93) to create the cache slots, the real OnRep-bound correction callback and
+// item 93) to create the cache slots, the real correction callback
+// registerPredictionOwner binds and
 // injectCorrectionState to land the refs, the real RelayedInputRingCodec +
 // populateRemoteInputCache to fill the stores, and the real
 // collectResimInputAll to resolve. Nothing here mirrors production logic except
@@ -1584,7 +1587,7 @@ namespace
     }
 
     // An authoritative correction for `tick` carrying `ref`, delivered through the
-    // real OnRep-bound callback into the real injectCorrectionState.
+    // real correction callback into the real injectCorrectionState.
     void landCorrection(MockPredictionOwner& owner, unsigned int tick, uint32 ref)
     {
         REQUIRE(owner.onCorrectionStateReceived != nullptr);
@@ -2026,7 +2029,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimRemoteStillResolvesAfterAHardResyncWip
 //   sentinel rows       ResimSentinelResolvesGameZeroOnBothRows
 //                       ResimSentinelMatchesWhatTheAuthorityIntegrated  (AM-2 —
 //                       drives a REAL server underrun through the REAL
-//                       sendCorrectionAll into the REAL OnRep, and is untouched
+//                       sendCorrectionAll into the REAL correction callback, and is untouched
 //                       because it rides the STATE channel and its sentinel ref)
 //   miss / self-heal    ResimLocalRefMissResolvesTheInjectedNeutral
 //                       ResimRemoteRefMissFallsBackToLastKnownWithoutCorrupting-
@@ -2044,8 +2047,8 @@ TEST_CASE("DAttack.SimulationNetSync.ResimRemoteStillResolvesAfterAHardResyncWip
 // AM-2 — THE T17 INTERLOCK, END TO END THROUGH THE REAL AUTHORITY PATH.
 //
 // Not a client-side unit assertion about a constant: this drives a real server
-// underrun, replicates the sentinel ref through the real sendCorrectionAll into
-// the real OnRep callback, and asserts the client's resolution equals the value
+// underrun, carries the sentinel ref through the real sendCorrectionAll into
+// the real correction callback, and asserts the client's resolution equals the value
 // the SERVER ACTUALLY INTEGRATED. If T17's authority-side substitution is ever
 // reverted or drifts away from what this row resolves, this case fails — which is
 // the whole reason it survives T17 rather than being retired with it.
@@ -2107,7 +2110,7 @@ TEST_CASE("DAttack.SimulationNetSync.ResimSentinelMatchesWhatTheAuthorityIntegra
     REQUIRE(authorityOwner.stateBuf.lastAppliedCaptureTick == kNoInputCaptureTick);
 
     // 3) ...and lands on the client. The buffer the SERVER wrote is handed to the
-    //    client's OnRep callback verbatim — no value is retyped across the wire.
+    //    client's correction callback verbatim — no value is retyped across the wire.
     REQUIRE(predictionOwner.onCorrectionStateReceived != nullptr);
     predictionOwner.onCorrectionStateReceived(authorityOwner.stateBuf);
     REQUIRE(reconciliation.getAppliedCaptureTickRef<SimulatableBrawler>(80u, kTick).kind

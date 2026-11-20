@@ -13,6 +13,7 @@
 #include "OGBrawler/BrawlerInboundHit.h"
 #include "OGBrawler/DAttackDirectionClassifier.h"
 #include "OGSimulation/CorrectionStateBufferCodec.h"
+#include "OGSimulation/Network/SimPayloadBuffers.h"
 #include "OGSimulation/SimulationComposite.h"
 #include "OGSimulation/PhysicsBodyAdapter.h"
 #include "OGSimulation/SpatialQueryAdapter.h"
@@ -245,16 +246,11 @@ template <typename... Ts> struct FCompositeWireSize<SimulationComposite<Ts...>>
     static constexpr std::uint32_t value = compositeSyncSize<Ts...>();
 };
 
-// CorrectionStateBuffer::kBufferBytes (OGSimulation/Network/SimPayloadBuffers.h),
-// hand-mirrored. If it changes, change this line.
-//
-// ⚠ The copy dates from the UE buffer. Until og-input-latency task P5-9 deleted it, the
-// capacity was FSimulationStateSyncBuffer::kBufferBytes, in UE code this target could
-// not include: it is engine-free BY CONFIGURATION (OGBrawlerTests.Target.cs sets
-// bCompileAgainstEngine / bCompileAgainstCoreUObject / bCompileAgainstApplicationCore
-// all false). The og-sim constant is engine-free, so the copy is now a choice, not a
-// necessity.
-static constexpr std::uint32_t kStateSyncBufferBytes = 384u;
+// CorrectionStateBuffer::kBufferBytes (OGSimulation/Network/SimPayloadBuffers.h), read
+// rather than copied (og-input-latency task P5-26). Until then this was a hand-mirrored
+// 384u: the copy dated from the UE buffer, FSimulationStateSyncBuffer::kBufferBytes, in UE
+// code this engine-free target could not include (deleted by og-input-latency task P5-9).
+static constexpr std::uint32_t kStateSyncBufferBytes = CorrectionStateBuffer::kBufferBytes;
 
 TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBrawler]")
 {
@@ -461,11 +457,12 @@ TEST_CASE("DAttack.SimulatableBrawler.WireFootprint", "[DAttack][SimulatableBraw
     //    384, headroom **38 B**, up from 37 -- the radial's `hasHitGuard` left the wire.
     static_assert(correctionStateBuffer::kHeaderBytes
                       + FCompositeWireSize<simulatableBrawler::State>::value
-                  <= kStateSyncBufferBytes,
+                  <= CorrectionStateBuffer::kBufferBytes,
         "The State composite no longer fits CorrectionStateBuffer::kBufferBytes. Raise kBufferBytes "
-        "(og-sim OGSimulation/Network/SimPayloadBuffers.h) to the next 64-byte multiple above the new footprint, "
-        "and update the copy of it in this file. Raising the capacity is wire-cheap: the server sends payload(), "
-        "only usedBytes long. Was FSimulationStateSyncBuffer::kBufferBytes, deleted by og-input-latency task P5-9");
+        "(og-sim OGSimulation/Network/SimPayloadBuffers.h) to the next 64-byte multiple above the new footprint. "
+        "Raising the capacity is wire-cheap: the server sends payload(), only usedBytes long. Was "
+        "FSimulationStateSyncBuffer::kBufferBytes, deleted by og-input-latency task P5-9, then a hand-copied 384u "
+        "until og-input-latency task P5-26");
     REQUIRE(kBufferUsed <= kStateSyncBufferBytes);
 
     WARN("simulatableBrawler::State wire footprint: composite=" << kComposite

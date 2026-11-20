@@ -372,7 +372,8 @@ TEST_CASE("DAttack.SimulationNetSync.SendLocalInputNoProviderIsNoOp", "[DAttack]
 // WHAT THEY PIN. The provider branch now produces TWO different values from one
 // capture, and the split is the entire task:
 //   * the integrator + correction cache get the capture from `tick - delay`;
-//   * the outbound RPC queue gets the ORIGINAL capture at the CURRENT tick.
+//   * the outbound input queue (PendingInputQueue, which the input bundle is built
+//     from) gets the ORIGINAL capture at the CURRENT tick.
 // If the outbound half ever started carrying the delayed value, the server would
 // apply its own ServerInputDelayQueue delay ON TOP and the two ends would diverge
 // by exactly `delay` ticks — a silent, permanent mispredict that no existing test
@@ -748,7 +749,9 @@ namespace
     }
 
     // An authoritative correction for `tick` carrying `ref`, delivered through the
-    // real OnRep-bound callback into the real injectCorrectionState.
+    // real correction callback registerPredictionOwner binds (the one og-sim-net's
+    // SimNetChannel::storeCorrection calls; an OnRep's until og-input-latency task P5-7)
+    // into the real injectCorrectionState.
     void landCorrection(MockPredictionOwner& owner, unsigned int tick, uint32 ref)
     {
         REQUIRE(owner.onCorrectionStateReceived != nullptr);
@@ -818,7 +821,8 @@ TEST_CASE("DAttack.SimulationNetSync.RelayProbeMeasuresArrivalCadenceInCaptureTi
     REQUIRE(arrival.sampleCount() == 0u);
     REQUIRE(arrival.noAdvance() == 0u);
 
-    // Three real OnReps, delivered BACK TO BACK — so the local spacing is 1 — each
+    // Three ring arrivals through the real relay callback (the one og-sim-net's
+    // SimNetChannel::storeRing calls), delivered BACK TO BACK — so the local spacing is 1 — each
     // carrying a newest capture tick five ahead of the last. Only one of those two
     // numbers can be the reported gap, and it must be the capture-tick one:
     // `depth` is denominated in capture ticks, so a local-tick p99 could not

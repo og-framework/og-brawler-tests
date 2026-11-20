@@ -25,6 +25,7 @@
 #include "OGBrawler/SimulatableBrawler.h"
 #include "OGBrawler/SimulatableBrawlerTypes.h"
 #include "OGSimulation/CorrectionStateBufferCodec.h"
+#include "OGSimulation/Network/SimPayloadBuffers.h"
 #include "OGSimulation/PhysicsBodyAdapter.h"
 #include "OGSimulation/PhysicsBodyState.h"
 #include "OGSimulation/QueryGeometry.h"
@@ -1139,12 +1140,12 @@ static_assert(SpatialQueryAdapter<FRingoutMockQuery>,
 
 constexpr float kDt = 1.f / 60.f;
 
-// `CorrectionStateBuffer::kBufferBytes` (og-sim). Restated rather than included, as it was for the
-// UE-side buffer this target could not reach (Was FSimulationStateSyncBuffer, deleted by
-// og-input-latency task P5-9); the composite's FIT inside it is fenced separately, in
-// `SimulatableBrawlerTest.cpp`. Nothing here depends on the capacity being tight; it only has to
-// be large enough that the codec's writes land inside the vector.
-constexpr std::uint32_t kStateSyncBufferBytes = 384u;
+// `CorrectionStateBuffer::kBufferBytes` (og-sim), read rather than restated (og-input-latency task
+// P5-26; a hand-copied 384u until then, from the UE-side buffer this target could not reach, Was
+// FSimulationStateSyncBuffer, deleted by og-input-latency task P5-9); the composite's FIT inside it is
+// fenced separately, in `SimulatableBrawlerTest.cpp`. Nothing here depends on the capacity being
+// tight; it only has to be large enough that the codec's writes land inside the vector.
+constexpr std::uint32_t kStateSyncBufferBytes = CorrectionStateBuffer::kBufferBytes;
 
 // The spawn slot every case seats its character in. Neither 0 nor the last entry, so an
 // off-by-one in either direction changes the authored point the respawn lands on.
